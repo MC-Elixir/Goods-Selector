@@ -1,5 +1,7 @@
 # Core
 python-dotenv>=1.0.0
+openai>=1.30.0             # PPIO / 任何 OpenAI 兼容视觉接口（首选）
+anthropic>=0.40.0          # Claude Vision API（备用）
 pyyaml>=6.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
@@ -15,8 +17,11 @@ requests>=2.31.0
 httpx>=0.26.0
 tenacity>=8.2.0          # 重试装饰器
 
-# Amazon 数据源（建议用 Keepa 或 Rainforest 官方 SDK / API）
-keepa>=1.3.0             # Keepa API 官方包
+# Amazon 数据源（三选一，按需安装）
+# playwright install chromium  # 爬虫后端（无需 API Key）
+playwright>=1.40.0       # playwright install chromium 后可用
+keepa>=1.3.0             # Keepa API（需 KEEPA_API_KEY）
+# requests 已在下方 HTTP 节包含，Rainforest 直接用 requests 调用
 
 # 图像处理（图文匹配本地预处理 + 兜底相似度）
 Pillow>=10.2.0

@@ -46,6 +46,8 @@ class SupplierDTO:
     monthly_sales: Optional[int] = None
     repeat_buyer_rate: Optional[float] = None
     is_factory: Optional[bool] = None
+    delivery_days: Optional[int] = None    # 供货周期（天），影响 supply_score
+    fba_ready: Optional[bool] = None       # 工厂是否支持 FBA 代发
     raw_data: dict = field(default_factory=dict)
 
 

@@ -24,3 +24,6 @@ data/exports/
 
 # 文档
 docs
+
+.env.example
+.env

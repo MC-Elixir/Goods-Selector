@@ -26,6 +26,25 @@ class Settings(BaseSettings):
         default=f"sqlite:///{DATA_DIR}/amazon_selector.db"
     )
 
+    # ---------- 视觉分析后端（二选一，PPIO 优先）----------
+    # PPIO（派噢）— OpenAI 兼容接口，国内访问快，支持 Qwen-VL 等模型
+    ppio_api_key: str = ""
+    ppio_api_base: str = "https://api.ppio.com/openai"
+    ppio_model: str = "qwen/qwen3.5-plus"  # PPIO 上的视觉模型
+
+    # Anthropic — Claude Vision（PPIO 未配置时的备用）
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-6"
+
+    @property
+    def vision_provider(self) -> str:
+        """自动选择视觉分析后端：PPIO 优先，其次 Anthropic。"""
+        if self.ppio_api_key:
+            return "ppio"
+        if self.anthropic_api_key:
+            return "anthropic"
+        return "none"
+
     # ---------- Amazon ----------
     keepa_api_key: str = ""
     rainforest_api_key: str = ""

@@ -1,33 +1,32 @@
 """
-Amazon Best Seller 抓取
-======================
+Amazon Best Seller 数据采集层
+==============================
 
-输入：
-    category    一级类目，如 "Home & Kitchen"
-    limit       抓取数量，默认 100
+统一入口：crawl_best_sellers(category, limit, marketplace, backend)
 
-输出：
-    list[ProductDTO]  统一的产品 DTO
+backend 选项：
+    "auto"        根据已配置的 Key 自动选择（playwright → keepa → rainforest）
+    "playwright"  无需 API Key，Playwright 浏览器爬取（需安装 playwright）
+    "keepa"       Keepa API（需 KEEPA_API_KEY，$19/月起，数据最全）
+    "rainforest"  Rainforest API（需 RAINFOREST_API_KEY，按次计费）
 
-实现方式：
-    优先用 Keepa API，失败 fallback 到 Rainforest
-
-TODO:
-    1. 接入 Keepa SDK
-    2. 加缓存（diskcache）
-    3. 异常重试（tenacity）
+ProductDTO 是各后端的统一输出 DTO，属性名与 ORM Product 模型完全对应。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
 
 from loguru import logger
 
+from config.settings import settings
 
+
+# ============================================================
+# 统一 DTO（各后端输出相同结构）
+# ============================================================
 @dataclass
 class ProductDTO:
-    """跨爬虫统一的产品 DTO。"""
     asin: str
     marketplace: str
     title: str
@@ -38,7 +37,7 @@ class ProductDTO:
     bsr_rank: Optional[int] = None
     rating: Optional[float] = None
     review_count: Optional[int] = None
-    review_velocity_30d: Optional[int] = None
+    review_velocity_30d: Optional[int] = None   # 30 天评论增速
     weight_kg: Optional[float] = None
     length_cm: Optional[float] = None
     width_cm: Optional[float] = None
@@ -48,15 +47,51 @@ class ProductDTO:
     raw_data: dict = field(default_factory=dict)
 
 
+# ============================================================
+# 统一入口
+# ============================================================
+Backend = Literal["auto", "playwright", "keepa", "rainforest"]
+
+
 def crawl_best_sellers(
     category: str,
     limit: int = 100,
     marketplace: str = "US",
+    backend: Backend = "auto",
 ) -> list[ProductDTO]:
-    """抓取 Best Seller 榜单。
+    """抓取 Amazon Best Sellers，返回 ProductDTO 列表。
 
-    Returns:
-        统一的 ProductDTO 列表
+    Args:
+        category    Amazon 一级类目名，如 "Home & Kitchen"
+        limit       抓取产品数量
+        marketplace 站点代码：US / UK / DE / JP
+        backend     数据后端，"auto" 时按以下优先级选择：
+                    playwright（无 Key）→ keepa（有 Key）→ rainforest（有 Key）
     """
-    logger.info(f"[crawl] category={category} limit={limit} marketplace={marketplace}")
-    raise NotImplementedError("接入 Keepa / Rainforest 后实现")
+    resolved = _resolve_backend(backend)
+    logger.info(f"[crawl] backend={resolved} category={category!r} limit={limit}")
+
+    if resolved == "playwright":
+        from crawlers.amazon_playwright import AmazonPlaywrightScraper
+        return AmazonPlaywrightScraper().scrape_best_sellers(category, limit, marketplace)
+
+    if resolved == "keepa":
+        from crawlers.amazon_keepa import KeepaClient
+        return KeepaClient().get_best_sellers(category, limit, marketplace)
+
+    if resolved == "rainforest":
+        from crawlers.amazon_rainforest import RainforestClient
+        return RainforestClient().get_best_sellers(category, limit, marketplace)
+
+    raise ValueError(f"未知 backend: {resolved}")
+
+
+def _resolve_backend(backend: Backend) -> str:
+    if backend != "auto":
+        return backend
+    # auto：有 key 优先用 API（数据更全），否则用 playwright
+    if settings.keepa_api_key:
+        return "keepa"
+    if settings.rainforest_api_key:
+        return "rainforest"
+    return "playwright"
