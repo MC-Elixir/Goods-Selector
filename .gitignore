@@ -22,5 +22,5 @@ data/exports/
 *.swp
 .DS_Store
 
-# 文档内大型表格（PRD / spec 等 Markdown 仍纳入版本）
-docs/**/*.xlsx
+# 文档
+docs
