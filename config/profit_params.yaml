@@ -1,0 +1,128 @@
+# ============================================================
+# 利润预测模型参数
+# 净利润 = 售价 − Σ(各类成本) − 各类损耗
+# 所有金额单位：USD（与 Amazon 站点一致）
+# 所有费率单位：小数（0.15 表示 15%）
+#
+# 公式（来自真实选品目标采购成本表）：
+#   净利润 = 售价 - 采购成本 - 头程 - FBA费 - 佣金 - 广告 - 退货损耗 - 汇率损耗
+#   净利率 = 净利润 / 售价
+#   目标净利率 ≥ 30%，容忍最低 20%
+# version: 0.2.0
+# ============================================================
+
+# ---------- 全局默认 ----------
+defaults:
+  marketplace: US
+  currency: USD
+  cny_to_usd: 0.145         # 1 CNY ≈ 0.145 USD（约 6.88 汇率，来自参考报价单）
+  exchange_loss_rate: 0.01  # 汇率损耗 1%（收款到付款的汇差）
+
+# ---------- 头程物流（中国 → Amazon FBA 仓）----------
+# 按运输方式 × 重量分档（USD/kg）
+# 体积重(kg) = L × W × H(cm) / 6000，与实重取大者
+shipping:
+  default_method: sea_lcl   # sea_lcl 海运拼柜 / air_express 空派 / sea_express 海派
+
+  rates:
+    air_express:             # 空派，5-10 天
+      base_fee: 5.0
+      per_kg: 8.5
+      min_chargeable_kg: 0.5
+    sea_express:             # 海派，25-35 天
+      base_fee: 3.0
+      per_kg: 4.2
+      min_chargeable_kg: 0.5
+    sea_lcl:                 # 海运 LCL，40-50 天，最便宜
+      base_fee: 2.0
+      per_kg: 2.8
+      min_chargeable_kg: 1.0
+
+  # 体积重算法：L×W×H(cm) / 6000 = 体积重(kg)，与实重取大者
+  volumetric_divisor: 6000
+
+# ---------- Amazon FBA 费用（US 站，简化分档）----------
+# 真实场景建议直接调 Amazon FBA Calculator API
+# 尺寸单位：英寸（in），重量单位：盎司（oz）
+fba:
+  fulfillment_fees:
+    small_standard:   { max_longest_side_in: 15,  max_weight_oz: 16,   fee_usd: 3.43  }
+    large_standard:   { max_longest_side_in: 18,  max_weight_oz: 320,  fee_usd: 5.95  }
+    small_oversize:   { max_longest_side_in: 60,  max_weight_oz: 1120, fee_usd: 10.50 }
+    medium_oversize:  { max_longest_side_in: 108, max_weight_oz: 2400, fee_usd: 19.85 }
+  monthly_storage_fee_per_cuft: 0.87   # 标准件月仓储费（$/立方英尺）
+  long_term_storage_threshold_days: 365
+
+# ---------- 海外仓（自发货 / 海外仓一件代发）----------
+# 来源：中景跨境-美国海外仓报价单 2026.1.7 版
+# 适用场景：不走 FBA 而走海外仓自发货的利润模型分支
+overseas_warehouse:
+  enabled: false              # 默认 FBA 模式，海外仓场景手动开启
+
+  # 仓储费（$/立方米/天）
+  storage_rates:
+    free_days: 30             # 前 30 天免费
+    day_31_to_90:  0.424
+    day_91_to_180: 0.600
+    day_181_to_360: 1.236
+    day_over_360:  2.000
+
+  # 一件代发出库处理费（$/件，按单件实/体积重取大）
+  # 体积重(kg) = L×W×H(cm) / 9000（海外仓标准，与头程 /6000 不同）
+  fulfillment_fee_per_unit:
+    - { max_kg: 1,    fee_usd: 0.75 }
+    - { max_kg: 5,    fee_usd: 1.75 }
+    - { max_kg: 10,   fee_usd: 2.50 }
+    - { max_kg: 22.7, fee_usd: 3.00 }
+    - { max_kg: 31.8, fee_usd: 3.50 }
+    - { max_kg: 45.4, fee_usd: 4.00 }
+    - { max_kg: 68.1, fee_usd: 5.50 }
+    - { max_kg: 999,  fee_usd: 8.00 }
+
+  # FedEx SmartPost 尾程参考（Zone 2–8，1–10lbs）
+  # 实际账单还有燃油费（~20%）+ 住宅附加费
+  fedex_smartpost_base_usd: 7.50      # 保守估算均值（Zone 4–5，5lbs 以内）
+  fedex_fuel_surcharge_rate: 0.20     # 燃油附加费约 20%
+
+  # 退货处理费（$/件）
+  return_handling_fee: 3.00
+
+# ---------- 平台佣金 ----------
+# 按一级类目分档（Amazon Referral Fee）
+commission_rates:
+  default: 0.15
+  by_category:
+    "Electronics": 0.08
+    "Home & Kitchen": 0.15
+    "Toys & Games": 0.15
+    "Beauty & Personal Care": 0.15    # 售价 > $10 时 8%，简化处理
+    "Clothing": 0.17
+    "Jewelry": 0.20
+    "Books": 0.15
+
+# ---------- 广告费 ACOS ----------
+# 来源：真实选品目标采购成本表（广告费率 25%）
+# TACOS 目标 5-10%，ACOS 目标 < 25%
+ad_cost:
+  default_acos: 0.25         # 广告销售比 25%（真实参考值，比行业均值保守）
+  new_product_acos: 0.35     # 新品期高一些（前 1-2 个月）
+  ad_spend_ratio: 0.20       # 总销售额中走广告的比例（用于估算广告驱动占比）
+
+# ---------- 退货与损耗 ----------
+# 来源：真实选品目标采购成本表（退货率 6%）
+returns:
+  default_return_rate: 0.06  # 一般类目退货率 6%（来自参考数据）
+  by_category:
+    "Clothing": 0.20
+    "Shoes": 0.18
+    "Electronics": 0.12
+    "Home & Kitchen": 0.06
+    "Toys & Games": 0.05
+  return_loss_ratio: 0.30    # 退货里平均 30% 不可二次销售（直接损耗）
+
+# ---------- 默认采购批量（影响阶梯价取值）----------
+# 来源：真实选品评分表（首单建议 100-300 件，测试期控制风险）
+sourcing:
+  default_batch_qty: 200     # 首单 200 件，对应 1688 阶梯价中位
+  test_batch_qty: 100        # 测试期最小批量（小卖家风险控制）
+  max_initial_capital_cny: 50000   # 首单资金上限 5 万 CNY

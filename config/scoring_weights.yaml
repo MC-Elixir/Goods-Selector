@@ -1,0 +1,169 @@
+# ============================================================
+# 评分权重配置（可热加载，无需重启）
+# 总分 = sum(各维度得分 × 权重) × 100，范围 0–100
+# 各维度得分（dim_score）归一化到 0–1
+#
+# 优先级原则（来自选品参考文档）：需求 > 利润 > 竞争 > 可行性
+# version: 0.2.0
+# ============================================================
+
+weights:
+  demand:      0.25   # 市场需求 —— 机会指数 + 销售额 + 搜索量（最高优先级）
+  profit:      0.20   # 利润率 —— 净利率 ≥ 30% 为目标线
+  competition: 0.20   # 竞争烈度 —— 品牌集中度 + 头部占比
+  supply:      0.15   # 货源稳定性 —— 供应商数量、交期、FBA 经验
+  logistics:   0.10   # 物流友好度 —— 体积重比、危险品、重量
+  risk:        0.10   # 风险等级 —— 侵权、认证、季节性
+
+# 权重必须加和 = 1.0；CI/单测会校验
+
+# ============================================================
+# 各维度的归一化曲线参数
+# ============================================================
+scoring_curves:
+
+  profit:
+    # 净利率 → 得分：sigmoid 形状
+    # margin <= floor → 0 分；>= ceiling → 1 分；中间 sigmoid
+    floor:   0.10     # 净利率 10% 以下视为不及格
+    target:  0.30     # 30% 是目标线（约 0.5 分），行业参考标准
+    ceiling: 0.50     # 50% 以上封顶
+
+  demand:
+    # 五因子复合：机会指数 + 日均销售额 + 日均销量 + 月搜索量 + BSR
+    # 来源：真实选品评分表市场调研部分
+
+    # 机会指数（卖家精灵 opportunity_score）
+    opportunity_score_threshold: 0.05   # > 0.05 才算有机会（评分表 15 分条目）
+
+    # 销售额与销量（日均，BSR Top 范围内）
+    daily_revenue_top100_min: 50        # Top100 日均销售额 > $50
+    daily_sales_top20_min:   10         # Top20 日均销量 > 10 件
+
+    # 价格区间（平均售价 $15–$50 为最佳）
+    price_floor: 15
+    price_target: 50
+
+    # 关键词搜索量（卖家精灵月搜索量）
+    search_volume_min: 2000             # 核心词月搜索量 ≥ 2000
+
+    # 核心关键词数量（≥ 3 才算市场足够宽）
+    min_core_keywords: 3
+
+    # Google Trends 趋势向上额外加分
+    google_trends_bonus: 0.10
+
+    # BSR（辅助因子）
+    bsr_excellent: 1000                 # BSR ≤ 1k → 接近满分
+    bsr_acceptable: 50000              # BSR > 5w → 低分
+
+    # 月销量
+    monthly_sales_target: 300          # 月销 ≥ 300 件满分（小卖家可行门槛）
+
+  competition:
+    # 四因子：卖家数量 + 品牌垄断 + 头部集中度 + 低评论机会信号
+    # 来源：真实选品评分表竞争分析部分
+
+    # 卖家数量
+    sellers_low:  20                   # ≤ 20 个卖家 → 高分
+    sellers_high: 200                  # ≥ 200 个卖家 → 低分
+
+    # 品牌垄断（国际品牌占据首页）
+    brand_monopoly_penalty: 0.5        # 有国际品牌垄断首页 → 得分 ×0.5
+
+    # 前四名销量集中度：< 40% 说明市场分散，新品有机会
+    top4_sales_share_threshold: 0.40   # 超过则视为寡头
+    top4_sales_share_penalty: 0.7      # 超过阈值时得分 × 0.7
+
+    # 头部收入集中度（Top10 收入占比）
+    top10_share_threshold: 0.6         # 超过此值 → 寡头市场
+    top10_share_penalty: 0.5           # 额外 × 0.5
+
+    # 低评论产品数量（BSR 前 20 中 Review < 100 的数量，反映新入场机会）
+    bsr20_low_review_count_min: 5      # ≥ 5 个低评论产品时，视为有机会
+    low_review_opportunity_bonus: 0.10 # 额外加 0.1 分
+
+    # 高评论产品数量（BSR 前 20 中 Review > 500 的数量，反映竞争门槛）
+    bsr20_review_gt500_warning: 10     # ≥ 10 个高评论产品时，竞争门槛较高
+
+  supply:
+    # 五因子：供应商数量 + 回头率 + MOQ + 交期 + FBA 经验
+    # 来源：真实选品评分表开发调研部分（供应链可行性）
+
+    min_suppliers: 3                   # 至少 3 家供应商才算稳
+    repeat_buyer_rate_target: 0.3      # 回头率 ≥ 30% 满分
+    moq_acceptable: 100                # MOQ ≤ 100 不扣分
+    moq_hard_limit: 500                # MOQ > 500 触发硬性筛选
+
+    # 交期：供货周期 < 25 天满分（减少资金占压和断货风险）
+    delivery_days_target: 25
+    delivery_days_max: 60              # 超过 60 天低分
+
+    # 工厂 FBA 代发经验（降低操作风险）
+    fba_ready_bonus: 0.08
+
+    # 初始资金门槛（MOQ × 采购价，小卖家现金流约束）
+    initial_capital_max_cny: 50000     # 首单资金 > 5 万 CNY 扣分
+
+  logistics:
+    # 三因子：体积重比 + 重量 / 尺寸 + 危险属性
+    # 来源：真实选品评分表开发调研 + 中景跨境海外仓报价单
+
+    # 体积重比（体积重 / 实重，头程和 FBA 均按两者取大值计费）
+    # 体积重(kg) = L × W × H(cm) / 6000
+    volumetric_ratio_max: 1.2          # 体积重 < 实重 × 1.2 才合理，超出则头程溢价
+
+    # 重量与最长边
+    max_weight_kg: 2.0                 # 超过 2kg 头程成本明显上升
+    max_longest_side_cm: 45            # 超过 45cm 进入大件 FBA 费率
+
+    # 危险 / 特殊属性黑名单（命中任一直接 0 分）
+    blacklist_attrs:
+      - "battery"                      # 带电（合规复杂 + 运输成本高）
+      - "liquid"                       # 液体（漏液退货风险）
+      - "fragile_high"                 # 高易碎（退货率高）
+      - "magnetic"                     # 强磁（航空限制）
+
+  risk:
+    # 三因子：品牌侵权 + 类目认证 + 季节性
+    # 来源：真实选品评分表竞争分析 + 开发调研部分
+
+    # 大品牌侵权
+    brand_blacklist_penalty: 0.5       # 命中知名品牌词，分数 ×0.5
+
+    # 强制认证类目
+    cert_required_penalty: 0.7         # 需要认证（CPC/FCC/CE/FDA），分数 ×0.7
+    blacklist_categories:
+      - "Toys & Games > Infant Toys"   # 婴幼儿强制 CPC
+      - "Health & Personal Care"       # FDA 风险
+      - "Electronics > Car Electronics" # FCC 认证
+
+    # 季节性风险（季节性强 → 库存压力大、资金回转慢）
+    seasonality_cv_threshold: 0.4      # 月销售额变异系数 > 0.4 视为强季节性
+    seasonality_penalty: 0.7           # 强季节性产品，风险得分 ×0.7
+
+# ============================================================
+# 硬性筛选阈值（不达标直接淘汰，不进入排序）
+# 淘汰的产品仍写入数据库，passed_hard_filter=False，便于调参回溯
+# ============================================================
+hard_filters:
+  # 利润
+  min_net_profit_margin: 0.20          # 净利率 < 20% 淘汰（目标 30%，最低容忍 20%）
+
+  # 总分（软性兜底）
+  min_total_score: 50                  # 总分 < 50 淘汰
+  recommended_score: 65               # ≥ 65 为"非常不错"，50–64 为"可选"
+
+  # 价格：售价低于 $15 且利润率未达 30% 时直接淘汰
+  min_avg_price: 15
+
+  # 销量门槛
+  min_monthly_sales: 200              # 月销量 < 200 件淘汰
+
+  # 供应链
+  max_moq: 500                         # MOQ > 500 淘汰（首单资金压力过大）
+  min_supplier_count: 1                # 至少 1 家可用供应商
+
+  # 品牌
+  exclude_brand_listings: true         # 排除明显大牌 Listing
+  exclude_amazon_choice: false         # 是否排除 Amazon's Choice（默认不排除）

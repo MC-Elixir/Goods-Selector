@@ -1,0 +1,69 @@
+"""
+全局配置：从 .env 加载 + 默认值
+其他模块统一通过 `from config.settings import settings` 取值
+"""
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+CONFIG_DIR = PROJECT_ROOT / "config"
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # ---------- 数据库 ----------
+    database_url: str = Field(
+        default=f"sqlite:///{DATA_DIR}/amazon_selector.db"
+    )
+
+    # ---------- Amazon ----------
+    keepa_api_key: str = ""
+    rainforest_api_key: str = ""
+    amazon_marketplace: Literal["US", "UK", "DE", "JP"] = "US"
+
+    # ---------- 1688 拍立淘 ----------
+    alibaba_app_key: str = ""
+    alibaba_app_secret: str = ""
+    alibaba_access_token: str = ""
+    alibaba_api_gateway: str = "https://gw.open.1688.com/openapi/"
+
+    # ---------- 卖家精灵 ----------
+    mjjl_api_key: str = ""
+    mjjl_api_base: str = "https://api.sellersprite.com/v1"
+
+    # ---------- 行为开关 ----------
+    enable_api_cache: bool = True
+    cache_ttl_seconds: int = 86400
+    log_level: str = "INFO"
+
+    # ---------- 路径 ----------
+    @property
+    def cache_dir(self) -> Path:
+        p = DATA_DIR / "cache"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def image_dir(self) -> Path:
+        p = DATA_DIR / "images"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def export_dir(self) -> Path:
+        p = DATA_DIR / "exports"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+
+settings = Settings()

@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 数据
+data/cache/
+data/images/
+data/exports/
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# 文档内大型表格（PRD / spec 等 Markdown 仍纳入版本）
+docs/**/*.xlsx
