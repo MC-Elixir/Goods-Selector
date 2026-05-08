@@ -3,28 +3,29 @@
 ===========================
 无需 API Key，Playwright 直接爬 1688 搜索结果页。
 
-支持两种搜索方式（自动按优先级尝试）：
-  1. 图搜（以图搜货）  → 需已登录的持久化浏览器 Profile
-                         Profile 路径：data/browser_profiles/1688/
-  2. 关键词搜索        → 无需登录，公开页面直接抓
+关键实现细节：
+  - URL 关键词必须用 GBK 编码（1688 老系统）
+  - Playwright 需显式传入系统代理（HTTP_PROXY），不自动继承
+  - 产品卡片选择器：a.search-offer-item.major-offer
+  - Offer ID 从 href 的 offerId= 参数提取
 
-返回标准 SupplierDTO 列表，可直接接入 predict_profit()。
+支持两种搜索方式：
+  1. 图搜（以图搜货）  → 需已登录的持久化浏览器 Profile
+  2. 关键词搜索        → 无需登录，公开页面直接抓
 
 用法：
     matcher = Alibaba1688PlaywrightMatcher()
-    # 方式 1：图搜（有登录 Profile 时优先）
     suppliers = matcher.search_by_image(image_url="https://...", keywords=["折叠桌"])
-    # 方式 2：纯关键词
     suppliers = matcher.search_by_keyword(["折叠桌", "户外折叠桌"])
 """
 from __future__ import annotations
 
-import hashlib
+import os
 import re
 import time
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, parse_qs
 
 from loguru import logger
 
@@ -45,83 +46,43 @@ _UA = (
     "Chrome/126.0.0.0 Safari/537.36"
 )
 
-# 1688 搜索结果容器选择器（按优先级依次尝试）
-_CARD_SELECTORS = [
-    "div[data-offer-id]",
-    "div.sm-offer-item",
-    "div.offer-item",
-    "div[class*='offerItem']",
-    "div[class*='offer_item']",
-    "div[class*='list-item']",
-]
+# 产品卡片选择器（经过实测验证）
+_CARD_SEL = "a.search-offer-item.major-offer"
 
-# 标题/链接选择器
-_TITLE_SELS = [
-    "a.sm-offer-title",
-    "a.offer-title",
-    "a[class*='title']",
-    "div[class*='title'] a",
-    "h3 a",
-    "a[href*='detail.1688.com/offer/']",
-]
+# 页面等待时间（秒）
+_PAGE_WAIT = 10
 
-# 价格选择器
-_PRICE_SELS = [
-    "span.sm-offer-priceNum",
-    "span[class*='priceNum']",
-    "span.price-num",
-    "em.price",
-    "span.price",
-    "span[class*='price']",
-    "strong.price",
-]
 
-# 图片选择器
-_IMAGE_SELS = [
-    "img.sm-offer-image",
-    "img[class*='offer-image']",
-    "img[class*='offerImage']",
-    "div[class*='pic'] img",
-    "img[src*='alicdn']",
-    "img[data-src*='alicdn']",
-    "img",
-]
+def _system_proxy() -> Optional[str]:
+    """从环境变量读取系统代理，Playwright 不自动继承。"""
+    return (
+        os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+        or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+    ) or None
 
-# 月成交量选择器
-_SALES_SELS = [
-    "span[class*='monthSold']",
-    "span[class*='month-sold']",
-    "span[class*='trade']",
-    "div[class*='saleNum']",
-    "span[class*='saleNum']",
-]
 
-# 工厂标签选择器
-_FACTORY_SELS = [
-    "span[class*='factory']",
-    "span[class*='Factory']",
-    "span.tag-factory",
-    "div[class*='tag'] span",
-    "span[class*='label']",
-]
+def _gbk_url(keyword: str) -> str:
+    """1688 搜索 URL 使用 GBK 编码（非 UTF-8）。"""
+    return f"{_SEARCH_BASE}?keywords={quote(keyword, encoding='gbk')}"
 
-# 供应商名称
-_SUPPLIER_SELS = [
-    "a[class*='company']",
-    "span[class*='company']",
-    "div[class*='company'] a",
-    "a[class*='factory']",
-    "div[class*='supplier'] a",
-    "span[class*='name']",
-]
 
-# MOQ 选择器
-_MOQ_SELS = [
-    "span[class*='moq']",
-    "span[class*='Moq']",
-    "span[class*='minimum']",
-    "div[class*='moq']",
-]
+def _offer_id_from_href(href: str) -> str:
+    """从 detail.m.1688.com 链接提取 offerId。"""
+    try:
+        qs = parse_qs(urlparse(href).query)
+        ids = qs.get("offerId", [])
+        if ids:
+            return ids[0]
+    except Exception:
+        pass
+    m = re.search(r"offerId=(\d+)", href or "")
+    return m.group(1) if m else ""
+
+
+def _offer_url(offer_id: str) -> str:
+    return f"https://detail.1688.com/offer/{offer_id}.html"
 
 
 # ============================================================
@@ -133,10 +94,11 @@ class Alibaba1688PlaywrightMatcher:
     def __init__(
         self,
         headless: bool = True,
-        page_wait_ms: int = 4000,
+        page_wait: float = _PAGE_WAIT,
     ):
         self.headless = headless
-        self.page_wait_ms = page_wait_ms
+        self.page_wait = page_wait
+        self._proxy = _system_proxy()
 
     # ─────────────────────────────────────────────────────────
     # 公开接口
@@ -148,13 +110,7 @@ class Alibaba1688PlaywrightMatcher:
         keywords: Optional[list[str]] = None,
         limit: int = 10,
     ) -> list[SupplierDTO]:
-        """以图搜货（需已登录 Profile）；失败则自动降级关键词搜索。
-
-        Args:
-            image_url   Amazon 主图 URL
-            keywords    关键词列表（图搜失败时作为兜底）
-            limit       返回数量上限
-        """
+        """以图搜货（需已登录 Profile）；失败则自动降级关键词搜索。"""
         if not _profile_has_cookies():
             logger.info("[1688-img] 无登录 Profile，直接使用关键词搜索")
             return self.search_by_keyword(keywords or [], limit=limit)
@@ -175,120 +131,134 @@ class Alibaba1688PlaywrightMatcher:
         keywords: list[str],
         limit: int = 10,
     ) -> list[SupplierDTO]:
-        """按关键词搜索 1688，无需登录。
-
-        多关键词逐一搜索，去重合并，按月销量排序。
-        """
+        """按关键词搜索 1688，无需登录。多关键词逐一搜索，去重合并。"""
         if not keywords:
+            return []
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.error("Playwright 未安装：pip install playwright && playwright install chromium")
             return []
 
         seen_ids: set[str] = set()
         results: list[SupplierDTO] = []
 
-        try:
-            from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            # 关键词搜索也用持久化 Profile（1688 需要登录态才返回产品列表）
+            ctx = self._new_context(pw, persistent=True)
+            page = self._new_page(ctx)
 
-            with sync_playwright() as pw:
-                browser = pw.chromium.launch(
-                    headless=self.headless,
-                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-                )
-                ctx = browser.new_context(
-                    viewport={"width": 1920, "height": 1080},
-                    user_agent=_UA,
-                    locale="zh-CN",
-                )
-                page = ctx.new_page()
+            for kw in keywords:
+                if len(results) >= limit:
+                    break
+                try:
+                    batch = self._scrape_page(page, _gbk_url(kw), limit - len(results))
+                    for dto in batch:
+                        if dto.alibaba_offer_id not in seen_ids:
+                            seen_ids.add(dto.alibaba_offer_id)
+                            results.append(dto)
+                    logger.info(f"[1688-kw] '{kw}' → {len(batch)} 条")
+                except Exception as e:
+                    logger.warning(f"[1688-kw] '{kw}' 失败: {e}")
 
-                for kw in keywords:
-                    if len(results) >= limit:
-                        break
-                    try:
-                        url = f"{_SEARCH_BASE}?keywords={quote(kw)}&n=y&netType=1%2C11"
-                        batch = self._scrape_search_page(page, url, limit - len(results))
-                        for dto in batch:
-                            if dto.alibaba_offer_id not in seen_ids:
-                                seen_ids.add(dto.alibaba_offer_id)
-                                results.append(dto)
-                        logger.info(f"[1688-kw] '{kw}' → {len(batch)} 条")
-                    except Exception as e:
-                        logger.warning(f"[1688-kw] '{kw}' 搜索失败: {e}")
-
-                browser.close()
-
-        except ImportError:
-            logger.error("Playwright 未安装：pip install playwright && playwright install chromium")
-            return []
+            ctx.close()
 
         results.sort(key=lambda d: d.monthly_sales or 0, reverse=True)
-        logger.info(f"[1688-kw] 共 {len(results)} 条（关键词={len(keywords)} 个）")
+        logger.info(f"[1688-kw] 共 {len(results)} 条（关键词 {len(keywords)} 个）")
         return results[:limit]
 
     # ─────────────────────────────────────────────────────────
-    # 内部：图搜（持久化浏览器）
+    # 内部：图搜
     # ─────────────────────────────────────────────────────────
 
     def _image_search(self, image_url: str, limit: int) -> list[SupplierDTO]:
         from playwright.sync_api import sync_playwright
 
-        results: list[SupplierDTO] = []
         pw = sync_playwright().start()
         try:
-            ctx = pw.chromium.launch_persistent_context(
-                user_data_dir=str(_PROFILE_DIR),
-                headless=self.headless,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-                viewport={"width": 1920, "height": 1080},
-                user_agent=_UA,
-                locale="zh-CN",
-            )
-            page = ctx.new_page()
+            ctx = self._new_context(pw, persistent=True)
+            page = self._new_page(ctx)
 
-            url = f"{_SEARCH_BASE}?imageAddress={quote(image_url, safe=':/')}&n=y"
-            logger.info(f"[1688-img] 图搜 URL: {url[:80]}...")
+            url = f"{_SEARCH_BASE}?imageAddress={quote(image_url, safe=':/')}"
+            logger.info(f"[1688-img] {url[:80]}...")
             page.goto(url, timeout=60_000, wait_until="domcontentloaded")
-            time.sleep(self.page_wait_ms / 1000)
+            time.sleep(self.page_wait)
 
-            # 检查是否跳转登录
             if "login" in page.url.lower() or "passport" in page.url.lower():
-                logger.warning("[1688-img] 已跳转登录页，Session 过期")
+                logger.warning("[1688-img] 跳转登录页，Session 过期")
                 return []
 
-            results = self._scrape_search_page(page, page.url, limit)
-            # 标记图搜相似度（列表页无具体分值，给一个默认值区分来源）
+            results = self._parse_cards(page, limit)
             for dto in results:
                 dto.image_similarity = 0.85
+            return results
 
         finally:
             try:
-                for pg in ctx.pages:
-                    pg.close()
                 ctx.close()
             except Exception:
                 pass
             pw.stop()
 
-        return results
-
     # ─────────────────────────────────────────────────────────
-    # 内部：解析搜索结果页
+    # 内部：浏览器管理
     # ─────────────────────────────────────────────────────────
 
-    def _scrape_search_page(self, page, url: str, limit: int) -> list[SupplierDTO]:
-        """跳转到 url 并解析当前页结果（复用已有 page 对象）。"""
-        if page.url != url:
-            page.goto(url, timeout=30_000, wait_until="domcontentloaded")
-            page.wait_for_timeout(self.page_wait_ms)
+    def _new_context(self, pw, persistent: bool):
+        proxy_arg = {"server": self._proxy} if self._proxy else None
+        common = dict(
+            headless=self.headless,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+            proxy=proxy_arg,
+            viewport={"width": 1920, "height": 1080},
+            user_agent=_UA,
+            locale="zh-CN",
+        )
+        if persistent:
+            return pw.chromium.launch_persistent_context(
+                user_data_dir=str(_PROFILE_DIR), **common
+            )
+        launch_args = {k: v for k, v in common.items() if k in ("headless", "args", "proxy")}
+        browser = pw.chromium.launch(**launch_args)
+        ctx_args: dict = {
+            "viewport": {"width": 1920, "height": 1080},
+            "user_agent": _UA,
+            "locale": "zh-CN",
+        }
+        if proxy_arg:
+            ctx_args["proxy"] = proxy_arg
+        return browser.new_context(**ctx_args)
+
+    def _new_page(self, ctx):
+        page = ctx.new_page()
+        page.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+        try:
+            from playwright_stealth import Stealth
+            Stealth().apply_stealth_sync(page)
+        except Exception:
+            pass
+        return page
+
+    # ─────────────────────────────────────────────────────────
+    # 内部：页面解析
+    # ─────────────────────────────────────────────────────────
+
+    def _scrape_page(self, page, url: str, limit: int) -> list[SupplierDTO]:
+        page.goto(url, timeout=30_000, wait_until="domcontentloaded")
+        time.sleep(self.page_wait)
 
         if "login" in page.url.lower() or "passport" in page.url.lower():
             logger.warning("[1688] 页面跳转到登录，放弃")
             return []
 
-        cards = self._find_cards(page)
-        if not cards:
-            # 兜底：解析所有 detail.1688.com 链接
-            cards = page.query_selector_all("a[href*='detail.1688.com/offer/']")
-            logger.debug(f"[1688] 兜底模式，找到链接 {len(cards)} 条")
+        return self._parse_cards(page, limit)
+
+    def _parse_cards(self, page, limit: int) -> list[SupplierDTO]:
+        cards = page.query_selector_all(_CARD_SEL)
+        logger.debug(f"[1688] 找到 {len(cards)} 张卡片")
 
         results: list[SupplierDTO] = []
         for card in cards[: limit * 2]:
@@ -299,17 +269,8 @@ class Alibaba1688PlaywrightMatcher:
                 if dto:
                     results.append(dto)
             except Exception as e:
-                logger.debug(f"[1688] 解析卡片失败: {e}")
-
+                logger.debug(f"[1688] 卡片解析失败: {e}")
         return results
-
-    def _find_cards(self, page) -> list:
-        for sel in _CARD_SELECTORS:
-            cards = page.query_selector_all(sel)
-            if len(cards) >= 3:
-                logger.debug(f"[1688] 使用选择器 {sel!r}，找到 {len(cards)} 张卡片")
-                return cards
-        return []
 
 
 # ============================================================
@@ -317,110 +278,56 @@ class Alibaba1688PlaywrightMatcher:
 # ============================================================
 
 def _parse_card(card) -> Optional[SupplierDTO]:
-    """从单张搜索结果卡片提取 SupplierDTO。"""
-    # ── 标题 & offer URL ──
-    title = ""
-    offer_url = ""
-    offer_id = ""
-    for sel in _TITLE_SELS:
-        el = card.query_selector(sel)
-        if not el:
-            continue
-        t = el.inner_text().strip()
-        href = el.get_attribute("href") or ""
-        if t and len(t) >= 3:
-            title = t
-            offer_url = _normalize_url(href)
-            offer_id = _extract_offer_id(offer_url or href)
-            break
-
-    if not title:
+    """从 a.search-offer-item.major-offer 卡片提取 SupplierDTO。"""
+    href = card.get_attribute("href") or ""
+    offer_id = _offer_id_from_href(href)
+    if not offer_id:
         return None
 
-    if not offer_id:
-        offer_id = hashlib.md5(title.encode()).hexdigest()[:12]
+    full_text = card.inner_text() or ""
 
-    # ── 价格（取最低价） ──
+    # ── 标题 ──────────────────────────────────────────────
+    title_el = card.query_selector(".offer-title-row, [class*='title']")
+    title = title_el.inner_text().strip() if title_el else full_text.split("\n")[0][:60]
+
+    # ── 价格（格式：¥\n10\n.99 → 10.99） ─────────────────
     price_cny: Optional[float] = None
     price_tiers: list[dict] = []
-    for sel in _PRICE_SELS:
-        el = card.query_selector(sel)
-        if not el:
-            continue
-        raw = el.inner_text().strip()
-        v = _parse_price(raw)
-        if v:
-            price_cny = v
-            price_tiers = [{"qty": 1, "price": v}]
-            break
-    # 尝试解析阶梯价（有些卡片显示"1-99件 ¥12 / 100件+ ¥9.5"）
-    price_tiers = _extract_price_tiers(card) or price_tiers
+    price_el = card.query_selector(".offer-price-row, [class*='price']")
+    if price_el:
+        raw_price = price_el.inner_text().replace("\n", "").replace(" ", "")
+        price_cny = _parse_price(raw_price)
+        if price_cny:
+            price_tiers = [{"qty": 1, "price": price_cny}]
 
-    # ── 图片 ──
+    # ── 图片 ──────────────────────────────────────────────
     img_url: Optional[str] = None
-    for sel in _IMAGE_SELS:
-        el = card.query_selector(sel)
-        if not el:
-            continue
-        src = el.get_attribute("src") or el.get_attribute("data-src") or ""
-        if src and ("alicdn" in src or "1688" in src):
-            img_url = _normalize_url(src)
-            break
+    img_el = card.query_selector("img")
+    if img_el:
+        src = img_el.get_attribute("src") or img_el.get_attribute("data-src") or ""
+        if src.startswith("//"):
+            src = f"https:{src}"
+        img_url = src or None
 
-    # ── MOQ ──
-    moq: Optional[int] = None
-    for sel in _MOQ_SELS:
-        el = card.query_selector(sel)
-        if el:
-            moq = _parse_int(el.inner_text())
-            if moq:
-                break
-    if not moq:
-        # 正则兜底：在卡片文本里找 "起订量 N" 或 "≥N件"
-        full_text = card.inner_text()
-        moq = _parse_moq_from_text(full_text)
+    # ── 供应商名称（全文末行中找公司名） ─────────────────
+    supplier_name = _extract_supplier(full_text)
 
-    # ── 月成交量 ──
-    monthly_sales: Optional[int] = None
-    for sel in _SALES_SELS:
-        el = card.query_selector(sel)
-        if el:
-            monthly_sales = _parse_int(el.inner_text())
-            if monthly_sales is not None:
-                break
-    if monthly_sales is None:
-        full_text = card.inner_text()
-        monthly_sales = _parse_monthly_sales(full_text)
+    # ── 月销量 ──────────────────────────────────────────
+    monthly_sales = _parse_monthly_sales(full_text)
 
-    # ── 供应商名称 ──
-    supplier_name: Optional[str] = None
-    for sel in _SUPPLIER_SELS:
-        el = card.query_selector(sel)
-        if el:
-            t = el.inner_text().strip()
-            if t and len(t) >= 2:
-                supplier_name = t
-                break
+    # ── 复购率 ──────────────────────────────────────────
+    repeat_buyer_rate = _parse_repeat_rate(full_text)
 
-    # ── 工厂标签 ──
-    is_factory = False
-    full_text = card.inner_text()
-    if any(kw in full_text for kw in ("工厂", "生产厂", "manufacturer", "factory", "Factory")):
-        is_factory = True
-    else:
-        for sel in _FACTORY_SELS:
-            el = card.query_selector(sel)
-            if el and "工厂" in (el.inner_text() or ""):
-                is_factory = True
-                break
+    # ── 工厂标签 ─────────────────────────────────────────
+    is_factory = "工厂" in full_text or "源头厂家" in full_text
 
-    # ── 复购率（列表页通常没有，留 None） ──
-    repeat_buyer_rate: Optional[float] = _parse_repeat_rate(full_text)
+    # ── MOQ ─────────────────────────────────────────────
+    moq = _parse_moq(full_text)
 
     return SupplierDTO(
         alibaba_offer_id=offer_id,
         supplier_name=supplier_name,
-        offer_url=offer_url or f"https://detail.1688.com/offer/{offer_id}.html",
+        offer_url=_offer_url(offer_id),
         offer_image_url=img_url,
         image_similarity=None,
         text_similarity=None,
@@ -432,92 +339,61 @@ def _parse_card(card) -> Optional[SupplierDTO]:
         is_factory=is_factory,
         delivery_days=None,
         fba_ready=None,
-        raw_data={"title_cn": title},
+        raw_data={"title_cn": title, "full_text": full_text[:200]},
     )
 
 
 # ============================================================
-# 工具函数
+# 字段解析工具
 # ============================================================
 
-def _extract_offer_id(url: str) -> str:
-    m = re.search(r"/offer/(\d+)", url or "")
-    return m.group(1) if m else ""
-
-
-def _normalize_url(url: str) -> str:
-    if not url:
-        return ""
-    if url.startswith("//"):
-        return f"https:{url}"
-    if not url.startswith("http"):
-        return f"https://detail.1688.com{url}"
-    return url
-
-
 def _parse_price(text: str) -> Optional[float]:
-    """从价格文本提取浮点数（人民币）。"""
-    clean = re.sub(r"[¥￥,，\s]", "", text or "")
-    m = re.search(r"(\d+\.?\d*)", clean)
+    """从价格文本提取 CNY 价格。
+
+    1688 价格格式：'¥\\n10\\n.99\\n新人价\\n全网1.5万+件'
+    策略：找第一个 ¥/￥ 后的数字序列，最多两段（整数+小数）。
+    上限 ¥9999，超出视为解析错误（可能把销量数据误读为价格）。
+    """
+    t = (text or "").replace("\n", "").replace(" ", "")
+    # 找 ¥ 后的数字（可能含小数点）
+    m = re.search(r"[¥￥]([\d,]+\.?\d*)", t)
+    if not m:
+        # 无货币符号时，取第一个合理数字
+        m = re.search(r"^([\d,]+\.?\d*)", re.sub(r"[^\d.,]", "", t))
     if m:
         try:
-            v = float(m.group(1))
-            return v if v > 0 else None
+            v = float(m.group(1).replace(",", ""))
+            if 0 < v <= 9999:
+                return v
         except ValueError:
-            return None
-    return None
-
-
-def _parse_int(text: str) -> Optional[int]:
-    if not text:
-        return None
-    clean = re.sub(r"[,，\s]", "", text)
-    m = re.search(r"\d+", clean)
-    try:
-        return int(m.group()) if m else None
-    except (ValueError, AttributeError):
-        return None
-
-
-def _parse_moq_from_text(text: str) -> Optional[int]:
-    """从卡片全文正则提取最小起订量。"""
-    for pattern in (
-        r"起订量[：:\s]*(\d+)",
-        r"最小起订[：:\s]*(\d+)",
-        r"≥\s*(\d+)\s*件",
-        r"最少(\d+)件",
-    ):
-        m = re.search(pattern, text or "")
-        if m:
-            return int(m.group(1))
+            pass
     return None
 
 
 def _parse_monthly_sales(text: str) -> Optional[int]:
-    """从卡片全文提取月成交量。"""
+    """解析月销量 / 全网销量：'全网1.5万+件' → 15000，'月销200' → 200。"""
     for pattern in (
-        r"月销[售量]*[：:\s]*(\d+[\d,万]*)",
-        r"月成交[：:\s]*(\d+[\d,万]*)",
-        r"(\d+[\d,万]+)\s*笔",
-        r"月销(\d+)",
+        r"全网([\d.]+)万\+?件",
+        r"月销[量售]*([\d.]+)万\+?件",
+        r"月成交([\d.]+)万\+?",
+        r"月销[量售]*([\d,]+)",
+        r"([\d,]+)\s*笔",
     ):
         m = re.search(pattern, text or "")
         if m:
             raw = m.group(1).replace(",", "")
-            if "万" in raw:
-                num = re.search(r"[\d.]+", raw)
-                if num:
-                    return int(float(num.group()) * 10000)
             try:
-                return int(raw)
+                val = float(raw)
+                if "万" in pattern:
+                    return int(val * 10000)
+                return int(val)
             except ValueError:
                 pass
     return None
 
 
 def _parse_repeat_rate(text: str) -> Optional[float]:
-    """从卡片全文提取复购率（如 "回头率 72%"）。"""
-    m = re.search(r"(?:回头率|复购率)[：:\s]*([\d.]+)\s*%", text or "")
+    m = re.search(r"回头率(\d+)%", text or "")
     if m:
         try:
             return float(m.group(1)) / 100
@@ -526,24 +402,31 @@ def _parse_repeat_rate(text: str) -> Optional[float]:
     return None
 
 
-def _extract_price_tiers(card) -> list[dict]:
-    """尝试提取价格阶梯（格式：1-99件 ¥12 / 100+件 ¥9.5）。"""
-    tiers: list[dict] = []
-    # 找所有包含数量+价格的配对元素
-    price_els = card.query_selector_all("[class*='price']")
-    qty_els = card.query_selector_all("[class*='qty'], [class*='quantity'], [class*='range']")
+def _parse_moq(text: str) -> Optional[int]:
+    for pattern in (
+        r"起订量[：:\s]*(\d+)",
+        r"最小起订[：:\s]*(\d+)",
+        r"≥\s*(\d+)\s*件",
+        r"最少(\d+)件",
+        r"(\d+)件起",
+    ):
+        m = re.search(pattern, text or "")
+        if m:
+            return int(m.group(1))
+    return 1  # 默认最小起订 1
 
-    if len(price_els) == len(qty_els) and 1 < len(price_els) <= 5:
-        for qty_el, price_el in zip(qty_els, price_els):
-            qty = _parse_int(qty_el.inner_text())
-            price = _parse_price(price_el.inner_text())
-            if qty and price:
-                tiers.append({"qty": qty, "price": price})
 
-    return tiers
+def _extract_supplier(text: str) -> Optional[str]:
+    """从卡片全文末尾提取供应商名（通常是最后一行非空文本）。"""
+    lines = [l.strip() for l in (text or "").split("\n") if l.strip()]
+    # 找包含"公司"、"工厂"、"厂家"的行
+    for line in reversed(lines):
+        if any(k in line for k in ("公司", "工厂", "厂家", "有限", "店")):
+            return line[:40]
+    # 没找到则取最后一行
+    return lines[-1][:40] if lines else None
 
 
 def _profile_has_cookies() -> bool:
-    """检查持久化 Profile 目录是否存在登录态文件。"""
     cookies_file = _PROFILE_DIR / "Default" / "Cookies"
     return cookies_file.exists() and cookies_file.stat().st_size > 10_000
