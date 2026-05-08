@@ -237,7 +237,7 @@ def export_markdown(candidates: list, output_dir: Optional[Path] = None) -> list
                 f"| {getattr(s,'base_price_cny','-')} "
                 f"| {getattr(s,'moq','-')} "
                 f"| {getattr(s,'monthly_sales','-')} "
-                f"| {f\"{getattr(s,'repeat_buyer_rate',0):.0%}\" if getattr(s,'repeat_buyer_rate',None) else '-'} |"
+                f"| {getattr(s,'repeat_buyer_rate','-')} |"
             )
 
         content = _MD_TEMPLATE.format(

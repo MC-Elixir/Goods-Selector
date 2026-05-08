@@ -12,6 +12,7 @@ htmlcov/
 data/cache/
 data/images/
 data/exports/
+data/
 *.db
 *.sqlite
 *.sqlite3

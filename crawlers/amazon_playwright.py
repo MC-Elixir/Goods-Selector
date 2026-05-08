@@ -278,9 +278,32 @@ def _extract_price(page) -> Optional[float]:
     for sel in candidates:
         t = _sel_text(page, sel)
         if t:
+            # 尝试 USD 格式
             v = _parse_float(t)
             if v and v > 0:
                 return v
+            # 尝试 JPY 格式 (JPY1,486 或 ¥1,486)
+            if "JPY" in t or "¥" in t:
+                v = _parse_float(t.replace("JPY", "").replace("¥", "").replace("\xa0", ""))
+                if v and v > 0:
+                    return round(v * 0.007, 2)  # JPY → USD
+    
+    # 兜底：所有 a-offscreen 中找价格
+    all_offscreen = page.query_selector_all(".a-offscreen")
+    for el in (all_offscreen or []):
+        try:
+            t = el.inner_text().strip()
+            if not t:
+                continue
+            v = _parse_float(t)
+            if v and v > 0:
+                return v
+            if "JPY" in t or "¥" in t:
+                v = _parse_float(t.replace("JPY", "").replace("¥", "").replace("\xa0", ""))
+                if v and v > 0:
+                    return round(v * 0.007, 2)
+        except Exception:
+            pass
     return None
 
 
