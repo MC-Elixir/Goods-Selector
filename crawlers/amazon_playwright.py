@@ -120,8 +120,16 @@ class AmazonPlaywrightScraper:
                 viewport={"width": 1366, "height": 768},
                 locale="en-US",
                 timezone_id="America/New_York",
-                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "CloudFront-Viewer-Country": "US",
+                },
             )
+            # 强制 Amazon 以美元显示价格（无论 IP 地区）
+            ctx.add_cookies([
+                {"name": "i18n-prefs", "value": "USD", "domain": ".amazon.com", "path": "/"},
+                {"name": "lc-main",    "value": "en_US", "domain": ".amazon.com", "path": "/"},
+            ])
             page = ctx.new_page()
             # 隐藏 webdriver 特征
             page.add_init_script(
@@ -206,7 +214,7 @@ class AmazonPlaywrightScraper:
         self, page, base_url: str, asin: str, marketplace: str, category: str
     ) -> ProductDTO:
         """爬取单个产品详情页，返回 ProductDTO。"""
-        url = f"{base_url}/dp/{asin}"
+        url = f"{base_url}/dp/{asin}?language=en_US&currency=USD"
         page.goto(url, wait_until="domcontentloaded", timeout=30_000)
         if self._is_captcha(page):
             raise RuntimeError("验证码页面")
@@ -267,6 +275,25 @@ def _extract_brand(page) -> Optional[str]:
     return None
 
 
+_JPY_TO_USD = 0.0067  # ≈ 2025/2026 年均汇率，仅作兜底用
+
+
+def _parse_price_text(t: str) -> Optional[float]:
+    """从价格文本中提取 USD 金额，自动处理 JPY。"""
+    t = t.replace("\xa0", " ").strip()
+    # 明确的日元标记
+    if "JPY" in t or "¥" in t:
+        v = _parse_float(t.replace("JPY", "").replace("¥", ""))
+        return round(v * _JPY_TO_USD, 2) if v and v > 0 else None
+    v = _parse_float(t)
+    if not v or v <= 0:
+        return None
+    # 没有 $ 符号且金额 ≥ 500，很可能是日元裸数字（如 "6980"）
+    if "$" not in t and "USD" not in t and v >= 500:
+        return round(v * _JPY_TO_USD, 2)
+    return v
+
+
 def _extract_price(page) -> Optional[float]:
     candidates = [
         ".a-price.reinventPricePriceToPayMargin .a-offscreen",
@@ -278,30 +305,20 @@ def _extract_price(page) -> Optional[float]:
     for sel in candidates:
         t = _sel_text(page, sel)
         if t:
-            # 尝试 USD 格式
-            v = _parse_float(t)
-            if v and v > 0:
+            v = _parse_price_text(t)
+            if v:
                 return v
-            # 尝试 JPY 格式 (JPY1,486 或 ¥1,486)
-            if "JPY" in t or "¥" in t:
-                v = _parse_float(t.replace("JPY", "").replace("¥", "").replace("\xa0", ""))
-                if v and v > 0:
-                    return round(v * 0.007, 2)  # JPY → USD
-    
-    # 兜底：所有 a-offscreen 中找价格
+
+    # 兜底：所有 a-offscreen，跳过明显非价格文本
     all_offscreen = page.query_selector_all(".a-offscreen")
     for el in (all_offscreen or []):
         try:
             t = el.inner_text().strip()
             if not t:
                 continue
-            v = _parse_float(t)
-            if v and v > 0:
+            v = _parse_price_text(t)
+            if v:
                 return v
-            if "JPY" in t or "¥" in t:
-                v = _parse_float(t.replace("JPY", "").replace("¥", "").replace("\xa0", ""))
-                if v and v > 0:
-                    return round(v * 0.007, 2)
         except Exception:
             pass
     return None
