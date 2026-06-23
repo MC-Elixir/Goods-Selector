@@ -121,6 +121,15 @@ class Supplier(Base):
     repeat_buyer_rate: Mapped[Optional[float]] = mapped_column(Float)
     is_factory: Mapped[Optional[bool]] = mapped_column(Boolean)    # 实力商家 / 工厂
 
+    # ── 匹配验证相关 ──────────────────────────────────────
+    title_cn: Mapped[Optional[str]] = mapped_column(String(500))           # 1688 中文标题
+    product_dimensions_cm: Mapped[Optional[str]] = mapped_column(String(100))  # 规格尺寸
+    product_weight_g: Mapped[Optional[float]] = mapped_column(Float)           # 重量（克）
+    material: Mapped[Optional[str]] = mapped_column(String(100))               # 材质
+    color: Mapped[Optional[str]] = mapped_column(String(50))                   # 颜色
+    match_quality_score: Mapped[Optional[float]] = mapped_column(Float)        # 匹配质量 0-1
+    match_verification_method: Mapped[Optional[str]] = mapped_column(String(20))  # "heuristic"|"llm"|"unverified"
+
     matched_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

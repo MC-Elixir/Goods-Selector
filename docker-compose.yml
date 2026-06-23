@@ -1,0 +1,10 @@
+services:
+  amazon-selector:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    # 默认显示帮助；实际运行通过 docker compose run 传参：
+    #   docker compose run --rm amazon-selector init-db
+    #   docker compose run --rm amazon-selector run --category "Home & Kitchen" --limit 50
+    command: ["--help"]

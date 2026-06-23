@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/dell/.claude/**)",
+      "Bash(npx *)",
+      "Read(//d/tmp/**)",
+      "Bash(node -e ' *)",
+      "Bash(npm list *)",
+      "Bash(pip show *)",
+      "Bash(pip install *)",
+      "Bash(playwright install *)",
+      "Bash(python -m pip install playwright)",
+      "Bash(python -m playwright install chromium)",
+      "Bash(python -m pip install -r requirements.txt -q)",
+      "Bash(python -c \"from db.init_db import init_db; init_db\\(\\)\")",
+      "Bash(export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897)",
+      "Bash(python test_pipeline.py)",
+      "Bash(python setup_1688_login.py)",
+      "Bash(tasklist)",
+      "Bash(python -c \"import playwright_stealth; print\\('playwright_stealth installed'\\)\")",
+      "Bash(start *)",
+      "mcp__playwright__browser_navigate",
+      "Bash(python *)",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_console_messages",
+      "mcp__playwright__browser_click",
+      "Bash(taskkill /F /IM python.exe)",
+      "Bash(ls data/*.db)",
+      "Bash(ls *.db)",
+      "Bash(ls db/*.db)"
+    ]
+  }
+}

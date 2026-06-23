@@ -211,7 +211,7 @@ def score_competition(
 def score_supply(suppliers: list, curve: dict) -> float:
     """货源稳定性 → [0,1]。
 
-    五因子：供应商数量 + 回头率 + MOQ + 交期 + 初始资金
+    六因子：供应商数量 + 回头率 + MOQ + 交期 + 初始资金 + 匹配质量
     """
     if not suppliers:
         return 0.0
@@ -253,13 +253,25 @@ def score_supply(suppliers: list, curve: dict) -> float:
     else:
         capital_score = 0.5
 
+    # 匹配质量（来自 verifier）
+    match_scores = [
+        getattr(s, "match_quality_score", None) for s in suppliers
+        if getattr(s, "match_quality_score", None) is not None
+    ]
+    if match_scores:
+        avg_match = sum(match_scores) / len(match_scores)
+        match_target = c.get("match_quality_target", 0.6)
+        match_score = _clamp(avg_match / match_target) if match_target else 0.5
+    else:
+        match_score = 0.5  # 无验证数据时中性
+
     # FBA 经验奖励
     fba_bonus = c.get("fba_ready_bonus", 0.08) if any(
         getattr(s, "fba_ready", False) for s in suppliers
     ) else 0.0
 
-    base = (0.30 * n_score + 0.30 * repeat_avg + 0.15 * moq_score
-            + 0.15 * delivery_score + 0.10 * capital_score)
+    base = (0.25 * n_score + 0.25 * repeat_avg + 0.15 * moq_score
+            + 0.15 * delivery_score + 0.10 * capital_score + 0.10 * match_score)
     return _clamp(base + fba_bonus)
 
 

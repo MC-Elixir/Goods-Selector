@@ -87,7 +87,7 @@ scoring_curves:
     bsr20_review_gt500_warning: 10     # ≥ 10 个高评论产品时，竞争门槛较高
 
   supply:
-    # 五因子：供应商数量 + 回头率 + MOQ + 交期 + FBA 经验
+    # 六因子：供应商数量 + 回头率 + MOQ + 交期 + FBA 经验 + 匹配质量
     # 来源：真实选品评分表开发调研部分（供应链可行性）
 
     min_suppliers: 3                   # 至少 3 家供应商才算稳
@@ -104,6 +104,10 @@ scoring_curves:
 
     # 初始资金门槛（MOQ × 采购价，小卖家现金流约束）
     initial_capital_max_cny: 50000     # 首单资金 > 5 万 CNY 扣分
+
+    # 匹配质量（来自 verifier 启发式验证）
+    match_quality_target: 0.6          # 平均匹配质量 >= 0.6 满分
+    match_quality_min: 0.25            # 低于此值的供应商已被 verifier 过滤
 
   logistics:
     # 三因子：体积重比 + 重量 / 尺寸 + 危险属性

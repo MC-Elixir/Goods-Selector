@@ -30,7 +30,11 @@ class Settings(BaseSettings):
     # PPIO（派噢）— OpenAI 兼容接口，国内访问快，支持 Qwen-VL 等模型
     ppio_api_key: str = ""
     ppio_api_base: str = "https://api.ppio.com/openai"
-    ppio_model: str = "qwen/qwen3.5-plus"  # PPIO 上的视觉模型
+    ppio_model: str = "qwen/qwen3.5-plus"  # PPIO 上的视觉模型（需支持 image 输入）
+
+    # PPIO 长上下文文本模型（用于大文档分析、批量总结等，文本专用）
+    # 2026-06 新增：GLM-5.2 (1M 上下文，¥80/¥280，性价比优于 v4-pro)
+    ppio_text_model: str = "zai-org/glm-5.2"
 
     # Anthropic — Claude Vision（PPIO 未配置时的备用）
     anthropic_api_key: str = ""
@@ -62,6 +66,7 @@ class Settings(BaseSettings):
 
     # ---------- 行为开关 ----------
     enable_api_cache: bool = True
+    enable_llm_verification: bool = False  # 启用 LLM 视觉验证（对比 Amazon 和 1688 图片）
     cache_ttl_seconds: int = 86400
     log_level: str = "INFO"
 

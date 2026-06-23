@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amazon Selector</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --canvas: #010102;
+  --surface-1: #0f1011;
+  --surface-2: #141516;
+  --surface-3: #18191a;
+  --surface-4: #191a1b;
+  --ink: #f7f8f8;
+  --ink-muted: #d0d6e0;
+  --ink-subtle: #8a8f98;
+  --ink-tertiary: #62666d;
+  --accent: #5e6ad2;
+  --accent-hover: #828fff;
+  --accent-focus: #5e69d1;
+  --accent-light: rgba(94, 106, 210, 0.12);
+  --success: #27a644;
+  --success-light: rgba(39, 166, 68, 0.12);
+  --warning: #e5a00e;
+  --warning-light: rgba(229, 160, 14, 0.12);
+  --error: #d93b3b;
+  --error-light: rgba(217, 59, 59, 0.12);
+  --hairline: #23252a;
+  --hairline-strong: #34343a;
+  --hairline-tertiary: #3e3e44;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'SF Mono', Monaco, 'JetBrains Mono', ui-monospace, monospace;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--canvas);
+  color: var(--ink);
+  line-height: 1.5;
+  min-height: 100vh;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--canvas);
+}
+
+.container {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.logo {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: white;
+  letter-spacing: -0.02em;
+}
+
+.header h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+
+.header-sub {
+  font-size: 0.875rem;
+  color: var(--ink-subtle);
+  margin-top: 2px;
+  font-weight: 400;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  border: 1px solid var(--hairline);
+}
+
+.badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  transition: all 0.15s ease;
+}
+
+.stat-card:hover {
+  background: var(--surface-2);
+  border-color: var(--hairline-strong);
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--ink-subtle);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 12px;
+}
+
+.stat-value {
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-bottom: 6px;
+  color: var(--ink);
+  font-feature-settings: 'tnum';
+}
+
+.stat-sub {
+  font-size: 0.75rem;
+  color: var(--ink-subtle);
+}
+
+.stat-sub.positive { color: var(--success); }
+.stat-sub.negative { color: var(--error); }
+
+/* Main Layout */
+.main-grid {
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  gap: 16px;
+}
+
+/* Card */
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.card-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: -0.01em;
+}
+
+.card-title .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.card-body {
+  padding: 20px;
+}
+
+/* Filters */
+.filters {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.filter-group {
+  flex: 1;
+  min-width: 140px;
+}
+
+.filter-label {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--ink-subtle);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.filter-select,
+.filter-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 0.875rem;
+  transition: all 0.15s;
+  outline: none;
+}
+
+.filter-select:hover,
+.filter-input:hover {
+  border-color: var(--hairline-strong);
+}
+
+.filter-select:focus,
+.filter-input:focus {
+  border-color: var(--accent-focus);
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.filter-select option {
+  background: var(--surface-1);
+  color: var(--ink);
+}
+
+/* Table */
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.data-table th {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--ink-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--hairline);
+  position: sticky;
+  top: 0;
+  background: var(--surface-1);
+  z-index: 2;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.data-table th:hover {
+  color: var(--ink-muted);
+}
+
+.data-table th.sorted {
+  color: var(--accent);
+}
+
+.data-table th.sorted::after {
+  content: ' ↓';
+  font-size: 0.6875rem;
+}
+
+.data-table th[data-dir="asc"].sorted::after {
+  content: ' ↑';
+}
+
+.data-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: middle;
+  transition: background 0.1s;
+  color: var(--ink);
+  font-size: 0.875rem;
+}
+
+.data-table tbody tr {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.data-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.data-table tbody tr.selected {
+  background: var(--accent-light);
+}
+
+.data-table tbody tr.selected td {
+  color: var(--ink);
+}
+
+/* Product Cell */
+.prod-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 240px;
+}
+
+.prod-img {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--surface-3);
+  flex-shrink: 0;
+  border: 1px solid var(--hairline);
+}
+
+.prod-name {
+  font-weight: 500;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 300px;
+  color: var(--ink);
+}
+
+.prod-asin {
+  font-size: 0.75rem;
+  color: var(--ink-subtle);
+  margin-top: 2px;
+  font-family: var(--font-mono);
+}
+
+/* Score Badge */
+.score-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum';
+}
+
+.score-high {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.score-mid {
+  background: var(--warning-light);
+  color: var(--warning);
+}
+
+.score-low {
+  background: var(--error-light);
+  color: var(--error);
+}
+
+/* Status */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.status-pass {
+  background: var(--success-light);
+  color: var(--success);
+  border-color: rgba(39, 166, 68, 0.25);
+}
+
+.status-fail {
+  background: var(--error-light);
+  color: var(--error);
+  border-color: rgba(217, 59, 59, 0.25);
+}
+
+.status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Profit */
+.profit-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.profit-val {
+  font-weight: 600;
+  font-size: 0.875rem;
+  font-family: var(--font-mono);
+  min-width: 64px;
+  font-feature-settings: 'tnum';
+}
+
+.profit-val.pos { color: var(--success); }
+.profit-val.neg { color: var(--error); }
+
+.profit-track {
+  flex: 1;
+  height: 3px;
+  background: var(--surface-3);
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.profit-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.profit-fill.pos {
+  background: var(--accent);
+}
+
+.profit-fill.neg {
+  background: var(--error);
+}
+
+/* Detail Panel */
+.detail-panel {
+  position: sticky;
+  top: 24px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+
+.detail-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.detail-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.detail-panel::-webkit-scrollbar-thumb {
+  background: var(--hairline-strong);
+  border-radius: 3px;
+}
+
+.detail-header {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.detail-img {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  background: var(--surface-3);
+  flex-shrink: 0;
+  border: 1px solid var(--hairline);
+}
+
+.detail-title {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  margin-bottom: 8px;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+}
+
+.detail-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hairline);
+}
+
+.section-title {
+  font-size: 0.6875rem;
+  color: var(--ink-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+  margin-bottom: 12px;
+}
+
+/* Radar */
+.radar-wrap {
+  height: 240px;
+  margin: 8px 0;
+}
+
+/* Profit Breakdown */
+.pf-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 0.875rem;
+}
+
+.pf-row:last-child {
+  border: none;
+}
+
+.pf-label {
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.pf-val {
+  font-weight: 600;
+  font-size: 0.875rem;
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum';
+}
+
+.pf-val.pos { color: var(--success); }
+.pf-val.neg { color: var(--error); }
+
+.pf-row.total {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline-strong);
+}
+
+.pf-row.total .pf-label {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pf-row.total .pf-val {
+  font-size: 0.9375rem;
+}
+
+/* Supplier List */
+.sup-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  margin-bottom: 6px;
+  transition: all 0.15s;
+  text-decoration: none;
+  color: inherit;
+}
+
+.sup-item:hover {
+  background: var(--surface-3);
+  border-color: var(--hairline-strong);
+}
+
+.sup-item:last-child {
+  margin-bottom: 0;
+}
+
+.sup-rank {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  border: 1px solid var(--hairline);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+
+.sup-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.sup-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink);
+}
+
+.sup-meta {
+  font-size: 0.75rem;
+  color: var(--ink-subtle);
+  margin-top: 2px;
+}
+
+.sup-price {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  font-feature-settings: 'tnum';
+}
+
+/* Button */
+.btn {
+  padding: 8px 14px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-family: var(--font);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn:hover {
+  background: var(--accent-hover);
+}
+
+.btn:active {
+  background: var(--accent-focus);
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+}
+
+.btn-secondary:hover {
+  background: var(--surface-3);
+  border-color: var(--hairline-strong);
+}
+
+/* Empty State */
+.empty {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--ink-subtle);
+}
+
+.empty-icon {
+  font-size: 2rem;
+  margin-bottom: 12px;
+  opacity: 0.6;
+}
+
+.empty p {
+  font-size: 0.875rem;
+}
+
+/* Pagination */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hairline);
+}
+
+.pager-btn {
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--ink-muted);
+  font-family: var(--font);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 32px;
+}
+
+.pager-btn:hover:not(:disabled):not(.active) {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.pager-btn.active {
+  background: var(--surface-2);
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+
+.pager-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.pager-info {
+  font-size: 0.875rem;
+  color: var(--ink-subtle);
+  margin: 0 8px;
+}
+
+/* Rejection */
+.reject-box {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--error-light);
+  border: 1px solid rgba(217, 59, 59, 0.25);
+  border-radius: var(--radius-md);
+}
+
+.reject-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--error);
+  margin-bottom: 6px;
+}
+
+.reject-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.reject-list li {
+  margin-bottom: 2px;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Responsive */
+@media (max-width: 1100px) {
+  .main-grid {
+    grid-template-columns: 1fr;
+  }
+  .detail-panel {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .container {
+    padding: 16px;
+  }
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <header class="header fade-in">
+    <div class="header-left">
+      <div class="logo">AS</div>
+      <div>
+        <h1>Amazon Selector</h1>
+        <div class="header-sub">Product sourcing intelligence</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="badge">Pipeline Active</div>
+      <div id="headerStat" style="font-size: 0.875rem; color: var(--ink-subtle);"></div>
+    </div>
+  </header>
+
+  <section class="stats-grid" id="statStrip"></section>
+
+  <div class="main-grid">
+    <section class="card fade-in">
+      <div class="card-header">
+        <h2 class="card-title">
+          <span class="dot"></span>
+          Product Ranking
+        </h2>
+        <button class="btn" id="exportBtn">
+          <span>↓</span> Export
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="filters" id="filters"></div>
+        <div class="table-wrap">
+          <table class="data-table" id="mainTable">
+            <thead><tr id="tableHead"></tr></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+        <div class="pager" id="pager"></div>
+      </div>
+    </section>
+
+    <aside class="detail-panel fade-in" id="detailPanel">
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">
+            <span class="dot" style="background: var(--accent);"></span>
+            Product Details
+          </h2>
+        </div>
+        <div class="card-body" id="detailBody">
+          <div class="empty">
+            <div class="empty-icon">📦</div>
+            <p>Select a product to view details</p>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+const DATA_URL = 'data/exports/candidates_20260509_153113.json';
+let allItems = [], filtered = [], current = null, page = 1, sortKey = 'score', sortDir = -1;
+const PAGE_SIZE = 10;
+
+const REASON_MAP = {
+  margin_too_low:'利润率过低',
+  score_too_low:'综合评分过低',
+  price_too_low:'售价过低',
+  monthly_sales_too_low:'月销量过低',
+  no_supplier:'无供应商',
+  moq_exceeded:'MOQ过高',
+  brand_excluded:'品牌排除'
+};
+
+const COLUMNS = [
+  {key:'score', label:'Score', sort:true},
+  {key:'product', label:'Product', sort:false},
+  {key:'price', label:'Price', sort:true},
+  {key:'rating', label:'Rating', sort:true},
+  {key:'profit', label:'Profit', sort:true},
+  {key:'status', label:'Status', sort:false}
+];
+
+async function init() {
+  try {
+    const r = await fetch(DATA_URL);
+    allItems = await r.json();
+    filtered = [...allItems];
+    buildFilters();
+    buildTableHead();
+    renderStats();
+    renderTable();
+    if (allItems.length) selectItem(allItems[0]);
+  } catch(e) {
+    document.getElementById('tableBody').innerHTML = 
+      '<tr><td colspan="6"><div class="empty"><div class="empty-icon">⚠️</div><p>Failed to load data</p></div></td></tr>';
+  }
+}
+
+function renderStats() {
+  const n = allItems.length;
+  const passed = allItems.filter(i => i.score.passed_hard_filter).length;
+  const avgScore = (allItems.reduce((s, i) => s + i.score.total_score, 0) / n).toFixed(1);
+  const avgMargin = (allItems.reduce((s, i) => s + i.profit.profit_margin, 0) / n * 100).toFixed(1);
+  const totalSup = allItems.reduce((s, i) => s + i.suppliers.length, 0);
+  const profitable = allItems.filter(i => i.profit.net_profit > 0).length;
+  
+  const stats = [
+    {label:'Products', value:n, sub:'Analyzed'},
+    {label:'Passed Filter', value:passed, sub:`${((passed/n)*100).toFixed(0)}% pass rate`, cls:passed>0?'positive':'negative'},
+    {label:'Avg Score', value:avgScore, sub:'out of 100'},
+    {label:'Avg Margin', value:avgMargin+'%', sub:`${profitable} profitable`, cls:parseFloat(avgMargin)>0?'positive':'negative'},
+    {label:'Suppliers', value:totalSup, sub:`avg ${(totalSup/n).toFixed(1)}/product`}
+  ];
+  
+  document.getElementById('statStrip').innerHTML = stats.map((s, i) =>
+    `<div class="stat-card"><div class="stat-label">${s.label}</div><div class="stat-value">${s.value}</div><div class="stat-sub ${s.cls||''}">${s.sub}</div></div>`
+  ).join('');
+  
+  document.getElementById('headerStat').textContent = 
+    `${new Date().toLocaleDateString('zh-CN')} · ${n} products`;
+}
+
+function buildFilters() {
+  document.getElementById('filters').innerHTML = `
+    <div class="filter-group">
+      <label class="filter-label">Status</label>
+      <select class="filter-select" id="fStatus">
+        <option value="all">All</option>
+        <option value="passed">Passed</option>
+        <option value="failed">Failed</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">Sort By</label>
+      <select class="filter-select" id="fSort">
+        <option value="score">Score</option>
+        <option value="profit">Profit</option>
+        <option value="price">Price</option>
+        <option value="reviews">Reviews</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">Search</label>
+      <input type="text" class="filter-input" id="fSearch" placeholder="Name or ASIN...">
+    </div>`;
+  
+  document.getElementById('fStatus').onchange = applyFilters;
+  document.getElementById('fSort').onchange = e => {sortKey = e.target.value; applyFilters();};
+  document.getElementById('fSearch').oninput = applyFilters;
+}
+
+function buildTableHead() {
+  document.getElementById('tableHead').innerHTML = COLUMNS.map(c =>
+    `<th data-key="${c.key}" ${c.sort?'class="sortable"':''}>${c.label}</th>`
+  ).join('');
+  
+  document.querySelectorAll('.data-table th.sortable').forEach(th => {
+    th.onclick = () => {
+      const k = th.dataset.key;
+      if (sortKey === k) sortDir *= -1;
+      else {sortKey = k; sortDir = -1;}
+      
+      document.querySelectorAll('.data-table th').forEach(t => {
+        t.classList.remove('sorted');
+        delete t.dataset.dir;
+      });
+      
+      th.classList.add('sorted');
+      th.dataset.dir = sortDir > 0 ? 'asc' : 'desc';
+      applyFilters();
+    };
+  });
+}
+
+function applyFilters() {
+  const st = document.getElementById('fStatus').value;
+  const q = document.getElementById('fSearch').value.toLowerCase();
+  
+  filtered = allItems.filter(i => {
+    if (st === 'passed' && !i.score.passed_hard_filter) return false;
+    if (st === 'failed' && i.score.passed_hard_filter) return false;
+    if (q && !i.product.title.toLowerCase().includes(q) && !i.product.asin.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  
+  filtered.sort((a, b) => {
+    let va, vb;
+    switch(sortKey) {
+      case 'score': va = a.score.total_score; vb = b.score.total_score; break;
+      case 'profit': va = a.profit.net_profit; vb = b.profit.net_profit; break;
+      case 'price': va = a.product.price; vb = b.product.price; break;
+      case 'reviews': va = a.product.review_count; vb = b.product.review_count; break;
+      default: va = a.score.total_score; vb = b.score.total_score;
+    }
+    return (va - vb) * sortDir;
+  });
+  
+  page = 1;
+  renderTable();
+}
+
+function renderTable() {
+  const start = (page - 1) * PAGE_SIZE;
+  const items = filtered.slice(start, start + PAGE_SIZE);
+  const tb = document.getElementById('tableBody');
+  
+  if (!items.length) {
+    tb.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🔍</div><p>No matching products</p></div></td></tr>';
+    renderPager();
+    return;
+  }
+  
+  tb.innerHTML = items.map(item => {
+    const p = item.product, s = item.score, pr = item.profit;
+    const sel = current && current.product.asin === p.asin ? 'selected' : '';
+    const sc = s.total_score >= 65 ? 'score-high' : s.total_score >= 50 ? 'score-mid' : 'score-low';
+    const pc = pr.net_profit >= 0 ? 'pos' : 'neg';
+    const pw = Math.min(Math.abs(pr.profit_margin) * 100, 100);
+    const stars = '★'.repeat(Math.floor(p.rating)) + (p.rating % 1 >= 0.5 ? '½' : '');
+    const rv = p.review_count >= 1000 ? (p.review_count / 1000).toFixed(1) + 'k' : p.review_count;
+    
+    return `<tr class="${sel}" onclick='selectItem(${JSON.stringify(item).replace(/'/g, "&#39;")})'>
+      <td><span class="score-badge ${sc}">${s.total_score.toFixed(1)}</span></td>
+      <td><div class="prod-cell"><img class="prod-img" src="${p.main_image_url}" alt="" onerror="this.style.display='none'"><div><div class="prod-name">${p.title}</div><div class="prod-asin">${p.asin}</div></div></div></td>
+      <td><span style="font-weight: 600; color: var(--ink); font-family: var(--font-mono);">$${p.price.toFixed(2)}</span></td>
+      <td><span style="color: var(--warning);">${stars}</span> <span style="font-size: 0.75rem; color: var(--ink-subtle);">${rv}</span></td>
+      <td><div class="profit-cell"><span class="profit-val ${pc}">${pr.net_profit >= 0 ? '+' : ''}$${pr.net_profit.toFixed(2)}</span><div class="profit-track"><div class="profit-fill ${pc}" style="width: ${pw}%;"></div></div></div></td>
+      <td><span class="status ${s.passed_hard_filter ? 'status-pass' : 'status-fail'}"><span class="status-dot"></span>${s.passed_hard_filter ? 'PASS' : 'FAIL'}</span></td>
+    </tr>`;
+  }).join('');
+  
+  renderPager();
+}
+
+function renderPager() {
+  const total = Math.ceil(filtered.length / PAGE_SIZE);
+  const pg = document.getElementById('pager');
+  
+  if (total <= 1) {
+    pg.innerHTML = '';
+    return;
+  }
+  
+  let h = `<button class="pager-btn" onclick="goPage(${page - 1})" ${page === 1 ? 'disabled' : ''}>← Prev</button>`;
+  
+  for (let i = 1; i <= total; i++) {
+    if (total > 7 && i > 2 && i < total - 1 && Math.abs(i - page) > 1) {
+      if (i === 3 || i === total - 2) h += `<span class="pager-info">…</span>`;
+      continue;
+    }
+    h += `<button class="pager-btn ${i === page ? 'active' : ''}" onclick="goPage(${i})">${i}</button>`;
+  }
+  
+  h += `<button class="pager-btn" onclick="goPage(${page + 1})" ${page === total ? 'disabled' : ''}>Next →</button>`;
+  pg.innerHTML = h;
+}
+
+function goPage(p) {
+  const t = Math.ceil(filtered.length / PAGE_SIZE);
+  if (p < 1 || p > t) return;
+  page = p;
+  renderTable();
+  document.querySelector('.data-table').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function selectItem(item) {
+  current = item;
+  renderTable();
+  renderDetail(item);
+}
+
+function renderDetail(item) {
+  const el = document.getElementById('detailBody');
+  const p = item.product, s = item.score, pr = item.profit, sups = item.suppliers;
+  const sc = s.total_score >= 65 ? 'score-high' : s.total_score >= 50 ? 'score-mid' : 'score-low';
+  const pc = pr.net_profit >= 0 ? 'pos' : 'neg';
+  
+  const pfItems = [
+    {l:'售价', v:pr.selling_price, p:true},
+    {l:'采购成本', v:-pr.purchase_cost, p:false},
+    {l:'头程物流', v:-pr.shipping_cost, p:false},
+    {l:'FBA费用', v:-pr.fba_fee, p:false},
+    {l:'平台佣金', v:-pr.commission, p:false},
+    {l:'广告费', v:-pr.ad_cost, p:false},
+    {l:'退货损耗', v:-pr.return_loss, p:false},
+    {l:'汇率损耗', v:-pr.exchange_loss, p:false}
+  ];
+  
+  const rejectHTML = s.rejection_reasons.length ? 
+    `<div class="reject-box"><div class="reject-title">⚠ Rejection Reasons</div><ul class="reject-list">${s.rejection_reasons.map(r => `<li>${REASON_MAP[r] || r}</li>`).join('')}</ul></div>` : '';
+  
+  const supsHTML = sups.slice(0, 5).map((sup, i) => 
+    `<a href="${sup.offer_url}" target="_blank" class="sup-item">
+      <div class="sup-rank">${i + 1}</div>
+      <div class="sup-info">
+        <div class="sup-name">${sup.supplier_name}</div>
+        <div class="sup-meta">回头率:${((sup.repeat_buyer_rate || 0) * 100).toFixed(0)}%${sup.monthly_sales ? ' · 月销:' + sup.monthly_sales.toLocaleString() : ''} · MOQ:${sup.moq || 1}</div>
+      </div>
+      <div class="sup-price">¥${(sup.base_price_cny || 0).toFixed(2)}</div>
+    </a>`
+  ).join('');
+
+  el.innerHTML = `
+    <div class="detail-header">
+      <img class="detail-img" src="${p.main_image_url}" alt="" onerror="this.style.display='none'">
+      <div>
+        <div class="detail-title">${p.title}</div>
+        <div class="detail-tags">
+          <span class="tag">🏷 ${p.asin}</span>
+          <span class="tag">💰 $${p.price.toFixed(2)}</span>
+          <span class="tag">⭐ ${p.rating}</span>
+          <span class="tag">💬 ${(p.review_count / 1000).toFixed(1)}k</span>
+        </div>
+      </div>
+    </div>
+    <a href="${p.listing_url}" target="_blank" class="btn btn-secondary" style="margin-bottom: 16px; width: 100%; justify-content: center;">View on Amazon →</a>
+    ${rejectHTML}
+    <div class="detail-section">
+      <div class="section-title">Score Breakdown</div>
+      <div class="radar-wrap"><canvas id="radarChart"></canvas></div>
+    </div>
+    <div class="detail-section">
+      <div class="section-title">Profit Breakdown</div>
+      ${pfItems.map(x => `<div class="pf-row"><span class="pf-label">${x.l}</span><span class="pf-val ${x.v >= 0 ? 'pos' : 'neg'}">${x.v >= 0 ? '+' : ''}$${Math.abs(x.v).toFixed(2)}</span></div>`).join('')}
+      <div class="pf-row total">
+        <span class="pf-label">Net Profit</span>
+        <span class="pf-val ${pc}">${pr.net_profit >= 0 ? '+' : ''}$${pr.net_profit.toFixed(2)}</span>
+      </div>
+      <div class="pf-row">
+        <span class="pf-label">Margin</span>
+        <span class="pf-val ${pc}">${(pr.profit_margin * 100).toFixed(1)}%</span>
+      </div>
+    </div>
+    <div class="detail-section">
+      <div class="section-title">Top Suppliers</div>
+      ${supsHTML}
+    </div>`;
+  
+  initRadar(s);
+}
+
+function initRadar(score) {
+  const ctx = document.getElementById('radarChart');
+  if (!ctx) return;
+
+  new Chart(ctx, {
+    type: 'radar',
+    data: {
+      labels: ['利润', '需求', '竞争', '货源', '物流', '风险'],
+      datasets: [{
+        data: [
+          score.profit_score,
+          score.demand_score,
+          score.competition_score,
+          score.supply_score,
+          score.logistics_score,
+          score.risk_score
+        ],
+        backgroundColor: 'rgba(94, 106, 210, 0.15)',
+        borderColor: 'rgba(94, 106, 210, 1)',
+        borderWidth: 1.5,
+        pointBackgroundColor: 'rgba(94, 106, 210, 1)',
+        pointBorderColor: '#010102',
+        pointBorderWidth: 2,
+        pointRadius: 3,
+        pointHoverRadius: 5
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {display: false}
+      },
+      scales: {
+        r: {
+          beginAtZero: true,
+          max: 1,
+          ticks: {
+            stepSize: 0.2,
+            color: 'rgba(138, 143, 152, 0.5)',
+            backdropColor: 'transparent',
+            font: {size: 10}
+          },
+          grid: {color: 'rgba(35, 37, 42, 0.8)'},
+          angleLines: {color: 'rgba(35, 37, 42, 0.8)'},
+          pointLabels: {
+            color: 'rgba(208, 214, 224, 0.85)',
+            font: {size: 11, weight: 500}
+          }
+        }
+      }
+    }
+  });
+}
+
+document.getElementById('exportBtn').onclick = () => {
+  const blob = new Blob([JSON.stringify(filtered, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `amazon-selector-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+};
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
