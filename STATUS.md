@@ -1,8 +1,12 @@
 # Amazon Selector — Pipeline Status
 
-**Snapshot date**: 2026-06-17
-**Pipeline version**: 0.2.0
-**Last full E2E run**: success — 3 Amazon products → 4 1688 suppliers → 2 candidates pass hard filter → Excel/Markdown/JSON exported
+**Snapshot date**: 2026-06-24
+**Pipeline version**: 0.2.2
+**Last full E2E run**: [run #6] success — 5 Amazon products → 1/3 candidates 拿到真实 1688 offer（B01M16WBW1 → offer 780485617589；64 个新 cookies 首请求有效，后续 TMD 拦截降级 mock）。Excel/Markdown/JSON 导出正常。
+
+**0.2.2（2026-06-23）**：放弃 1688 官方 API、仅用爬虫 —— 清空 `.env` 三个 `ALIBABA_*` key（官方 API 自动跳过）；新增 `enable_scrapling_matcher` 开关默认禁用被 TMD 拦的 Scrapling 死路径，直接降级 Playwright。主路径现为 Playwright 单路（详见 §4.1/§4.2 与 `CHANGELOG.md`）。
+
+**0.2.1（2026-06-23）**：Stage 4 评分体系补完 —— `analyze_market()` 接入关键词选品（API 10），并修正评分中"月销量 / 月搜索量"混用（详见 §4.4 与 `CHANGELOG.md`）。待 `MJJL_API_KEY` 到位即可端到端验证。
 
 ---
 
@@ -11,6 +15,8 @@
 整条 7 阶段 pipeline 端到端跑通，能产出真实候选选品池。
 主要靠两个修复让数据真正可用：Amazon 端把 prodDetTable 选器重写（brand / BSR / 重量 / 尺寸命中率从 0% 提到 90%+），1688 端让 Playwright 路径使用真实浏览器 context 注入 64 个 cookies（拿到真实 1688 商品）。
 剩下的都是"配置就能跑"或者"独立大功能"的问题，不阻塞主流程。
+
+**1688 货源匹配现已仅走爬虫**（0.2.2）：放弃官方 API、禁用被 TMD 拦的 Scrapling HTTP 路径，主路径 = Playwright（注入 cookies 拿真实 offer）→ mock 兜底。
 
 ---
 
@@ -23,7 +29,7 @@
 | 2 | match (alt) | `matchers/alibaba_scrapling.py` | ⚠️ 退化 | HTTP header cookies 被 TMD 拦，0 结果（不阻塞，Playwright 兜底）|
 | 2 | match (alt) | `matchers/alibaba_text_search.py` | ⚠️ 退化 | 1688 官方 API 需 app_key；当前用占位，无数据（400 Bad Request，URL 路由已修）|
 | 3 | profit | `analyzers/profit_model.py` | ✅ **Production** | 6 个 calc_* 函数 + predict_profit，从 CNY 采购价到 USD 净利润 |
-| 4 | market | `analyzers/maijiajingling.py` | ⚠️ 配置即用 | 7 个 API 客户端 + analyze_market 编排，**需要 MJJL_API_KEY**，无 key 时静默跳过 |
+| 4 | market | `analyzers/maijiajingling.py` | ⚠️ 配置即用 | `analyze_market()` 编排 4 接口：ASIN 详情(3) → BSR 预测(26) → 竞品(1) → 关键词选品(10)；**需 `MJJL_API_KEY`**，无 key 静默跳过。0.2.1 起关键词搜索量/机会指数喂入 demand 维度，销量与搜索量不再混用 |
 | 5 | score | `analyzers/scorer.py` | ✅ **Production** | 6 维度 score_* 纯函数 + score_product + apply_hard_filters；`test_weights_sum_to_one` 强制权重和 = 1.0 |
 | 6 | filter | `pipeline/filters.py` | ✅ **Production** | rank_candidates 按 total_score + net_profit 排序 |
 | 7 | report | `reports/exporter.py` | ✅ **Production** | Excel (openpyxl) + Markdown (jinja2) + JSON 三种格式 |
@@ -97,23 +103,45 @@ DB:       RunLog id=2 落库
 
 | API | 状态 | 修法 |
 |---|---|---|
-| `MJJL_API_KEY` (卖家精灵) | 未配置 | 在 `.env` 加 key，stage 4 自动激活 |
-| `ALIBABA_APP_KEY` / `ALIBABA_APP_SECRET` (1688 官方) | 未配置 | 在 `.env` 加 key，stage 2 官方 API 自动激活 |
+| `MJJL_API_KEY` (卖家精灵) | 未配置（已定订阅计划，见 §4.4）| 申请 4 接口试用 → 拿 key → 写 `.env` → stage 4 自动激活 |
+| `ALIBABA_APP_KEY` / `ALIBABA_APP_SECRET` / `ALIBABA_ACCESS_TOKEN` (1688 官方) | **已弃用**（0.2.2 清空，仅走爬虫）| 如恢复官方 API：填回 `.env` 三个 key 即自动启用；此前明文 key 务必先到开放平台重置 |
 | `KEEPA_API_KEY` / `RAINFOREST_API_KEY` (Amazon) | 未配置 | Amazon 走 Scrapling 即可，加 key 后自动升级 |
 
 ### 4.2 代码问题（需要独立工作）
 
 | 问题 | 影响 | 修法（预估工作量）|
 |---|---|---|
-| **Scrapling 1688 路径 0 结果** | Scrapling 是 HTTP 路径，cookies 只能走 header，1688 TMD 不认 | **方案 A**: Scrapling 跑在独立 subprocess（中等改动）  **方案 B**: 全 matcher 异步化（大改动）  **方案 C**: 不修，依赖 Playwright 路径 |
+| **Scrapling 1688 路径 0 结果** | Scrapling 是 HTTP 路径，cookies 只能走 header，1688 TMD 不认 | **0.2.2 已采纳方案 C**：`settings.enable_scrapling_matcher` 默认 False，默认不跑、直接降级 Playwright；待修好后置 True 即可恢复（无需改代码） |
 | **Amazon 2026 buybox 价格** | 第三方卖家主导的页没有内联价格（"See All Buying Options" 之后才有）| 写专门的 buybox extractor，从 JSON `olpMessage` / `p13n-sc-price` 区分主价 vs 变体价（独立工作）|
 | **1688 包装尺寸 / 交期缺失** | 搜索页没这些字段，要进详情页 | 实现 `get_offer_detail`（需要 session 复用 + 限速）|
 | **Pailitao 图像搜索** | `PailitaoClient.search_by_image` 仍是 `NotImplementedError` | 大功能：要么接 1688 开放平台图搜 API（要特殊权限），要么用浏览器自动化上传图片到 1688 图搜页 |
 
 ### 4.3 测试
-- 177 passed, 5 skipped, 2 pre-existing failures
-- 2 pre-existing failures 是 `test_vision_matcher.py` 的 cache-hit 测试（旧缓存导致 mock 不被调用，与本工作无关）
-- 5 skipped 是 `TestAgainstRealAmazonHtml`（用真实 HTML fixture 跑，fixture 已被清理，需要重跑 probe 脚本生成）
+- **0.2.1 实测（2026-06-23）**：181 passed, 5 skipped, 2 pre-existing failures —— 较 0.2.0 新增 4 个用例（`test_maijiajingling.py`）并扩展 `test_scoring.py`，无回归
+- 2 pre-existing failures 仍是 `test_vision_matcher.py` 的 cache-hit 测试（旧缓存导致 mock 不被调用，与本工作无关）
+- 5 skipped 仍是 `TestAgainstRealAmazonHtml`（真实 HTML fixture 待重跑 probe 脚本生成）
+
+### 4.4 卖家精灵 API 订阅计划（2026-06-23 决策）
+
+**订阅策略（先试用，别乱点）**：卖家精灵每个服务都有"试用"，但**每个服务仅可提交一次试用申请**。先只申请下面 4 个接口的试用（对应 `analyze_market()` 编排的 4 步）：
+
+| 接口 | 名称 | 在 analyze_market 中的作用 |
+|---|---|---|
+| 3 | ASIN 详情 | 入口：基础信息 + BSR + 类目（API 26 依赖其 categoryId） |
+| 26 | BSR 销量预测 | 日/月销量估计 → `est_monthly_sales` → demand 维度 + 硬筛 |
+| 1 | 查竞品 | 竞品集中度 + 头部份额 → competition 维度 |
+| 10 | 关键词选品 | 搜索量 + 机会指数 → demand 维度（**0.2.1 新接入**） |
+
+价格见卖家精灵开放平台 **API 价格页**（按接口计费）。
+
+**低成本备选**：仅做 MVP 小批量人工验证时，官方 **MCP Basic**（月付 ¥99、1000 次/月）可作为人工核验工具；但要接入现有代码的 Stage 4，仍以 API 为直接路径（MCP 价格见卖家精灵 **MCP 价格页**）。
+
+**拿到 key 后**：写 `.env` 的 `MJJL_API_KEY=` → `python -c "from analyzers.maijiajingling import MaijiajinglingClient; print(MaijiajinglingClient().get_visits())"` 验额度 → `python main.py run --category "Home & Kitchen" --limit 3` 端到端，确认 `market_analyses` 表有数据、demand/competition 维度真正进分。
+
+**0.2.1 代码已就位**（无需等 key 即已写入，待 key 到位自动激活）：
+- `analyzers/maijiajingling.py` — `analyze_market()` 第 4 步接 `keyword_research()`，新增 `_extract_keyword_metrics()` 归一化 `searchVolume` / `monthlySearches` / `keywordDifficulty` / `opportunityScore` 等字段名，无显式机会指数时用搜索量+购买率+竞争度保守估算
+- `analyzers/scorer.py` — `score_demand()` 的 `monthly_sales` 改用 `est_monthly_sales`（真实/预估销量），`search_volume_monthly` 单独传入；`apply_hard_filters()` 的 `monthly_sales` 同步改为只看销量——修正此前"月销量 vs 月搜索量混用"导致硬筛语义不准的问题
+- `pipeline/orchestrator.py` — `MaijiajinglingClient` 改 `with` 上下文管理，自动关连接
 
 ---
 
@@ -130,17 +158,19 @@ DB:       RunLog id=2 落库
 | **MJJL fallback 设计** | 卖家精灵无 key 时静默跳过而不是 crash，让 pipeline 仍能产出候选（少一个维度）|
 | **硬性筛选在 yaml 配置** | 净利率 / 总分 / 月销 / MOQ / 品牌黑名单 阈值都在 `scoring_weights.yaml`，改配置不动代码 |
 | **mock 兜底** | 1688 全路径失败时生成占位 supplier，让 pipeline 永不断（带 `match_verification_method='mock'` 标记）|
+| **仅走爬虫（0.2.2）** | 放弃 1688 官方 API（从未验证可用）+ 默认禁用被 TMD 拦的 Scrapling HTTP 路径；Playwright 注入 cookies 拿真实 offer，mock 兜底。简化依赖、少一个付费 key，代价是采购价/MOQ 等结构化字段需靠详情页爬虫补 |
 
 ---
 
 ## 6. 推荐的下一轮（按 ROI 排）
 
-1. **配 MJJL_API_KEY**（5 分钟，立刻激活 stage 4）—— ROI 最高
-2. **配 1688 官方 API key**（5 分钟，立刻激活官方 API 路径）—— ROI 次高
+1. **申请卖家精灵 4 接口试用 + 配 `MJJL_API_KEY`**（见 §4.4）—— 拿到 key 即激活 Stage 4 全量市场维度，ROI 最高
+2. **跑一次 `--limit 20~50` 的 E2E** —— 验证仅爬虫路线（Playwright 单路）在规模下的稳定性与 cookies 失效表现，ROI 次高
 3. **写 Amazon buybox extractor**（半天工作）—— 解决 price 字段 1/3 命中率问题
-4. **修 Scrapling 1688 路径**（1-2 天）—— 方案 A (subprocess 拆分) 最干净
-5. **实现 Pailitao 图搜**（2-4 天）—— 大功能，独立产品决策
-6. **CHANGELOG.md**（如果开始长期迭代）—— 用 Keep a Changelog 格式跟踪每次 commit
+4. **（可选）修 Scrapling 1688 路径**（1-2 天）—— 0.2.2 已默认禁用、不阻塞；方案 A (subprocess 拆分) 最干净，修好后 `enable_scrapling_matcher=True` 即恢复
+5. **实现 1688 详情页爬取**（独立工作）—— 仅爬虫路线下补齐采购价 / MOQ / 阶梯价 / 交期（搜索页拿不到，原指望官方 API，现需详情页爬虫）
+6. **实现 Pailitao 图搜**（2-4 天）—— 大功能，独立产品决策
+7. ~~CHANGELOG.md~~ ✅ 已建（见 `CHANGELOG.md`，Keep a Changelog 格式）
 
 ---
 

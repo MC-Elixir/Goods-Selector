@@ -50,9 +50,9 @@ main.py (click CLI: init-db | run)
            │               backends: playwright | keepa | rainforest (auto by .env keys)
            ├─ Stage 2  matchers/__init__.py::match_suppliers          → list[SupplierDTO]
            │               0. VisionAnalyzer   (PPIO / Anthropic → 1688 中文关键词)
-           │               1. Alibaba1688TextSearch        (1688 官方 API, key 存在时)
-           │               2. Alibaba1688ScraplingMatcher  (patchright + curl_cffi)
-           │               3. Alibaba1688PlaywrightMatcher (浏览器兜底)
+           │               1. Alibaba1688TextSearch        (1688 官方 API, 需 key — 默认未配/已弃用)
+           │               2. Alibaba1688ScraplingMatcher  (HTTP 路径, 被 TMD 拦 — enable_scrapling_matcher 默认 False)
+           │               3. Alibaba1688PlaywrightMatcher (浏览器兜底 ← 默认主路径, 注入 cookies)
            │               4. _mock_suppliers              (离线兜底)
            │               5. Alibaba1688Verifier          (启发式过滤)
            │               6. LLMVisualVerifier            (可选, settings.enable_llm_verification)
@@ -60,7 +60,7 @@ main.py (click CLI: init-db | run)
            │               calc_purchase_cost | calc_shipping_cost | calc_fba_fee
            │               calc_commission | calc_ad_cost | calc_return_loss
            ├─ Stage 4  analyzers/maijiajingling.py::analyze_market    → MarketAnalysisDTO
-           │               asin_detail (API 3) + bsr_prediction (API 26) + competitor_lookup (API 1)
+           │               asin_detail (API 3) + bsr_prediction (API 26) + competitor_lookup (API 1) + keyword_research (API 10)
            ├─ Stage 5  analyzers/scorer.py::score_product             → ScoreBreakdown
            │               score_profit | score_demand | score_competition
            │               score_supply  | score_logistics | score_risk
@@ -133,7 +133,7 @@ Hard filters (`scoring_weights.yaml::hard_filters`) eliminate products before ra
 
 Most of the pipeline is real and runnable end-to-end. The genuinely-stubbed surface is narrow:
 
-- `matchers/alibaba_pailitao.py::PailitaoClient.search_by_image` and `get_offer_detail` — raise `NotImplementedError`. The production path goes through `alibaba_text_search` (Alibaba1688 official text search, via REST), not the Pailitao image-search SDK. To get true image-based 1688 search, the working backends are `alibaba_scrapling.search_by_image` and `alibaba_playwright.search_by_image` (both functional).
+- `matchers/alibaba_pailitao.py::PailitaoClient.search_by_image` and `get_offer_detail` — raise `NotImplementedError`. Since 0.2.2 the 1688 production path is `alibaba_playwright` (Playwright + injected cookies) → mock fallback; the official `alibaba_text_search` REST API is deprecated (key cleared from `.env`) and `alibaba_scrapling` is disabled by default (`settings.enable_scrapling_matcher=False` — its HTTP header cookies are blocked by 1688 TMD). For true image-based 1688 search the working backend is `alibaba_playwright.search_by_image`.
 - The default Amazon backend is `crawlers/amazon_scrapling.py::AmazonScraplingScraper` (Scrapling `StealthySession` — patchright-chromium + curl_cffi anti-bot, no API key required). `playwright` (`amazon_playwright.py`) is still available as a fallback by passing `backend="playwright"`. `keepa` / `rainforest` are used automatically when their keys are present and outrank scrapling.
 
 ### Docs

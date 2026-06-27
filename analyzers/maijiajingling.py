@@ -22,7 +22,7 @@ API 文档：https://open.sellersprite.com/api/1
   56    ASIN 优惠趋势          asin_discount        asin_discount()
   -     剩余调用次数查询       -                    get_visits()
 
-analyze_market() 编排：ASIN 详情 → BSR 预测 → 竞品分析 → 组装 MarketAnalysisDTO
+analyze_market() 编排：ASIN 详情 → BSR 预测 → 竞品分析 → 关键词选品 → 组装 MarketAnalysisDTO
 """
 from __future__ import annotations
 
@@ -182,6 +182,145 @@ class CompetitorItem:
     seller_name: Optional[str] = None
 
 
+def _choose_keyword(keyword: Optional[str], detail: AsinDetailDTO) -> Optional[str]:
+    """选择关键词选品 API 的查询词，优先使用人工传入，其次用类目名。"""
+    candidates = [
+        keyword,
+        detail.category_name,
+        detail.bsr_category_name,
+        detail.category_path.split(">")[-1].strip() if detail.category_path else None,
+    ]
+    for candidate in candidates:
+        if candidate and candidate.strip():
+            return candidate.strip()[:120]
+    return None
+
+
+def _extract_keyword_metrics(body: dict) -> dict[str, Any]:
+    """从关键词选品返回中提取评分需要的稳定字段。
+
+    卖家精灵不同接口/版本的字段命名可能略有差异，这里只做宽松读取；
+    若没有显式机会指数，则用搜索量、购买率、竞争度做一个保守估算。
+    """
+    items = _extract_items(body)
+    if not items:
+        return {}
+
+    best = max(items, key=lambda i: _to_int(_pick(i, _SEARCH_VOLUME_KEYS)) or 0)
+    search_volume = _to_int(_pick(best, _SEARCH_VOLUME_KEYS))
+    difficulty = _to_float(_pick(best, _DIFFICULTY_KEYS))
+    opportunity = _to_float(_pick(best, _OPPORTUNITY_KEYS))
+
+    if opportunity is None:
+        opportunity = _estimate_opportunity_score(best, search_volume, difficulty)
+
+    return {
+        "main_keyword": _pick(best, _KEYWORD_KEYS),
+        "search_volume_monthly": search_volume,
+        "keyword_difficulty": difficulty,
+        "opportunity_score": opportunity,
+        "seasonality": _extract_seasonality(best),
+    }
+
+
+_KEYWORD_KEYS = ("keyword", "keywords", "keywordText", "searchTerm", "phrase")
+_SEARCH_VOLUME_KEYS = (
+    "searches",
+    "searchVolume",
+    "searchVolumeMonthly",
+    "monthlySearches",
+    "search_volume_monthly",
+    "searchesMonthly",
+)
+_DIFFICULTY_KEYS = (
+    "keywordDifficulty",
+    "difficulty",
+    "competition",
+    "competingProducts",
+    "competingProductCount",
+)
+_OPPORTUNITY_KEYS = ("opportunityScore", "opportunity_score", "opportunity")
+_PURCHASE_RATE_KEYS = ("purchaseRate", "purchase_rate", "conversionRate", "conversion_rate")
+
+
+def _extract_items(body: dict) -> list[dict]:
+    data = body.get("data") if isinstance(body, dict) else None
+    if isinstance(data, list):
+        return [i for i in data if isinstance(i, dict)]
+    if isinstance(data, dict):
+        for key in ("items", "list", "records", "rows"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [i for i in value if isinstance(i, dict)]
+        if data:
+            return [data]
+    return []
+
+
+def _pick(item: dict, keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in item and item[key] not in (None, ""):
+            return item[key]
+    return None
+
+
+def _to_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(str(value).replace(",", "").strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        text = str(value).replace(",", "").strip()
+        if text.endswith("%"):
+            return float(text[:-1]) / 100
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _estimate_opportunity_score(
+    item: dict,
+    search_volume: Optional[int],
+    difficulty: Optional[float],
+) -> Optional[float]:
+    if not search_volume:
+        return None
+
+    volume_score = min(search_volume / 10_000, 1.0)
+    purchase_rate = _to_float(_pick(item, _PURCHASE_RATE_KEYS))
+    purchase_score = min(purchase_rate, 1.0) if purchase_rate is not None else 0.5
+
+    if difficulty is None:
+        difficulty_score = 0.5
+    elif difficulty > 1:
+        difficulty_score = max(0.0, 1 - min(difficulty / 100_000, 1.0))
+    else:
+        difficulty_score = max(0.0, 1 - difficulty)
+
+    return round(volume_score * 0.45 + purchase_score * 0.30 + difficulty_score * 0.25, 4)
+
+
+def _extract_seasonality(item: dict) -> dict:
+    trend = item.get("seasonality") or item.get("searchesTrend") or item.get("trend")
+    if isinstance(trend, dict):
+        return trend
+    if isinstance(trend, list):
+        values = [_to_int(v) for v in trend[:12]]
+        return {
+            f"month_{idx}": value
+            for idx, value in enumerate(values, 1)
+            if value is not None
+        }
+    return {}
+
+
 # ============================================================
 # Client
 # ============================================================
@@ -229,13 +368,19 @@ class MaijiajinglingClient:
     # --------------------------------------------------------
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5), reraise=True)
-    def analyze_market(self, asin: str, marketplace: str = "US") -> MarketAnalysisDTO:
-        """编排三个 API 产出市场分析结果。
+    def analyze_market(
+        self,
+        asin: str,
+        marketplace: str = "US",
+        keyword: Optional[str] = None,
+    ) -> MarketAnalysisDTO:
+        """编排多个 API 产出市场分析结果。
 
         链式调用：
             1. ASIN 详情（API 3）      → 基础信息 + BSR + 类目
             2. BSR 预测（API 26）      → 日/月销量估计
             3. 查竞品（API 1）         → 竞品集中度
+            4. 关键词选品（API 10）     → 搜索量 + 机会指数
         """
         if not self._configured:
             logger.warning("MJJL_API_KEY 未配置，跳过市场分析")
@@ -271,6 +416,11 @@ class MaijiajinglingClient:
                 if pred:
                     dto.est_daily_sales = pred.est_daily_sales
                     dto.est_monthly_sales = pred.est_monthly_sales
+                    dto.raw_data["bsr_prediction"] = {
+                        "estDailySales": pred.est_daily_sales,
+                        "estMonthSales": pred.est_monthly_sales,
+                        "items": pred.items,
+                    }
             except Exception as e:
                 logger.debug(f"BSR 预测失败 asin={asin}: {e}")
 
@@ -281,6 +431,7 @@ class MaijiajinglingClient:
                 asins=[asin],
                 size=10,
             )
+            dto.raw_data["competitor_lookup"] = comp_data
             items = comp_data.get("data", {}).get("items") or comp_data.get("data", {}).get("list") or []
             if items:
                 prices = [i.get("price") or i.get("listPrice", {}).get("amount") for i in items if i.get("price") or (i.get("listPrice") or {}).get("amount")]
@@ -301,8 +452,26 @@ class MaijiajinglingClient:
         except Exception as e:
             logger.debug(f"竞品查询失败 asin={asin}: {e}")
 
+        # ---- 4. 关键词选品 ----
+        keyword_candidate = _choose_keyword(keyword, detail)
+        if keyword_candidate:
+            try:
+                kw_data = self.keyword_research(
+                    keyword=keyword_candidate,
+                    marketplace=marketplace,
+                )
+                dto.raw_data["keyword_research"] = kw_data
+                metrics = _extract_keyword_metrics(kw_data)
+                dto.main_keyword = metrics.get("main_keyword") or keyword_candidate
+                dto.search_volume_monthly = metrics.get("search_volume_monthly")
+                dto.keyword_difficulty = metrics.get("keyword_difficulty")
+                dto.opportunity_score = metrics.get("opportunity_score")
+                dto.seasonality = metrics.get("seasonality") or {}
+            except Exception as e:
+                logger.debug(f"关键词选品失败 asin={asin} keyword={keyword_candidate!r}: {e}")
+
         # 保留原始数据
-        dto.raw_data = {"asin_detail": detail.raw}
+        dto.raw_data["asin_detail"] = detail.raw
         return dto
 
     # --------------------------------------------------------

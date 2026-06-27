@@ -134,13 +134,16 @@ def run_pipeline(
         # === 4. market ===
         try:
             from analyzers.maijiajingling import MaijiajinglingClient
-            mjjl = MaijiajinglingClient()
-            for rec in records:
-                try:
-                    rec.market = mjjl.analyze_market(rec.product.asin, marketplace)
-                    api_calls["mjjl"] = api_calls.get("mjjl", 0) + 1
-                except Exception as e:
-                    logger.debug(f"[run #{run_id}] market skip asin={rec.product.asin}: {e}")
+            with MaijiajinglingClient() as mjjl:
+                for rec in records:
+                    try:
+                        rec.market = mjjl.analyze_market(
+                            rec.product.asin,
+                            marketplace,
+                        )
+                        api_calls["mjjl"] = api_calls.get("mjjl", 0) + 1
+                    except Exception as e:
+                        logger.debug(f"[run #{run_id}] market skip asin={rec.product.asin}: {e}")
         except Exception:
             logger.info(f"[run #{run_id}] market analysis skipped (API not configured)")
 

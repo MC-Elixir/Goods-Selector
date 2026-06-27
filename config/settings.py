@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     # ---------- 行为开关 ----------
     enable_api_cache: bool = True
     enable_llm_verification: bool = False  # 启用 LLM 视觉验证（对比 Amazon 和 1688 图片）
+    # 1688 Scrapling 匹配器（patchright HTTP 路径）。被 1688 TMD 反爬拦截、0 结果，
+    # 默认禁用、直接降级 Playwright；待该路径修好后置 True 启用。
+    enable_scrapling_matcher: bool = False
+    alibaba_real_result_cache_ttl_seconds: int = 604800
+    alibaba_block_cooldown_seconds: int = 900
+    alibaba_allow_mock_suppliers: bool = True
     cache_ttl_seconds: int = 86400
     log_level: str = "INFO"
 

@@ -3,9 +3,9 @@
 ==============
 
 降级链（自动按顺序尝试）：
-  1. VisionAnalyzer → Alibaba1688TextSearch  视觉识别 + 1688 官方 API
-  2. Alibaba1688ScraplingMatcher             Scrapling（patchright 抗检测）图搜/关键词
-  3. Alibaba1688PlaywrightMatcher            Playwright 兜底（图搜 + 关键词）
+  1. VisionAnalyzer → Alibaba1688TextSearch  视觉识别 + 1688 官方 API（需 key，默认未配）
+  2. Alibaba1688ScraplingMatcher             Scrapling HTTP 路径（被 TMD 拦，默认禁用）
+  3. Alibaba1688PlaywrightMatcher            Playwright 兜底（图搜 + 关键词）← 默认主路径
   4. mock                                    单元测试 / 完全离线兜底
 
 匹配验证：
@@ -28,6 +28,15 @@ from matchers.alibaba_playwright import Alibaba1688PlaywrightMatcher
 from matchers.alibaba_text_search import Alibaba1688TextSearch
 from matchers.vision_analyzer import VisionAnalyzer
 from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier
+from matchers.alibaba_result_cache import (
+    circuit_is_open,
+    load_cached_suppliers,
+    make_cache_key,
+    is_real_supplier,
+    open_circuit,
+    reset_circuit,
+    save_cached_suppliers,
+)
 
 # Scrapling 优先（patchright 修补的 chromium + curl_cffi TLS 指纹伪装，更快更抗检测）
 try:
@@ -62,8 +71,8 @@ def match_suppliers(
 ) -> list[SupplierDTO]:
     """Amazon 产品 → 1688 货源列表。
 
-    降级链：
-      官方 API → Playwright（图搜 + 关键词）→ mock
+    降级链（默认仅走 Playwright；官方 API 需配 key、Scrapling 需 settings.enable_scrapling_matcher=True）：
+      官方 API → Scrapling → Playwright（图搜 + 关键词）→ mock
     匹配验证：
       1. 启发式验证（默认）
       2. LLM 视觉验证（可选，通过 settings.enable_llm_verification 开启）
@@ -105,8 +114,16 @@ def match_suppliers(
     enriched_keywords = _build_enriched_keywords(dim_keywords, keywords)
 
     # ── Step 2a: 1688 官方 API ─────────────────────────────
-    suppliers: list[SupplierDTO] = []
     from config.settings import settings as _cfg
+    cache_key = make_cache_key(product, enriched_keywords, top_k)
+    cached_suppliers = load_cached_suppliers(
+        cache_key,
+        ttl_seconds=_cfg.alibaba_real_result_cache_ttl_seconds,
+    )
+    if cached_suppliers:
+        return cached_suppliers[:top_k]
+
+    suppliers: list[SupplierDTO] = []
     if _cfg.alibaba_app_key and _cfg.alibaba_app_secret:
         if _text_search is None:
             _text_search = Alibaba1688TextSearch()
@@ -117,8 +134,9 @@ def match_suppliers(
     else:
         logger.debug(f"[match] ASIN={product.asin} 跳过 1688 API（未配置 key）")
 
-    # ── Step 2b: Scrapling 爬取（patchright 抗检测，优先于 Playwright） ──
-    if not suppliers and _SCRAPLING_AVAILABLE:
+    # ── Step 2b: Scrapling 爬取（默认禁用：HTTP header cookies 被 1688 TMD 拦、0 结果；
+    #        直接降级 Playwright。待修好后 settings.enable_scrapling_matcher=True） ──
+    if not suppliers and _SCRAPLING_AVAILABLE and _cfg.enable_scrapling_matcher:
         if _scrapling is None:
             _scrapling = Alibaba1688ScraplingMatcher(page_wait=5)
         try:
@@ -134,7 +152,7 @@ def match_suppliers(
             logger.warning(f"[match] Scrapling 搜索失败 ({product.asin}): {e}，降级到 Playwright")
 
     # ── Step 2c: Playwright 兜底 ─────────────────────────────
-    if not suppliers:
+    if not suppliers and not circuit_is_open():
         if _playwright is None:
             _playwright = Alibaba1688PlaywrightMatcher(page_wait=5)
         try:
@@ -151,6 +169,13 @@ def match_suppliers(
 
     # ── Step 3: mock 兜底 ──────────────────────────────────
     if not suppliers:
+        open_circuit(
+            _cfg.alibaba_block_cooldown_seconds,
+            reason="no real suppliers before mock fallback",
+        )
+        if not _cfg.alibaba_allow_mock_suppliers:
+            logger.info(f"[match] ASIN={product.asin} no real 1688 suppliers; mock disabled")
+            return []
         logger.info(f"[match] ASIN={product.asin} 全部方式无结果，使用 mock")
         suppliers = _mock_suppliers(product, enriched_keywords)
 
@@ -176,6 +201,9 @@ def match_suppliers(
             logger.warning(f"[match] LLM 验证跳过 ({product.asin}): {e}")
 
     logger.info(f"[match] ASIN={product.asin} → {len(suppliers)} 条货源（已验证）")
+    save_cached_suppliers(cache_key, suppliers)
+    if any(is_real_supplier(s) for s in suppliers):
+        reset_circuit()
     return suppliers
 
 

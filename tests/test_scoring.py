@@ -59,6 +59,8 @@ class _MockSupplier:
 class _MockMarket:
     opportunity_score: float = 0.08
     search_volume_monthly: int = 3000
+    est_daily_sales: Optional[int] = 20
+    est_monthly_sales: Optional[int] = 600
     competing_listings: int = 60
     top10_revenue_share: float = 0.5
     seasonality: Optional[dict] = None
@@ -415,6 +417,25 @@ class TestScoreProduct:
             suppliers=[_MockSupplier()],
         )
         assert isinstance(sb, ScoreBreakdown)
+
+    def test_low_estimated_monthly_sales_rejected(self):
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(est_monthly_sales=50, search_volume_monthly=10000),
+            suppliers=[_MockSupplier() for _ in range(3)],
+        )
+        assert sb.passed_hard_filter is False
+        assert "monthly_sales_too_low" in sb.rejection_reasons
+
+    def test_search_volume_does_not_count_as_monthly_sales(self):
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(est_monthly_sales=None, search_volume_monthly=50),
+            suppliers=[_MockSupplier() for _ in range(3)],
+        )
+        assert "monthly_sales_too_low" not in sb.rejection_reasons
 
     def test_all_dimension_scores_in_range(self):
         sb = score_product(

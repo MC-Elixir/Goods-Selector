@@ -212,9 +212,10 @@ class AmazonScraplingScraper:
                 try:
                     page = session.fetch(
                         url,
-                        timeout=60_000,
+                        timeout=25_000,
                         wait=1.5,
                         network_idle=False,
+                        disable_resources=True,
                     )
                 except Exception as e:
                     logger.warning(f"[scrapling] BSR 第 {pg} 页失败: {e}")
@@ -256,12 +257,28 @@ class AmazonScraplingScraper:
             page = Adaptor(html)
             logger.debug(f"[scrapling] {asin} 走详情缓存")
         else:
-            page = session.fetch(
-                url,
-                timeout=60_000,
-                wait=random.randint(800, 1500) / 1000,
-                network_idle=False,
-            )
+            # 详情页：禁图片/字体/广告等无关资源提速，等关键元素(prodDetTable/标题)而非整页 load。
+            # 历史问题：等 load 事件被 Amazon 第三方资源拖到 60s 超时 → 全失败。
+            try:
+                page = session.fetch(
+                    url,
+                    timeout=25_000,
+                    wait=random.randint(800, 1500) / 1000,
+                    network_idle=False,
+                    disable_resources=True,
+                    wait_selector="#productTitle, #prodDetails, #detailBullets_feature_div",
+                    wait_selector_state="attached",
+                )
+            except Exception as e:
+                logger.warning(f"[scrapling] {asin} 详情页抓取失败: {e}")
+                # 回退：不等 selector，只用 disable_resources 重试一次
+                page = session.fetch(
+                    url,
+                    timeout=25_000,
+                    wait=random.randint(800, 1500) / 1000,
+                    network_idle=False,
+                    disable_resources=True,
+                )
             try:
                 set_html(cache_k, page.html_content)
             except Exception:

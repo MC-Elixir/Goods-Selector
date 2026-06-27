@@ -85,6 +85,18 @@ def _sigmoid(x: float, center: float, k: float) -> float:
     return 1.0 / (1.0 + math.exp(-k * (x - center)))
 
 
+def _first_number(*values) -> Optional[float]:
+    """返回第一个可用数字，避免把搜索量误当成销量等语义串线。"""
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 # ============================================================
 # 单维度归一化函数（纯函数，便于单测）
 # ============================================================
@@ -430,6 +442,12 @@ def score_product(
     ma = market_analysis  # 简写
 
     # --- 各维度得分 ---
+    estimated_monthly_sales = _first_number(
+        getattr(ma, "est_monthly_sales", None),
+        getattr(product, "estimated_monthly_sales", None),
+    )
+    estimated_daily_sales = _first_number(getattr(ma, "est_daily_sales", None))
+
     p_score = score_profit(
         profit_margin=profit_breakdown.profit_margin if profit_breakdown else 0.0,
         curve=curves["profit"],
@@ -437,11 +455,11 @@ def score_product(
 
     d_score = score_demand(
         bsr_rank=getattr(product, "bsr_rank", None),
-        monthly_sales=getattr(product, "review_velocity_30d", None),  # 月销量字段回退
+        monthly_sales=estimated_monthly_sales,
         curve=curves["demand"],
         opportunity_score=getattr(ma, "opportunity_score", None),
         daily_revenue_top100=None,   # 由卖家精灵扩展字段补充
-        daily_sales_top20=None,
+        daily_sales_top20=estimated_daily_sales,
         search_volume_monthly=getattr(ma, "search_volume_monthly", None),
         price=getattr(product, "price", None),
         google_trends_up=False,
@@ -496,7 +514,7 @@ def score_product(
         supplier_count=len(suppliers),
         brand=getattr(product, "brand", None),
         config=config,
-        monthly_sales=getattr(ma, "search_volume_monthly", None),
+        monthly_sales=estimated_monthly_sales,
         selling_price=getattr(product, "price", None),
     )
 
