@@ -29,12 +29,12 @@ captcha / redirect-to-login 概率。
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -63,69 +63,63 @@ def main() -> None:
     logger.info("  1. 浏览器会自动打开 https://login.1688.com/member/signin.htm")
     logger.info("  2. 用账号密码 / 扫码登录")
     logger.info("  3. 如果出现滑块 captcha，请手动解掉")
-    logger.info("  4. 登录成功后会跳到 work.1688.com —— 然后选一种保存方式：")
-    logger.info(f"     (a) 在另一终端跑：echo 1 > {FLAG_FILE}")
-    logger.info("     (b) 或者直接在这个终端按 Enter 键")
+    logger.info("  4. 登录成功后会跳到 work.1688.com —— 然后在另一终端跑：")
+    logger.info(f"       echo 1 > {FLAG_FILE}")
     logger.info("  5. 脚本会自动保存 cookies 然后退出")
     logger.info("")
 
-    # 复用 Amazon 那套 StealthySession 配置（patchright + curl_cffi 抗检测）
-    from scrapling.fetchers import StealthySession
+    from patchright.sync_api import sync_playwright
 
-    session = StealthySession(
+    profile_dir = Path(__file__).parent / "data" / "1688_login_profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    playwright = sync_playwright().start()
+    context = playwright.chromium.launch_persistent_context(
+        user_data_dir=str(profile_dir),
         headless=False,
-        cookies=[],  # 不预设
-        extra_headers={"Accept-Language": "zh-CN,zh;q=0.9"},
         locale="zh-CN",
         timezone_id="Asia/Shanghai",
-        useragent=(
+        user_agent=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/126.0.0.0 Safari/537.36"
         ),
-        solve_cloudflare=True,
-        hide_canvas=True,
-        block_webrtc=True,
+        viewport={"width": 1366, "height": 900},
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
+            "--start-maximized",
+        ],
     )
-    session.start()
 
     try:
         logger.info("正在打开 1688 登录入口 ...")
         # 必须从 login.1688.com/member/signin.htm 入口走 —— 它会 302 链
         # 重定向到 login.taobao.com/?...&from=1688web。
         # from=1688web 这个参数决定 Taobao 渲染 1688 登录表单（不是 i.taobao.com 通用登录）。
-        page = session.fetch(
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto(
             "https://login.1688.com/member/signin.htm",
             timeout=60_000,
-            wait=3,  # 等滑块/二维码 iframe 渲染
+            wait_until="domcontentloaded",
         )
         logger.info(f"已加载：{page.url[:80]}")
-        # 防御：Adaptor 上 css("title") 可能返回空集合（一些挑战页无 <title>）
-        title_nodes = page.css("title")
-        title = (title_nodes.first.text or "").strip() if title_nodes else ""
+        title = (page.title() or "").strip()
         logger.info(f"页面标题：{title[:60]!r}")
         # 接受两种合法状态：
         #   - 登录页（title 含 "登录" 或 "login"）
         #   - 已登录跳到 work.1688.com / member.1688.com（"买家工作台"）
-        page_url = page.url
-        is_login_page = "登录" in title or "login" in title.lower()
-        is_logged_in = "work.1688.com" in page_url or "member.1688.com" in page_url or "买家工作台" in title
+        parsed_url = urlparse(page.url)
+        host = parsed_url.hostname or ""
+        is_login_page = host.endswith("login.taobao.com") or host.endswith("login.1688.com")
+        is_logged_in = host.endswith("work.1688.com") or host.endswith("member.1688.com")
         if not (is_login_page or is_logged_in):
             logger.warning(f"页面 title 不像登录页（{title!r}），可能没加载到正确页面")
             logger.info("请在浏览器里手动访问 https://login.1688.com/member/signin.htm")
         elif is_logged_in:
             logger.info("检测到页面已经是登录后的工作台（work.1688.com），直接保存 cookies")
 
-        # 注意：不要检查 session.context.pages —— StealthySession 用 page-pool
-        # 复用页面，fetch() 返回后页面可能已经放回池里，context.pages 列表在
-        # 这种设计下不可靠。改用"轮询 flag 文件 + 周期心跳"的纯文件信号，
-        # 10 分钟超时兜底。
-        #
-        # 之前试过在后台线程用 input() 监听 Enter 键，但有 bug：
-        # 1) PowerShell 下 daemon thread 里的 input() 行为不稳，0 长度输入也
-        #    会被当成 Enter
-        # 2) 用户可能并不期望按 Enter 触发保存
-        # 所以只保留 flag 文件这一种信号，更可预测。
+        # 只保留 flag 文件这一种保存信号，更可预测。
         max_wait = 600  # 10 分钟
         start = time.time()
         saved = False
@@ -135,8 +129,7 @@ def main() -> None:
             if FLAG_FILE.exists():
                 logger.info("检测到保存信号，正在导出 cookies...")
                 try:
-                    ctx = session.context
-                    cookies = ctx.cookies() if ctx else []
+                    cookies = context.cookies()
                     if not cookies:
                         logger.warning("浏览器里没找到 cookies —— 你登录过吗？")
                     else:
@@ -148,6 +141,12 @@ def main() -> None:
                         ]
                         if not relevant:
                             logger.warning("没找到 1688/taobao 域的 cookies")
+                            FLAG_FILE.unlink(missing_ok=True)
+                            continue
+                        if not _has_login_cookie(relevant):
+                            logger.warning("检测到 cookies 但缺 unb，说明还没真正登录；继续等待")
+                            FLAG_FILE.unlink(missing_ok=True)
+                            continue
                         # 原子写
                         fd, tmp = tempfile.mkstemp(
                             prefix=f".{COOKIES_FILE.name}.",
@@ -156,6 +155,7 @@ def main() -> None:
                         )
                         try:
                             with os.fdopen(fd, "w", encoding="utf-8") as f:
+                                import json
                                 json.dump(relevant, f, ensure_ascii=False, indent=2)
                             os.replace(tmp, COOKIES_FILE)
                             logger.info(
@@ -189,11 +189,20 @@ def main() -> None:
     finally:
         FLAG_FILE.unlink(missing_ok=True)
         try:
-            session.close()
+            context.close()
+        except Exception:
+            pass
+        try:
+            playwright.stop()
         except Exception:
             pass
 
     logger.info("=" * 60)
+
+
+def _has_login_cookie(cookies: list[dict]) -> bool:
+    """1688 登录态里应包含 unb 用户标识。"""
+    return any(c.get("name") == "unb" for c in cookies)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ from matchers.alibaba_pailitao import SupplierDTO
 
 # ── 阈值常量 ──────────────────────────────────────────────────
 THRESHOLD_PASS = 0.40
-THRESHOLD_DEMOTE = 0.15
+THRESHOLD_DEMOTE = 0.40
 SCORE_DEFAULT = 0.45
 
 
@@ -56,6 +56,11 @@ class Alibaba1688Verifier:
         results: list[SupplierDTO] = []
 
         for sup in suppliers:
+            original_method = (sup.match_verification_method or "").lower()
+            if original_method != "mock" and not _title_is_relevant(sup, analysis, kw):
+                sup.match_quality_score = 0.0
+                sup.match_verification_method = "heuristic"
+                continue
             score = self._compute_match_quality(sup, product, analysis, kw)
             sup.match_quality_score = round(score, 4)
             sup.match_verification_method = "heuristic"
@@ -67,10 +72,6 @@ class Alibaba1688Verifier:
         results = [s for s in results if (s.match_quality_score or 0) > self.threshold_demote]
         if len(results) < before:
             logger.info(f"[verifier] 过滤 {before - len(results)} 条不匹配供应商 (threshold={self.threshold_demote})")
-
-        if not results and suppliers:
-            logger.warning("[verifier] 全部被过滤，保留 top 3 兜底")
-            results = sorted(suppliers, key=lambda s: s.match_quality_score or 0, reverse=True)[:3]
 
         return results
 
@@ -115,8 +116,7 @@ class Alibaba1688Verifier:
                     score += 1.0
         if keywords:
             checks += 1
-            hits = sum(1 for kw in keywords if kw in offer_title)
-            if hits: score += min(hits / len(keywords), 1.0)
+            score += _keyword_title_score(offer_title, keywords)
         return (score / checks) if checks else SCORE_DEFAULT
 
     def _search_relevance(self, supplier, keywords):
@@ -323,6 +323,42 @@ def _material_aliases(material: str) -> list[str]:
         if m in variants or any(v in m for v in variants):
             return variants
     return [m]
+
+
+def _title_is_relevant(supplier, analysis, keywords: list[str]) -> bool:
+    offer_title = supplier.title_cn or supplier.raw_data.get("title_cn", "")
+    if not offer_title:
+        return False
+    if analysis and analysis.category_zh and analysis.category_zh in offer_title:
+        return True
+    return _keyword_title_score(offer_title, keywords) > 0
+
+
+def _keyword_title_score(offer_title: str, keywords: list[str]) -> float:
+    if not offer_title or not keywords:
+        return 0.0
+    best = 0.0
+    for kw in keywords:
+        kw = (kw or "").strip()
+        if not kw:
+            continue
+        if kw in offer_title:
+            best = max(best, 1.0)
+            continue
+        grams = _bigrams(kw)
+        if not grams:
+            continue
+        hits = sum(1 for gram in grams if gram in offer_title)
+        if hits >= 2:
+            best = max(best, min(hits / len(grams), 1.0))
+    return best
+
+
+def _bigrams(text: str) -> list[str]:
+    text = re.sub(r"[\s,，、/|｜()\[\]（）【】]+", "", text or "")
+    if len(text) < 2:
+        return []
+    return [text[i:i + 2] for i in range(len(text) - 1)]
 
 def _color_match(expected: str, actual: str) -> bool:
     e, a = expected.strip(), actual.strip()

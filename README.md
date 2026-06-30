@@ -28,6 +28,23 @@ python main.py run --category "Toys & Games" --limit 10 --marketplace UK
 pytest tests/
 ```
 
+## Agent WebUI
+
+本项目现在提供一个本地 Agent 控制台，把"环境 + 工具 + 系统提示 + 循环"落到可操作界面：
+
+```bash
+python main.py agent-web
+# 打开 http://127.0.0.1:8765
+```
+
+WebUI 能做：
+
+- 运行前 preflight：检查 PPIO、Amazon cookies、1688 cookies、数据库、导出目录、1688 cooldown。
+- 启动 sourcing agent run：填写 category / marketplace / limit，默认 No-Mock 模式，避免正式结果混入 mock 供应商。
+- 查看 Recent Runs：读取 `data/exports/candidates_*.json` / `.xlsx`。
+- 查看和搜索历史候选商品：按 ASIN、标题、供应商搜索，并下载对应 Excel。
+- 保存/取消保存候选商品：保存状态写入 `data/agent_saved_items.json`。
+
 ## 一次性登录（首次使用必做）
 
 Amazon 与 1688 都需要登录态 cookies 才能稳定爬取（否则被反爬弹到登录页）：

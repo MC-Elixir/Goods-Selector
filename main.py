@@ -34,5 +34,15 @@ def run_cmd(category: str, limit: int, marketplace: str):
     logger.info(f"完成，RunLog id = {run_id}")
 
 
+@cli.command("agent-web")
+@click.option("--host", default="127.0.0.1", help="WebUI host")
+@click.option("--port", default=8765, type=int, help="WebUI port")
+def agent_web_cmd(host: str, port: int):
+    """启动 Amazon Selector Agent WebUI。"""
+    from agent.server import run_server
+
+    run_server(host=host, port=port)
+
+
 if __name__ == "__main__":
     cli()

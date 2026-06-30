@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from matchers import vision_analyzer as vision_analyzer_module
 from matchers.vision_analyzer import (
     ProductAnalysis,
     VisionAnalyzer,
@@ -17,6 +18,11 @@ from matchers.vision_analyzer import (
 )
 from matchers.alibaba_text_search import _parse_search_response, _item_to_dto
 from matchers.alibaba_pailitao import SupplierDTO
+
+
+@pytest.fixture(autouse=True)
+def _disable_vision_cache(monkeypatch):
+    monkeypatch.setattr(vision_analyzer_module.settings, "enable_api_cache", False)
 
 
 # ============================================================

@@ -112,6 +112,11 @@ def match_suppliers(
 
     # 合并规格关键词（前置，提高精准度）
     enriched_keywords = _build_enriched_keywords(dim_keywords, keywords)
+    if analysis is not None:
+        enriched_keywords = _build_enriched_keywords(
+            enriched_keywords,
+            [analysis.category_zh, analysis.title_zh],
+        )
 
     # ── Step 2a: 1688 官方 API ─────────────────────────────
     from config.settings import settings as _cfg
@@ -124,6 +129,7 @@ def match_suppliers(
         return cached_suppliers[:top_k]
 
     suppliers: list[SupplierDTO] = []
+    real_search_blocked = False
     if _cfg.alibaba_app_key and _cfg.alibaba_app_secret:
         if _text_search is None:
             _text_search = Alibaba1688TextSearch()
@@ -159,20 +165,22 @@ def match_suppliers(
             if product.main_image_url:
                 suppliers = _playwright.search_by_image(
                     image_url=product.main_image_url,
-                    keywords=enriched_keywords[:2],
+                    keywords=enriched_keywords[:5],
                     limit=top_k,
                 )
             else:
-                suppliers = _playwright.search_by_keyword(enriched_keywords[:2], limit=top_k)
+                suppliers = _playwright.search_by_keyword(enriched_keywords[:5], limit=top_k)
         except Exception as e:
+            if "TMD" in str(e) or "验证码" in str(e):
+                real_search_blocked = True
+                open_circuit(_cfg.alibaba_block_cooldown_seconds, reason=str(e)[:200])
             logger.warning(f"[match] Playwright 搜索失败 ({product.asin}): {e}")
 
     # ── Step 3: mock 兜底 ──────────────────────────────────
     if not suppliers:
-        open_circuit(
-            _cfg.alibaba_block_cooldown_seconds,
-            reason="no real suppliers before mock fallback",
-        )
+        if real_search_blocked:
+            logger.info(f"[match] ASIN={product.asin} real 1688 blocked; skip mock fallback")
+            return []
         if not _cfg.alibaba_allow_mock_suppliers:
             logger.info(f"[match] ASIN={product.asin} no real 1688 suppliers; mock disabled")
             return []

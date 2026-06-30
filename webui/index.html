@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Amazon Selector Agent</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">AS</div>
+          <div>
+            <strong>Amazon Selector</strong>
+            <span>Agent Console</span>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item active" data-section="run">
+            <span class="icon">▶</span>
+            Run Agent
+          </button>
+          <button class="nav-item" data-section="results">
+            <span class="icon">▦</span>
+            Results Library
+          </button>
+          <button class="nav-item" data-section="settings">
+            <span class="icon">⚙</span>
+            Settings
+          </button>
+        </nav>
+        <div class="side-status">
+          <div>
+            <span>System Status</span>
+            <strong id="sideStatus">Checking</strong>
+          </div>
+          <span class="status-dot" id="sideDot"></span>
+        </div>
+        <div class="plan-box">
+          <strong>Agent Definition</strong>
+          <p>Environment, tools, and prompt policy are wired into a local execution loop.</p>
+        </div>
+        <footer>v0.3 Agent Preview</footer>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1>Amazon Selector Agent</h1>
+            <p>Launch sourcing runs, inspect preflight health, and read saved product candidates.</p>
+          </div>
+          <div class="top-metrics">
+            <div class="metric">
+              <span>Agent</span>
+              <strong id="agentMetric">Online</strong>
+            </div>
+            <div class="metric">
+              <span>Cookie Health</span>
+              <strong id="cookieMetric">Checking</strong>
+            </div>
+            <button class="ghost-button" id="refreshButton">Refresh</button>
+          </div>
+        </header>
+
+        <section class="workspace" id="runSection">
+          <div class="panel run-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Run Agent</h2>
+                <p>Configure a sourcing run. Formal mode disables mock suppliers.</p>
+              </div>
+              <button class="ghost-button" id="resetButton">Reset</button>
+            </div>
+
+            <form id="runForm" class="run-form">
+              <label>
+                <span>Category</span>
+                <input name="category" value="Home & Kitchen" autocomplete="off">
+              </label>
+              <label>
+                <span>Marketplace</span>
+                <select name="marketplace">
+                  <option value="US">Amazon US</option>
+                  <option value="UK">Amazon UK</option>
+                  <option value="DE">Amazon DE</option>
+                  <option value="JP">Amazon JP</option>
+                </select>
+              </label>
+              <label>
+                <span>Limit</span>
+                <input name="limit" type="number" min="1" max="500" value="10">
+              </label>
+              <label class="switch-row">
+                <span>No-Mock Mode</span>
+                <input name="no_mock" type="checkbox" checked>
+              </label>
+              <label class="switch-row">
+                <span>LLM Verify</span>
+                <input name="llm_verification" type="checkbox">
+              </label>
+            </form>
+
+            <div class="preflight-wrap">
+              <div>
+                <div class="section-title">
+                  <h3>Preflight Checklist</h3>
+                  <span id="preflightBadge" class="badge muted">Checking</span>
+                </div>
+                <div id="preflightList" class="check-list"></div>
+              </div>
+              <div class="ready-card" id="readyCard">
+                <span class="ready-icon">↗</span>
+                <strong>Waiting for preflight</strong>
+                <p>The agent checks cookies, database, exports, and 1688 cooldown before running.</p>
+                <button class="primary-button" id="runButton" type="button">Run Agent</button>
+                <small id="runHint">Estimated time depends on 1688 and LLM verification.</small>
+              </div>
+            </div>
+          </div>
+
+          <aside class="panel recent-panel">
+            <div class="panel-head compact">
+              <h2>Recent Runs</h2>
+              <button class="link-button" id="loadRunsButton">View all</button>
+            </div>
+            <div id="jobList" class="timeline"></div>
+            <div class="divider"></div>
+            <div id="exportRunList" class="export-runs"></div>
+          </aside>
+        </section>
+
+        <section class="panel results-panel" id="resultsSection">
+          <div class="panel-head">
+            <div>
+              <h2>Saved Product Selection Results</h2>
+              <p>Read previous crawl and sourcing outputs from local JSON and Excel exports.</p>
+            </div>
+            <div class="table-tools">
+              <input id="searchInput" placeholder="Search ASIN, title, or supplier">
+              <select id="runSelect">
+                <option value="">All exports</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Saved</th>
+                  <th>ASIN</th>
+                  <th>Title</th>
+                  <th>Supplier</th>
+                  <th>Buy Cost</th>
+                  <th>Margin</th>
+                  <th>Score</th>
+                  <th>Status</th>
+                  <th>Export</th>
+                </tr>
+              </thead>
+              <tbody id="resultsBody"></tbody>
+            </table>
+          </div>
+          <div class="table-footer">
+            <span id="resultCount">0 results</span>
+            <button class="ghost-button" id="reloadResultsButton">Reload Results</button>
+          </div>
+        </section>
+
+        <section class="panel settings-panel" id="settingsSection">
+          <div class="panel-head">
+            <div>
+              <h2>Agent Policy</h2>
+              <p>The local agent follows the repository system prompt and deterministic tools.</p>
+            </div>
+          </div>
+          <pre id="promptBox"></pre>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -2,6 +2,36 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Agent Design Principle
+
+An agent is a model using tools in a loop.
+
+Every agent must be defined by three core components:
+
+1. Environment
+   - The runtime context the agent can observe and operate in.
+   - Examples: repository, terminal, filesystem, browser, VM, Kubernetes cluster, database, APIs.
+
+2. Tools
+   - The actions the agent is allowed to take in the environment.
+   - Examples: bash, grep, read, write, edit, test, search, fetch, screenshot, kubectl, git.
+
+3. System Prompt
+   - The goals, constraints, behavior rules, and decision policy of the agent.
+   - It defines what the agent is trying to do, how it should act, and what it must avoid.
+
+The agent should operate as a loop:
+
+```python
+env = Environment()
+tools = Tools(env)
+system_prompt = "Goals, constraints, and how to act"
+
+while True:
+    action = llm.run(system_prompt + env.state)
+    env.state = tools.run(action)
+```
+
 ## Commands
 
 All commands must be run from inside the `amazon_selector/` directory (the package root and git repo root).
@@ -20,6 +50,10 @@ python -m db.init_db
 python main.py run --category "Home & Kitchen" --limit 50
 python main.py run --category "Home & Kitchen" --limit 50 --marketplace US   # default
 python main.py run --category "Toys & Games" --limit 10 --marketplace UK
+
+# Start the local Agent WebUI
+python main.py agent-web
+# then open http://127.0.0.1:8765
 
 # Run all tests (pure unit tests, no network or API keys required)
 pytest tests/
@@ -72,6 +106,26 @@ main.py (click CLI: init-db | run)
 ```
 
 **Stage failure policy**: Stage 1 (crawl) failure aborts the entire run and marks `RunLog.status="failed"`. All other stages fail per-product, log a warning, and continue — a product that fails match/profit/score simply gets empty data and is dropped by the hard filter.
+
+### Agent WebUI Architecture
+
+The local agent layer wraps the pipeline instead of replacing it:
+
+```
+agent/server.py      ThreadingHTTPServer + static WebUI + JSON APIs
+agent/runner.py      AgentRuntime: preflight -> run_pipeline -> export audit
+agent/preflight.py   Environment checks: API keys, cookies, DB, exports, cooldown
+agent/history.py     Reads data/exports/candidates_*.json and saved selections
+webui/               Static HTML/CSS/JS operations console
+```
+
+Agent components under the design principle:
+
+- **Environment**: local repository, terminal process, SQLite database, `data/` cookies/cache/exports, Amazon/1688 web sessions.
+- **Tools**: preflight checks, `run_pipeline`, export readers, saved-selection writer, Excel/JSON download endpoints.
+- **System Prompt**: `agent.runner.AGENT_SYSTEM_PROMPT`; it requires real data preference, no-mock formal mode, preflight before runs, human handoff for 1688 captcha/popup blockers, and post-run audit.
+
+The WebUI is intentionally local-only by default (`127.0.0.1:8765`) and does not add external web framework dependencies.
 
 ### Data flow objects
 
