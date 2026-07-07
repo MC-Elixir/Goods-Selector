@@ -1,40 +1,32 @@
 FROM python:3.12-slim
 
-# 系统依赖：Playwright Chromium 需要的库
+# Chromium system libraries (Playwright-managed; replaces hand-maintained apt list).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    ca-certificates \
-    fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libdrm2 \
-    libgbm1 \
-    libgtk-3-0 \
-    libnspr4 \
-    libnss3 \
-    libx11-xcb1 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    xdg-utils \
+        ca-certificates curl fonts-liberation \
+    && python -m playwright install-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Python 依赖（利用 Docker 缓存层）
+# Python dependencies (layered for cache).
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Playwright Chromium 浏览器
-RUN playwright install chromium
+# Browsers: playwright chromium (1688 Playwright matcher) + scrapling patchright
+# (default Amazon scraper — the step the old Dockerfile was missing).
+RUN python -m playwright install chromium \
+    && scrapling install
 
-# 应用代码
+# Application code (respects .dockerignore).
 COPY . .
 
-# 数据目录（通过 volume 挂载持久化）
+# Runtime data dirs (mounted volume overlays these).
 RUN mkdir -p /app/data/cache /app/data/exports /app/data/images
 
-ENTRYPOINT ["python", "main.py"]
+# Entrypoint: ensure DB tables exist, then run the requested command.
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+EXPOSE 8765
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["agent-web", "--host", "0.0.0.0", "--port", "8765"]
