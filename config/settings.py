@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     enable_scrapling_matcher: bool = False
     alibaba_real_result_cache_ttl_seconds: int = 604800
     alibaba_block_cooldown_seconds: int = 900
-    alibaba_allow_mock_suppliers: bool = True
+    alibaba_allow_mock_suppliers: bool = False  # formal runs: mock off by default; smoke-run --allow-mock opts in
     cache_ttl_seconds: int = 86400
     log_level: str = "INFO"
 
