@@ -1,10 +1,14 @@
 services:
   amazon-selector:
     build: .
+    image: amazon-selector:dev
     env_file: .env
+    environment:
+      # Formal deployment: never emit mock suppliers, regardless of .env.
+      ALIBABA_ALLOW_MOCK_SUPPLIERS: "false"
     volumes:
       - ./data:/app/data
-    # 默认显示帮助；实际运行通过 docker compose run 传参：
-    #   docker compose run --rm amazon-selector init-db
-    #   docker compose run --rm amazon-selector run --category "Home & Kitchen" --limit 50
-    command: ["--help"]
+    ports:
+      - "127.0.0.1:8765:8765"   # local-only; drop "127.0.0.1:" prefix to expose remotely
+    command: ["agent-web", "--host", "0.0.0.0", "--port", "8765"]
+    restart: unless-stopped
