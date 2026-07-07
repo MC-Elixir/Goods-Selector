@@ -15,3 +15,7 @@ README.md
 Dockerfile
 docker-compose.yml
 .dockerignore
+.venv/
+.playwright-mcp/
+*.png
+dashboard.html

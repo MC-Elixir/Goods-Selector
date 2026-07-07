@@ -45,6 +45,31 @@ WebUI 能做：
 - 查看和搜索历史候选商品：按 ASIN、标题、供应商搜索，并下载对应 Excel。
 - 保存/取消保存候选商品：保存状态写入 `data/agent_saved_items.json`。
 
+## Docker
+
+本项目支持 Docker 部署，**正式跑默认禁用 mock 供应商**（`alibaba_allow_mock_suppliers` 默认 False，compose 环境变量再次硬设 `false`）。
+
+```bash
+# 构建镜像（python:3.12-slim + playwright chromium + scrapling patchright）
+docker compose build
+
+# 启动 Agent WebUI（长驻服务，端口映射到本机 127.0.0.1:8765）
+docker compose up
+# 打开 http://127.0.0.1:8765
+
+# 一次性 CLI 任务（command 会被替换；entrypoint 仍会先跑 init-db）
+docker compose run --rm amazon-selector run --category "Home & Kitchen" --limit 50
+docker compose run --rm amazon-selector init-db
+docker compose run --rm amazon-selector smoke-run --category "Home & Kitchen" --limit 1
+
+# 容器内跑测试
+docker compose run --rm amazon-selector pytest tests/ -q
+```
+
+数据持久化：`./data:/app/data` 卷挂载，SQLite 数据库、缓存、cookies、导出文件都落在这里。首次启动时 entrypoint 会自动跑 `init-db` 建表。
+
+环境变量：参考 `.env.example`（本地文件，未入库）填好 `.env`，至少需要 `PPIO_API_KEY`（视觉识别）。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，容器通过卷挂载读取。关键变量：`PPIO_API_KEY`（视觉识别，必需）、`KEEPA_API_KEY`/`RAINFOREST_API_KEY`（Amazon API 抓取，可选，否则走 scrapling）、`MJJL_API_KEY`（卖家精灵市场分析，可选）、`ALIBABA_ALLOW_MOCK_SUPPLIERS`（正式跑保持 `false`）。
+
 ## 一次性登录（首次使用必做）
 
 Amazon 与 1688 都需要登录态 cookies 才能稳定爬取（否则被反爬弹到登录页）：
