@@ -281,19 +281,30 @@ def test_legacy_0001_database_is_repaired_without_losing_history(tmp_path):
             "(11, 'legacy', 'A1', 'completed', 'keyword', 'q', 'done', 0, 0, 'completed'), "
             "(12, 'legacy', 'A2', 'failed', 'keyword', 'q', 'failed', 0, 0, 'failed'), "
             "(13, 'legacy', 'A3', 'partial', 'keyword', 'q', 'partial', 3, 1, 'partial'), "
-            "(14, 'legacy', 'A4', 'not-started', 'keyword', 'q', 'waiting', 0, 0, 'not_started')"
+            "(14, 'legacy', 'A4', 'not-started', 'keyword', 'q', 'waiting', 0, 0, 'not_started'), "
+            "(15, 'legacy', 'A5', 'completed-nonzero', 'keyword', 'q', 'done', 3, 1, 'completed'), "
+            "(16, 'legacy', 'A6', 'unknown-status', 'keyword', 'q', 'unknown', -2, -1, 'mystery'), "
+            "(99, 'legacy', 'A99', 'deleted-high-water', 'keyword', 'q', 'deleted', 1, 1, 'completed')"
         ))
         connection.execute(text(
             "INSERT INTO match_evidence "
             "(id, run_ref, asin, offer_id, decision, overall_confidence, evidence_json) VALUES "
             "(21, 'legacy', 'A1', 'offer-zero', 'unknown', 0, '{}'), "
-            "(22, 'legacy', 'A2', 'offer-known', 'accept', 0.8, '{}')"
+            "(22, 'legacy', 'A2', 'offer-known', 'accept', 0.8, '{}'), "
+            "(23, 'legacy', 'A3', 'offer-invalid', 'reject', 1.5, '{}'), "
+            "(99, 'legacy', 'A99', 'deleted-high-water', 'accept', 0.6, '{}')"
         ))
         connection.execute(text(
             "INSERT INTO sourcing_recommendations "
             "(id, run_ref, asin, offer_id, status, evidence_json) VALUES "
             "(31, 'legacy', 'A1', 'offer-zero', 'review', '{}')"
         ))
+        connection.execute(text("INSERT INTO field_evidence "
+            "(id, entity_type, entity_ref, field_name, status, source_provider, confidence) VALUES "
+            "(99, 'product', 'DELETED-HIGH-WATER', 'price', 'verified', 'amazon', 0.5)"))
+        connection.execute(text("DELETE FROM field_evidence WHERE id=99"))
+        connection.execute(text("DELETE FROM query_attempts WHERE id=99"))
+        connection.execute(text("DELETE FROM match_evidence WHERE id=99"))
 
     assert run_migrations(engine) == ["0002_repair_evidence_semantics"]
     assert run_migrations(engine) == []
@@ -307,18 +318,21 @@ def test_legacy_0001_database_is_repaired_without_losing_history(tmp_path):
             (9, "KNOWN", 0.75),
         ]
         assert connection.execute(text(
-            "SELECT id, query_id, result_count, relevant_count FROM query_attempts ORDER BY id"
+            "SELECT id, query_id, status, result_count, relevant_count FROM query_attempts ORDER BY id"
         )).all() == [
-            (11, "completed", 0, 0),
-            (12, "failed", None, None),
-            (13, "partial", None, None),
-            (14, "not-started", None, None),
+            (11, "completed", "partial", None, None),
+            (12, "failed", "failed", None, None),
+            (13, "partial", "partial", None, None),
+            (14, "not-started", "not_started", None, None),
+            (15, "completed-nonzero", "completed", 3, 1),
+            (16, "unknown-status", "partial", None, None),
         ]
         assert connection.execute(text(
             "SELECT id, offer_id, overall_confidence FROM match_evidence ORDER BY id"
         )).all() == [
-            (21, "offer-zero", None),
+            (21, "offer-zero", 0.0),
             (22, "offer-known", 0.8),
+            (23, "offer-invalid", None),
         ]
         assert connection.execute(text(
             "SELECT id, status FROM sourcing_recommendations"
@@ -329,16 +343,36 @@ def test_legacy_0001_database_is_repaired_without_losing_history(tmp_path):
         )).all() == [
             ("field_evidence", 7, "confidence", "0.0", "legacy_default_or_explicit_zero_unknown"),
             ("field_evidence", 8, "confidence", "0.0", "legacy_default_or_explicit_zero_unknown"),
-            ("match_evidence", 21, "overall_confidence", "0.0", "legacy_default_or_explicit_zero_unknown"),
-            ("query_attempts", 11, "relevant_count", "0", "legacy_default_or_explicit_zero_unknown"),
-            ("query_attempts", 11, "result_count", "0", "legacy_default_or_explicit_zero_unknown"),
+            ("match_evidence", 23, "overall_confidence", "1.5", "legacy_confidence_out_of_range"),
+            ("query_attempts", 11, "relevant_count", "0", "legacy_completed_zero_counts_unknown"),
+            ("query_attempts", 11, "result_count", "0", "legacy_completed_zero_counts_unknown"),
+            ("query_attempts", 11, "status", '"completed"', "legacy_completed_zero_counts_unknown"),
             ("query_attempts", 12, "relevant_count", "0", "legacy_status_requires_null_metrics"),
             ("query_attempts", 12, "result_count", "0", "legacy_status_requires_null_metrics"),
             ("query_attempts", 13, "relevant_count", "1", "legacy_status_requires_null_metrics"),
             ("query_attempts", 13, "result_count", "3", "legacy_status_requires_null_metrics"),
             ("query_attempts", 14, "relevant_count", "0", "legacy_status_requires_null_metrics"),
             ("query_attempts", 14, "result_count", "0", "legacy_status_requires_null_metrics"),
+            ("query_attempts", 16, "relevant_count", "-1", "legacy_negative_count_invalid"),
+            ("query_attempts", 16, "result_count", "-2", "legacy_negative_count_invalid"),
+            ("query_attempts", 16, "status", '"mystery"', "legacy_status_unknown"),
         ]
+        connection.execute(text(
+            "INSERT INTO field_evidence (entity_type, entity_ref, field_name, status, source_provider) "
+            "VALUES ('product', 'AFTER-UPGRADE', 'price', 'missing', 'amazon')"
+        ))
+        connection.execute(text(
+            "INSERT INTO query_attempts "
+            "(run_ref, asin, query_id, query_type, query_text, reason, status, result_count, relevant_count) "
+            "VALUES ('new', 'NEW', 'after-upgrade', 'keyword', 'q', 'done', 'completed', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO match_evidence (run_ref, asin, offer_id, decision, evidence_json) "
+            "VALUES ('new', 'NEW', 'after-upgrade', 'accept', '{}')"
+        ))
+        assert connection.execute(text("SELECT id FROM field_evidence WHERE entity_ref='AFTER-UPGRADE'")).scalar_one() == 100
+        assert connection.execute(text("SELECT id FROM query_attempts WHERE query_id='after-upgrade'")).scalar_one() == 100
+        assert connection.execute(text("SELECT id FROM match_evidence WHERE offer_id='after-upgrade'")).scalar_one() == 100
         assert connection.execute(text("PRAGMA integrity_check")).scalar_one() == "ok"
 
     evidence_index = next(
