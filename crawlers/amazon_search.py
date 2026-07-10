@@ -17,6 +17,7 @@ from crawlers.amazon_bsr import ProductDTO
 
 _ASIN_RE = re.compile(r"/dp/([A-Z0-9]{10})")
 _CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
+_QUERY_STOPWORDS = {"and", "for", "the", "with", "of", "in", "a", "an"}
 _KEYWORD_MAP = {
     "水杯": "water bottle",
     "保温杯": "insulated water bottle",
@@ -88,6 +89,18 @@ def normalize_keyword(keyword: str) -> KeywordNormalization:
 def keyword_preview(keyword: str) -> dict[str, Any]:
     """Return the exact Amazon US query decision without starting a crawl."""
     return asdict(normalize_keyword(keyword))
+
+
+def is_keyword_relevant_title(keyword: str, title: str) -> bool:
+    """Require multi-word Amazon searches to retain at least two title anchors."""
+    anchors = [
+        token for token in re.findall(r"[a-z0-9]+", (keyword or "").lower())
+        if len(token) >= 3 and token not in _QUERY_STOPWORDS
+    ]
+    if len(anchors) < 2:
+        return True
+    title_words = set(re.findall(r"[a-z0-9]+", (title or "").lower()))
+    return sum(token in title_words for token in anchors) >= 2
 
 
 def classify_search_page(html: str, url: str) -> SearchPageDiagnostic:
@@ -264,14 +277,19 @@ def search_amazon_products(keyword: str, marketplace: str = "US", limit: int = 1
                     "source_rank": result.source_rank,
                     "source_sponsored": result.sponsored,
                 })
-                products.append(product)
+                if is_keyword_relevant_title(normalized.normalized, product.title):
+                    products.append(product)
+                else:
+                    logger.info(
+                        f"[amazon-search] skip off-query title asin={result.asin} title={product.title[:80]!r}"
+                    )
             except Exception as exc:
                 logger.warning(f"[amazon-search] detail failed asin={result.asin}: {exc}")
             if len(products) < min(limit, len(results)):
                 time.sleep(random.uniform(1.5, 3.0))
 
         if not products:
-            raise RuntimeError(f"Amazon search found ASINs but could not hydrate details for keyword: {keyword}")
+            raise RuntimeError(f"Amazon search found ASINs but no titles matched keyword anchors: {keyword}")
         return products
     except AmazonSearchFailure:
         raise

@@ -7,6 +7,7 @@ from agent.config_status import (
     check_seller_sprite_capabilities,
     configure_alibaba_supplier_search,
     configure_seller_sprite,
+    configure_vision_model,
     get_config_status,
 )
 from config.settings import settings
@@ -94,6 +95,27 @@ def test_configure_seller_sprite_writes_env_without_returning_secret(monkeypatch
     assert "MJJL_API_KEY=secret-value" in env_path.read_text(encoding="utf-8")
     assert settings.mjjl_api_key == "secret-value"
     assert settings.mjjl_api_base == "https://api.example/v1"
+
+
+def test_configure_vision_model_writes_env_without_returning_secret(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text("PPIO_MODEL=old-model\n", encoding="utf-8")
+    monkeypatch.setattr("agent.config_status.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(settings, "ppio_api_key", "")
+    monkeypatch.setattr(settings, "ppio_api_base", "https://api.ppio.com/openai")
+    monkeypatch.setattr(settings, "ppio_model", "old-model")
+
+    result = configure_vision_model("vision-secret", "qwen/qwen2.5-vl-72b-instruct", "https://vision.example/v1")
+
+    text = env_path.read_text(encoding="utf-8")
+    assert result["configured"] is True
+    assert result["provider"] == "ppio"
+    assert result["model"] == "qwen/qwen2.5-vl-72b-instruct"
+    assert result["base_url"] == "https://vision.example/v1"
+    assert "vision-secret" not in str(result)
+    assert "PPIO_API_KEY=vision-secret" in text
+    assert "PPIO_MODEL=qwen/qwen2.5-vl-72b-instruct" in text
+    assert settings.ppio_model == "qwen/qwen2.5-vl-72b-instruct"
 
 
 def test_configure_alibaba_supplier_search_writes_env(monkeypatch, tmp_path):

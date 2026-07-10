@@ -39,6 +39,9 @@ def get_config_status() -> dict[str, Any]:
         "vision": {
             "configured": vision_configured,
             "provider": settings.vision_provider if vision_configured else "none",
+            "model": settings.ppio_model if settings.ppio_api_key else settings.anthropic_model if settings.anthropic_api_key else "",
+            "base_url": settings.ppio_api_base if settings.ppio_api_key else "",
+            "key_length": len(settings.ppio_api_key or settings.anthropic_api_key or ""),
             "llm_verification_enabled": bool(settings.enable_llm_verification),
         },
         "alibaba_open": {
@@ -88,6 +91,37 @@ def configure_seller_sprite(api_key: str, base_url: str | None = None) -> dict[s
         "updated": changed,
         "key_length": len(key),
         "status": get_config_status()["seller_sprite"],
+    }
+
+
+def configure_vision_model(api_key: str, model: str, base_url: str | None = None) -> dict[str, Any]:
+    """Persist PPIO-compatible vision settings without returning the secret."""
+    key = (api_key or "").strip() or settings.ppio_api_key
+    selected_model = (model or "").strip()
+    base = (base_url or "").strip() or settings.ppio_api_base
+    if not key:
+        raise ValueError("Vision API key is required")
+    if not selected_model:
+        raise ValueError("Vision model is required")
+    if not base:
+        raise ValueError("Vision API base URL is required")
+
+    changed = set_env_values(PROJECT_ROOT / ".env", {
+        "PPIO_API_KEY": key,
+        "PPIO_MODEL": selected_model,
+        "PPIO_API_BASE": base,
+    })
+    settings.ppio_api_key = key
+    settings.ppio_model = selected_model
+    settings.ppio_api_base = base
+    return {
+        "configured": True,
+        "provider": "ppio",
+        "model": selected_model,
+        "base_url": base,
+        "key_length": len(key),
+        "updated": changed,
+        "status": get_config_status()["vision"],
     }
 
 

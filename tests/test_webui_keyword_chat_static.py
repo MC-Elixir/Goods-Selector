@@ -56,3 +56,13 @@ def test_webui_exposes_browser_assistant_panel():
     assert "/api/browser-agent" in app
     assert "sendBrowserAgentTask" in app
     assert ".browser-agent-result" in styles
+
+
+def test_webui_exposes_visual_model_and_result_delete_controls():
+    index = (ROOT / "webui" / "index.html").read_text(encoding="utf-8")
+    app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="visionModelForm"' in index
+    assert 'name="model"' in index
+    assert "/api/config/vision-model" in app
+    assert "hide-result" in app

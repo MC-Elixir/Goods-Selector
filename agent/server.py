@@ -19,9 +19,10 @@ from agent.config_status import (
     check_seller_sprite_asin,
     configure_alibaba_supplier_search,
     configure_seller_sprite,
+    configure_vision_model,
     get_config_status,
 )
-from agent.history import list_accepted_supplier_shortlist, list_export_runs, list_results, set_saved
+from agent.history import hide_result, list_accepted_supplier_shortlist, list_export_runs, list_results, set_saved
 from agent.manual_queue import list_manual_queue, update_manual_item
 from agent.review_decisions import set_supplier_review
 from agent.runner import AGENT_SYSTEM_PROMPT, AgentRuntime
@@ -130,6 +131,13 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                     base_url=body.get("base_url"),
                 )
                 return self._json(result)
+            if parsed.path == "/api/config/vision-model":
+                result = configure_vision_model(
+                    str(body.get("key") or ""),
+                    str(body.get("model") or ""),
+                    base_url=body.get("base_url"),
+                )
+                return self._json(result)
             if parsed.path == "/api/config/seller-sprite/asin-check":
                 result = check_seller_sprite_asin(
                     str(body.get("asin") or ""),
@@ -163,6 +171,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                     return self._json({"error": "key is required"}, HTTPStatus.BAD_REQUEST)
                 saved = bool(body.get("saved"))
                 return self._json(set_saved(key, saved))
+            if parsed.path == "/api/results/hide":
+                return self._json(hide_result(str(body.get("key") or "")))
             if parsed.path == "/api/manual-queue":
                 key = str(body.get("key") or "")
                 if not key:

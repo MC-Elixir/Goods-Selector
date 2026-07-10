@@ -3,6 +3,23 @@ from types import SimpleNamespace
 from agent import history
 
 
+def test_hide_result_removes_only_the_library_record(tmp_path, monkeypatch):
+    export = tmp_path / "candidates_hidden.json"
+    export.write_text('[{"product":{"asin":"BHIDDEN","title":"hidden item"},"suppliers":[]}]', encoding="utf-8")
+    hidden_path = tmp_path / "hidden.json"
+    monkeypatch.setattr(history, "settings", SimpleNamespace(export_dir=tmp_path))
+    monkeypatch.setattr(history, "_HIDDEN_FILE", hidden_path)
+    monkeypatch.setattr(history, "_load_saved", lambda: {})
+    monkeypatch.setattr(history, "load_supplier_reviews", lambda: {})
+
+    result = history.hide_result("hidden:BHIDDEN")
+
+    assert result["hidden"] is True
+    assert history.list_results(run_id="hidden")["count"] == 0
+    assert export.exists()
+    assert "BHIDDEN" in export.read_text(encoding="utf-8")
+
+
 def test_list_results_includes_review_specs_and_supplier_candidates(tmp_path, monkeypatch):
     export = tmp_path / "candidates_review.json"
     export.write_text(

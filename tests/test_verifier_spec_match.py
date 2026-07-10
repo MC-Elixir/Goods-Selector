@@ -7,7 +7,7 @@ import pytest
 
 from agent.cancellation import CancellationRequested
 from matchers.alibaba_pailitao import SupplierDTO
-from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier
+from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier, llm_eligible_suppliers
 
 
 def _product():
@@ -178,3 +178,29 @@ def test_llm_visual_verifier_honors_cancel_check_before_network(monkeypatch):
 
     with pytest.raises(CancellationRequested):
         verifier.verify([supplier], product, cancel_check=lambda: True)
+
+
+def test_llm_eligibility_requires_heuristic_and_spec_evidence():
+    good = SupplierDTO(
+        alibaba_offer_id="good",
+        supplier_name="Good",
+        offer_image_url="https://example.com/good.jpg",
+        match_quality_score=0.72,
+        raw_data={"spec_match": {"score": 0.66, "conflicts": []}},
+    )
+    weak = SupplierDTO(
+        alibaba_offer_id="weak",
+        supplier_name="Weak",
+        offer_image_url="https://example.com/weak.jpg",
+        match_quality_score=0.51,
+        raw_data={"spec_match": {"score": 0.66, "conflicts": []}},
+    )
+    conflict = SupplierDTO(
+        alibaba_offer_id="conflict",
+        supplier_name="Conflict",
+        offer_image_url="https://example.com/conflict.jpg",
+        match_quality_score=0.84,
+        raw_data={"spec_match": {"score": 0.8, "conflicts": ["category"]}},
+    )
+
+    assert llm_eligible_suppliers([good, weak, conflict], min_match_quality=0.65, min_spec_score=0.5) == [good]

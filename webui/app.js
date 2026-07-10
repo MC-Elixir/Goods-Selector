@@ -26,6 +26,7 @@ const I18N = {
     "actions.reloadResults": "Reload Results",
     "actions.reset": "Reset",
     "actions.cancel": "Cancel",
+    "actions.delete": "Delete",
     "actions.retry": "Retry",
     "actions.runAgent": "Run Agent",
     "actions.viewAll": "View all",
@@ -82,6 +83,7 @@ const I18N = {
     "recent.rows": "rows",
     "recent.title": "Recent Runs",
     "results.searchPlaceholder": "Search ASIN, title, or supplier",
+    "results.deleteConfirm": "Hide this result from the library? The source export and database history stay intact.",
     "results.subtitle": "Read previous crawl and sourcing outputs from local JSON and Excel exports.",
     "results.title": "Saved Product Selection Results",
     "results.reviewFilter.accepted": "Has accepted supplier",
@@ -254,6 +256,11 @@ const I18N = {
     "settings.importedEmpty": "No imported 1688 candidates",
     "settings.sellerSpriteKey": "SellerSprite key",
     "settings.sellerSpriteSaved": "SellerSprite saved",
+    "settings.visionBase": "Vision API base",
+    "settings.visionKey": "Vision API key",
+    "settings.visionModel": "Vision model",
+    "settings.visionSaved": "Vision model saved",
+    "settings.saveVision": "Save vision model",
     "sidebar.agentDefinition": "Agent Definition",
     "sidebar.agentDefinitionText": "Environment, tools, and prompt policy are wired into a local execution loop.",
     "sidebar.footer": "v0.3 Agent Preview",
@@ -270,6 +277,7 @@ const I18N = {
     "table.asin": "ASIN",
     "table.buyCost": "Buy Cost",
     "table.export": "Export",
+    "table.actions": "Actions",
     "table.margin": "Margin",
     "table.match": "Match",
     "table.review": "Review",
@@ -289,6 +297,7 @@ const I18N = {
     "actions.reloadResults": "重新加载",
     "actions.reset": "重置",
     "actions.cancel": "取消",
+    "actions.delete": "删除",
     "actions.retry": "重试",
     "actions.runAgent": "运行 Agent",
     "actions.viewAll": "查看全部",
@@ -345,6 +354,7 @@ const I18N = {
     "recent.rows": "行",
     "recent.title": "最近任务",
     "results.searchPlaceholder": "搜索 ASIN、标题或供应商",
+    "results.deleteConfirm": "从结果库隐藏这条记录？原始导出和数据库审计记录不会删除。",
     "results.subtitle": "读取本地 JSON 和 Excel 导出的历史爬取与选品结果。",
     "results.title": "已保存的选品结果",
     "results.reviewFilter.accepted": "有通过供应商",
@@ -517,6 +527,11 @@ const I18N = {
     "settings.importedEmpty": "暂无已导入 1688 候选",
     "settings.sellerSpriteKey": "卖家精灵 Key",
     "settings.sellerSpriteSaved": "卖家精灵已保存",
+    "settings.visionBase": "视觉 API 地址",
+    "settings.visionKey": "视觉 API Key",
+    "settings.visionModel": "视觉模型",
+    "settings.visionSaved": "视觉模型已保存",
+    "settings.saveVision": "保存视觉模型",
     "sidebar.agentDefinition": "Agent 定义",
     "sidebar.agentDefinitionText": "环境、工具和提示词策略已接入本地执行循环。",
     "sidebar.footer": "v0.3 Agent 预览版",
@@ -533,6 +548,7 @@ const I18N = {
     "table.asin": "ASIN",
     "table.buyCost": "采购成本",
     "table.export": "导出",
+    "table.actions": "操作",
     "table.margin": "利润率",
     "table.match": "匹配",
     "table.review": "审核",
@@ -632,6 +648,7 @@ function bindActions() {
     renderResults();
   });
   $("#sellerSpriteForm").addEventListener("submit", configureSellerSprite);
+  $("#visionModelForm").addEventListener("submit", configureVisionModel);
   $("#sellerSpriteAsinForm").addEventListener("submit", checkSellerSpriteAsin);
   $("#alibabaSearchApiForm").addEventListener("submit", configureAlibabaSearchApi);
   $("#alibabaPifatuanForm").addEventListener("submit", checkAlibabaPifatuan);
@@ -722,6 +739,26 @@ async function configureSellerSprite(event) {
     $("#sellerSpriteKeyInput").value = "";
     status.className = "status-ok";
     status.textContent = `${t("settings.sellerSpriteSaved")} (${result.key_length})`;
+    await Promise.all([refreshConfigStatus(), refreshPreflight()]);
+  } catch (error) {
+    status.className = "status-error";
+    status.textContent = error.message;
+  }
+}
+
+async function configureVisionModel(event) {
+  event.preventDefault();
+  const form = new FormData($("#visionModelForm"));
+  const status = $("#visionModelConfigStatus");
+  try {
+    const result = await postJson("/api/config/vision-model", {
+      key: String(form.get("key") || ""),
+      model: String(form.get("model") || ""),
+      base_url: String(form.get("base_url") || ""),
+    });
+    $("#visionApiKeyInput").value = "";
+    status.className = "status-ok";
+    status.textContent = `${t("settings.visionSaved")} (${result.model})`;
     await Promise.all([refreshConfigStatus(), refreshPreflight()]);
   } catch (error) {
     status.className = "status-error";
@@ -1232,6 +1269,10 @@ function renderConfigStatus() {
     ),
   ];
   grid.innerHTML = cards.join("");
+  if (status.vision) {
+    $("#visionModelInput").value = status.vision.model || "";
+    $("#visionBaseInput").value = status.vision.base_url || "";
+  }
   updateRunAvailability();
 }
 
@@ -1420,12 +1461,13 @@ function renderResults() {
       <td><span class="score-pill">${number(item.score, 0)}</span></td>
       <td><span class="status ${statusClass}">${status}</span></td>
       <td>${item.xlsx_file ? `<a class="ghost-button" href="/api/exports/${encodeURIComponent(item.xlsx_file)}">${escapeHtml(t("actions.download"))}</a>` : "-"}</td>
+      <td><button class="link-button hide-result" data-key="${escapeAttr(item.key)}">${escapeHtml(t("actions.delete"))}</button></td>
     `;
     body.appendChild(row);
     if (state.expandedReviews.has(item.key)) {
       const detailRow = document.createElement("tr");
       detailRow.className = "review-detail-row";
-      detailRow.innerHTML = `<td colspan="11">${reviewPanel(item)}</td>`;
+      detailRow.innerHTML = `<td colspan="12">${reviewPanel(item)}</td>`;
       body.appendChild(detailRow);
     }
   }
@@ -1468,6 +1510,15 @@ function renderResults() {
         status: button.dataset.status,
       });
       updateSupplierReviewState(button.dataset.reviewKey, button.dataset.status);
+      renderResults();
+    });
+  });
+  $$(".hide-result").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!window.confirm(t("results.deleteConfirm"))) return;
+      await postJson("/api/results/hide", { key: button.dataset.key });
+      state.results = state.results.filter((item) => item.key !== button.dataset.key);
+      state.expandedReviews.delete(button.dataset.key);
       renderResults();
     });
   });

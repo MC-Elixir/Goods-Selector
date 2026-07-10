@@ -113,6 +113,9 @@ class Settings(BaseSettings):
     # ---------- 行为开关 ----------
     enable_api_cache: bool = True
     enable_llm_verification: bool = False  # 启用 LLM 视觉验证（对比 Amazon 和 1688 图片）
+    llm_verification_top_k: int = 2
+    llm_verification_min_match_quality: float = 0.65
+    llm_verification_min_spec_score: float = 0.50
     # 1688 Scrapling 匹配器（patchright HTTP 路径）。被 1688 TMD 反爬拦截、0 结果，
     # 默认禁用、直接降级 Playwright；待该路径修好后置 True 启用。
     enable_scrapling_matcher: bool = False

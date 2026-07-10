@@ -13,6 +13,7 @@ from agent.review_decisions import load_supplier_reviews, supplier_review_key
 from matchers.product_spec import spec_from_product, spec_from_supplier
 
 _SAVED_FILE = DATA_DIR / "agent_saved_items.json"
+_HIDDEN_FILE = DATA_DIR / "agent_hidden_items.json"
 
 
 def list_export_runs(limit: int = 30) -> list[dict[str, Any]]:
@@ -40,6 +41,7 @@ def list_export_runs(limit: int = 30) -> list[dict[str, Any]]:
 
 def list_results(run_id: str | None = None, limit: int = 200) -> dict[str, Any]:
     saved = _load_saved()
+    hidden = _load_hidden()
     supplier_reviews = load_supplier_reviews()
     files = _matching_files(run_id)
     items: list[dict[str, Any]] = []
@@ -59,6 +61,8 @@ def list_results(run_id: str | None = None, limit: int = 200) -> dict[str, Any]:
             top_supplier_spec = _supplier_spec(top_supplier) if top_supplier else {}
             invalid_for_decision = bool(top_supplier.get("invalid_for_decision")) or _supplier_is_mock(top_supplier)
             key = f"{export_id}:{product.get('asin', '')}"
+            if key in hidden:
+                continue
             item = {
                 "key": key,
                 "export_id": export_id,
@@ -179,6 +183,17 @@ def set_saved(key: str, saved: bool) -> dict[str, Any]:
     return {"key": key, "saved": saved, "saved_count": len(data)}
 
 
+def hide_result(key: str) -> dict[str, Any]:
+    value = (key or "").strip()
+    if ":" not in value or value.startswith(":") or value.endswith(":"):
+        raise ValueError("invalid result key")
+    hidden = _load_hidden()
+    hidden[value] = {"hidden_at": datetime.utcnow().isoformat()}
+    _HIDDEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _HIDDEN_FILE.write_text(json.dumps(hidden, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"key": value, "hidden": True, "hidden_count": len(hidden)}
+
+
 def audit_export(path: Path) -> dict[str, Any]:
     rows = _read_json_list(path)
     margins = [
@@ -235,6 +250,16 @@ def _load_saved() -> dict[str, Any]:
         return {}
     try:
         data = json.loads(_SAVED_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_hidden() -> dict[str, Any]:
+    if not _HIDDEN_FILE.exists():
+        return {}
+    try:
+        data = json.loads(_HIDDEN_FILE.read_text(encoding="utf-8"))
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}

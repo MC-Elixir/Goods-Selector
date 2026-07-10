@@ -232,6 +232,7 @@ class LLMVisualVerifier:
         product,
         top_k: int = 3,
         threshold: float = 0.3,
+        eligible_suppliers: list[SupplierDTO] | None = None,
         cancel_check: CancelCheck | None = None,
     ) -> list[SupplierDTO]:
         """对 top K 供应商进行 LLM 视觉验证，更新 match_quality_score。
@@ -249,7 +250,11 @@ class LLMVisualVerifier:
             return suppliers
 
         # 取 top K 有图片的供应商
-        to_verify = [s for s in suppliers[:top_k] if s.offer_image_url]
+        eligible_ids = {id(supplier) for supplier in eligible_suppliers} if eligible_suppliers is not None else None
+        to_verify = [
+            supplier for supplier in suppliers
+            if supplier.offer_image_url and (eligible_ids is None or id(supplier) in eligible_ids)
+        ][:top_k]
         if not to_verify:
             logger.info("[llm-verifier] 无供应商图片，跳过 LLM 验证")
             return suppliers
@@ -408,6 +413,28 @@ def _title_is_relevant(supplier, analysis, keywords: list[str]) -> bool:
     if analysis and analysis.category_zh and analysis.category_zh in offer_title:
         return True
     return _keyword_title_score(offer_title, keywords) > 0
+
+
+def llm_eligible_suppliers(
+    suppliers: list[SupplierDTO],
+    *,
+    min_match_quality: float,
+    min_spec_score: float,
+) -> list[SupplierDTO]:
+    """Return suppliers worth the cost of a visual LLM comparison."""
+    eligible: list[SupplierDTO] = []
+    for supplier in suppliers:
+        spec_match = (supplier.raw_data or {}).get("spec_match") or {}
+        if not supplier.offer_image_url:
+            continue
+        if float(supplier.match_quality_score or 0.0) < min_match_quality:
+            continue
+        if float(spec_match.get("score") or 0.0) < min_spec_score:
+            continue
+        if spec_match.get("conflicts"):
+            continue
+        eligible.append(supplier)
+    return eligible
 
 
 def _keyword_title_score(offer_title: str, keywords: list[str]) -> float:

@@ -545,6 +545,10 @@ select:focus {
   background: transparent;
 }
 
+.hide-result {
+  color: var(--red);
+}
+
 .ready-card small {
   display: block;
   margin-top: 10px;

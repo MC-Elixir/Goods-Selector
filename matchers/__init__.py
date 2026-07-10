@@ -33,7 +33,7 @@ from matchers.alibaba_text_search import Alibaba1688TextSearch
 from matchers.alibaba_detail import apply_1688_detail_to_supplier
 from matchers.imported_suppliers import find_imported_suppliers
 from matchers.vision_analyzer import VisionAnalyzer
-from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier
+from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier, llm_eligible_suppliers
 from matchers.alibaba_result_cache import (
     circuit_is_open,
     load_cached_offer_detail,
@@ -266,16 +266,27 @@ def match_suppliers(
 
     # ── Step 6: LLM 视觉验证（可选）─────────────────────────
     if getattr(_cfg, 'enable_llm_verification', False) and len(suppliers) > 1:
-        if not product.main_image_url:
+        eligible_for_llm = llm_eligible_suppliers(
+            suppliers,
+            min_match_quality=float(getattr(_cfg, "llm_verification_min_match_quality", 0.65)),
+            min_spec_score=float(getattr(_cfg, "llm_verification_min_spec_score", 0.5)),
+        )
+        if not eligible_for_llm:
+            logger.info(f"[match] ASIN={product.asin} LLM 视觉验证跳过：无通过规格与启发式门槛的货源")
+        elif not product.main_image_url:
             logger.info(f"[match] ASIN={product.asin} LLM 视觉验证跳过：Amazon 产品无主图")
-        elif not any(getattr(s, "offer_image_url", None) for s in suppliers[:3]):
-            logger.info(f"[match] ASIN={product.asin} LLM 视觉验证跳过：供应商候选无图片")
         else:
             try:
                 _check_cancel(cancel_check, "LLM visual verification")
                 if _llm_verifier is None:
                     _llm_verifier = LLMVisualVerifier()
-                suppliers = _llm_verifier.verify(suppliers, product, top_k=3, cancel_check=cancel_check)
+                suppliers = _llm_verifier.verify(
+                    suppliers,
+                    product,
+                    top_k=int(getattr(_cfg, "llm_verification_top_k", 2)),
+                    eligible_suppliers=eligible_for_llm,
+                    cancel_check=cancel_check,
+                )
                 _check_cancel(cancel_check, "LLM visual verification")
                 logger.info(f"[match] ASIN={product.asin} LLM 视觉验证完成")
             except CancellationRequested:

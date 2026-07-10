@@ -195,6 +195,7 @@
                     <th data-i18n="table.score">Score</th>
                     <th data-i18n="table.status">Status</th>
                     <th data-i18n="table.export">Export</th>
+                    <th data-i18n="table.actions">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="resultsBody"></tbody>
@@ -257,6 +258,22 @@
             <button class="ghost-button" type="submit" data-i18n="browser.run">Run Browser Assistant</button>
             <small id="browserAgentStatus"></small>
             <pre class="browser-agent-result" id="browserAgentResult"></pre>
+          </form>
+          <form class="settings-config-form" id="visionModelForm">
+            <label>
+              <span data-i18n="settings.visionKey">Vision API key</span>
+              <input id="visionApiKeyInput" name="key" type="password" autocomplete="off">
+            </label>
+            <label>
+              <span data-i18n="settings.visionModel">Vision model</span>
+              <input id="visionModelInput" name="model" autocomplete="off" placeholder="qwen/qwen3.5-plus">
+            </label>
+            <label>
+              <span data-i18n="settings.visionBase">Vision API base</span>
+              <input id="visionBaseInput" name="base_url" type="url" placeholder="https://api.ppio.com/openai">
+            </label>
+            <button class="ghost-button" type="submit" data-i18n="settings.saveVision">Save vision model</button>
+            <small id="visionModelConfigStatus"></small>
           </form>
           <form class="settings-config-form" id="sellerSpriteForm">
             <label>

@@ -1,5 +1,6 @@
 from crawlers.amazon_search import (
     classify_search_page,
+    is_keyword_relevant_title,
     keyword_preview,
     normalize_keyword,
     parse_search_results_html,
@@ -44,6 +45,17 @@ def test_search_page_classifier_distinguishes_captcha_from_real_empty_results():
     assert captcha.action == "Refresh Amazon cookies and retry after completing the robot check."
     assert no_results.kind == "no_results"
     assert no_results.result_cards == 0
+
+
+def test_multi_term_keyword_rejects_a_product_without_enough_title_anchors():
+    assert is_keyword_relevant_title(
+        "outdoor patio umbrella",
+        "10 ft Outdoor Patio Umbrella with Tilt and Crank",
+    ) is True
+    assert is_keyword_relevant_title(
+        "outdoor patio umbrella",
+        "Wondershade Portable Sun Shade Umbrella",
+    ) is False
 
 
 def test_search_result_parser_deduplicates_asins_and_skips_sponsored_cards():
