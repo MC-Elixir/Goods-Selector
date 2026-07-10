@@ -40,6 +40,10 @@ class FieldEvidence(BaseModel, Generic[T]):
         if self.status in {EvidenceStatus.EXTRACTED, EvidenceStatus.VERIFIED}:
             if not self.source_type or not self.source_ref or self.observed_at is None:
                 raise ValueError("extracted or verified evidence requires source metadata")
+        for field_name in ("observed_at", "expires_at"):
+            timestamp = getattr(self, field_name)
+            if timestamp is not None and timestamp.utcoffset() is None:
+                raise ValueError(f"{field_name} must be timezone-aware")
         return self
 
     def effective_status(self, now: datetime | None = None) -> EvidenceStatus:
@@ -124,6 +128,12 @@ class MatchEvidence(BaseModel):
     missing_evidence: list[str] = Field(default_factory=list)
     passed_reasons: list[str] = Field(default_factory=list)
     decision: Literal["keep", "reject", "retry", "manual_review"]
+
+    @model_validator(mode="after")
+    def validate_visual_decision(self):
+        if self.visual_is_match is False and self.decision != "reject":
+            raise ValueError("negative visual classification requires reject decision")
+        return self
 
 
 class RecommendationStatus(str, Enum):
