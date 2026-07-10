@@ -233,6 +233,12 @@ class TestScoreSupply:
         with_fba = [_MockSupplier(fba_ready=True)]
         assert score_supply(with_fba, c) >= score_supply(no_fba, c)
 
+    def test_factory_and_sales_improve_supply_score(self):
+        c = self._curve()
+        weak = [_MockSupplier(is_factory=False, monthly_sales=20, repeat_buyer_rate=0.05, fba_ready=False)]
+        strong = [_MockSupplier(is_factory=True, monthly_sales=3000, repeat_buyer_rate=0.45, fba_ready=False)]
+        assert score_supply(strong, c) > score_supply(weak, c)
+
     def test_output_in_range(self):
         c = self._curve()
         for n in [1, 3, 6]:
@@ -294,6 +300,15 @@ class TestScoreRisk:
     def test_cert_category_penalized(self):
         s = score_risk("Toys & Games > Infant Toys", "Generic", self._curve())
         assert s < 0.8
+
+    def test_restricted_keyword_penalized(self):
+        s = score_risk(
+            "Home & Kitchen",
+            "Generic",
+            self._curve(),
+            title="Liquid Ant Killer Bait Stations",
+        )
+        assert s < 0.4
 
     def test_seasonal_product_penalized(self):
         seasonal = {f"month_{i}": (100 if i in (11, 12) else 5) for i in range(1, 13)}
@@ -375,6 +390,40 @@ class TestApplyHardFilters:
         )
         assert len(reasons) >= 3
 
+    def test_low_top_supplier_match_rejected_when_available(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(), top_supplier_match_quality=0.20,
+        )
+        assert "supplier_match_too_low" in reasons
+
+    def test_top_supplier_spec_conflict_rejected_when_available(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(), top_supplier_spec_conflicts=["capacity"],
+        )
+        assert "supplier_spec_conflict" in reasons
+
+    def test_low_top_supplier_candidate_score_rejected_when_available(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(), top_supplier_candidate_score=0.20,
+        )
+        assert "supplier_candidate_too_low" in reasons
+
+    def test_restricted_keyword_rejected(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(),
+            product_title="TERRO Liquid Ant Killer Bait Stations",
+            product_category="Home & Kitchen",
+        )
+        assert "restricted_product" in reasons
+
 
 # ============================================================
 # score_product 集成
@@ -409,6 +458,17 @@ class TestScoreProduct:
         assert sb.passed_hard_filter is False
         assert "brand_excluded" in sb.rejection_reasons
 
+    def test_restricted_product_fails_filter(self):
+        sb = score_product(
+            product=_MockProduct(title="Liquid Ant Killer Bait Stations", price=24.99),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[_MockSupplier() for _ in range(3)],
+        )
+        assert sb.risk_score < 0.4
+        assert sb.passed_hard_filter is False
+        assert "restricted_product" in sb.rejection_reasons
+
     def test_no_market_data_still_works(self):
         sb = score_product(
             product=_MockProduct(),
@@ -436,6 +496,70 @@ class TestScoreProduct:
             suppliers=[_MockSupplier() for _ in range(3)],
         )
         assert "monthly_sales_too_low" not in sb.rejection_reasons
+
+    def test_low_top_supplier_match_quality_rejected(self):
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.20
+        supplier.raw_data = {
+            "supplier_candidate_score": 0.80,
+            "spec_match": {"score": 0.90, "conflicts": []},
+        }
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, _MockSupplier(), _MockSupplier()],
+        )
+        assert sb.passed_hard_filter is False
+        assert "supplier_match_too_low" in sb.rejection_reasons
+
+    def test_top_supplier_spec_conflict_rejected(self):
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.80
+        supplier.raw_data = {
+            "supplier_candidate_score": 0.80,
+            "spec_match": {"score": 0.80, "conflicts": ["pack_count"]},
+        }
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, _MockSupplier(), _MockSupplier()],
+        )
+        assert sb.passed_hard_filter is False
+        assert "supplier_spec_conflict" in sb.rejection_reasons
+
+    def test_low_top_supplier_candidate_score_rejected(self):
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.80
+        supplier.raw_data = {
+            "supplier_candidate_score": 0.20,
+            "spec_match": {"score": 0.80, "conflicts": []},
+        }
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, _MockSupplier(), _MockSupplier()],
+        )
+        assert sb.passed_hard_filter is False
+        assert "supplier_candidate_too_low" in sb.rejection_reasons
+
+    def test_top_supplier_rank_score_overrides_legacy_candidate_score(self):
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.80
+        supplier.raw_data = {
+            "supplier_rank_score": 0.70,
+            "supplier_candidate_score": 0.20,
+            "spec_match": {"score": 0.80, "conflicts": []},
+        }
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, _MockSupplier(), _MockSupplier()],
+        )
+        assert "supplier_candidate_too_low" not in sb.rejection_reasons
 
     def test_all_dimension_scores_in_range(self):
         sb = score_product(

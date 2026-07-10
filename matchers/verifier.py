@@ -19,11 +19,14 @@ from __future__ import annotations
 import base64
 import json
 import re
+from dataclasses import asdict
 from typing import Optional
 
 from loguru import logger
 
+from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
 from matchers.alibaba_pailitao import SupplierDTO
+from matchers.product_spec import compare_specs, spec_from_product, spec_from_supplier
 
 # ── 阈值常量 ──────────────────────────────────────────────────
 THRESHOLD_PASS = 0.40
@@ -54,26 +57,63 @@ class Alibaba1688Verifier:
 
         kw = search_keywords or []
         results: list[SupplierDTO] = []
+        rejected: list[SupplierDTO] = []
+        target_spec = spec_from_product(product, analysis)
+        target_spec_payload = _spec_payload(target_spec)
 
         for sup in suppliers:
             original_method = (sup.match_verification_method or "").lower()
             if original_method != "mock" and not _title_is_relevant(sup, analysis, kw):
                 sup.match_quality_score = 0.0
                 sup.match_verification_method = "heuristic"
+                sup.raw_data["target_spec"] = target_spec_payload
+                sup.raw_data["spec_match"] = {
+                    "score": 0.0,
+                    "matched": [],
+                    "missing": [],
+                    "conflicts": ["title_relevance"],
+                }
+                _update_supplier_rank_scores(sup)
+                rejected.append(sup)
                 continue
-            score = self._compute_match_quality(sup, product, analysis, kw)
+            heuristic_score = self._compute_match_quality(sup, product, analysis, kw)
+            spec_match = compare_specs(target_spec, spec_from_supplier(sup))
+            sup.raw_data["target_spec"] = target_spec_payload
+            sup.raw_data["spec_match"] = {
+                "score": spec_match.score,
+                "matched": spec_match.matched,
+                "missing": spec_match.missing,
+                "conflicts": spec_match.conflicts,
+            }
+            visual_score = self._visual_score(sup, product)
+            sup.raw_data["visual_match"] = {
+                "score": visual_score,
+                "source": "image_similarity" if sup.image_similarity is not None else "availability",
+            }
+            score = 0.55 * heuristic_score + 0.30 * spec_match.score + 0.15 * visual_score
+            if spec_match.conflicts:
+                score *= max(0.45, 1 - 0.15 * len(spec_match.conflicts))
             sup.match_quality_score = round(score, 4)
+            _update_supplier_rank_scores(sup)
             sup.match_verification_method = "heuristic"
             results.append(sup)
 
-        results.sort(key=lambda s: s.match_quality_score or 0, reverse=True)
+        results.sort(key=_supplier_sort_key, reverse=True)
 
         before = len(results)
-        results = [s for s in results if (s.match_quality_score or 0) > self.threshold_demote]
-        if len(results) < before:
-            logger.info(f"[verifier] 过滤 {before - len(results)} 条不匹配供应商 (threshold={self.threshold_demote})")
+        filtered = [s for s in results if (s.match_quality_score or 0) > self.threshold_demote]
+        if len(filtered) < before + len(rejected):
+            logger.info(f"[verifier] 过滤 {before + len(rejected) - len(filtered)} 条不匹配供应商 (threshold={self.threshold_demote})")
 
-        return results
+        if filtered:
+            return filtered
+
+        fallback = sorted([*results, *rejected], key=_supplier_sort_key, reverse=True)[:3]
+        for sup in fallback:
+            sup.match_verification_method = "heuristic_rejected"
+        if fallback:
+            logger.warning("[verifier] 全部供应商低于阈值，保留 top rejected 供人工复核")
+        return fallback
 
     def _compute_match_quality(self, supplier, product, analysis, keywords):
         attr_score = self._attribute_score(supplier, analysis)
@@ -127,6 +167,23 @@ class Alibaba1688Verifier:
         if ms >= 100: return 0.7
         return 0.6
 
+    def _visual_score(self, supplier, product) -> float:
+        if supplier.image_similarity is not None:
+            return _clamp(float(supplier.image_similarity))
+        product_has_image = bool(getattr(product, "main_image_url", None))
+        supplier_has_image = bool(getattr(supplier, "offer_image_url", None))
+        if product_has_image and supplier_has_image:
+            return 0.55
+        if product_has_image or supplier_has_image:
+            return 0.35
+        return SCORE_DEFAULT
+
+
+def _spec_payload(spec) -> dict:
+    data = asdict(spec)
+    data.pop("raw_text", None)
+    return {key: value for key, value in data.items() if value not in (None, "", [], {})}
+
 
 class LLMVisualVerifier:
     """用大模型对比 Amazon 产品图片和 1688 供应商图片，判断是否为同类产品。
@@ -175,6 +232,7 @@ class LLMVisualVerifier:
         product,
         top_k: int = 3,
         threshold: float = 0.3,
+        cancel_check: CancelCheck | None = None,
     ) -> list[SupplierDTO]:
         """对 top K 供应商进行 LLM 视觉验证，更新 match_quality_score。
 
@@ -184,6 +242,7 @@ class LLMVisualVerifier:
             top_k: 验证前 K 个供应商（控制 API 成本）
             threshold: 低于此分数的供应商被过滤
         """
+        raise_if_cancelled(cancel_check, "LLM visual verification")
         amazon_img = getattr(product, 'main_image_url', None)
         if not amazon_img:
             logger.warning("[llm-verifier] Amazon 产品无主图，跳过 LLM 验证")
@@ -199,8 +258,10 @@ class LLMVisualVerifier:
         client = httpx.Client(timeout=30, follow_redirects=True)
 
         for sup in to_verify:
+            raise_if_cancelled(cancel_check, "LLM visual verification")
             try:
                 result = self._compare_images(client, amazon_img, sup.offer_image_url)
+                raise_if_cancelled(cancel_check, "LLM visual verification")
                 llm_score = result.get("confidence", 0.5)
                 is_match = result.get("is_match", True)
 
@@ -209,19 +270,30 @@ class LLMVisualVerifier:
                 new_score = 0.6 * llm_score + 0.4 * old_score
                 sup.match_quality_score = round(new_score, 4)
                 sup.match_verification_method = "llm"
+                sup.raw_data["visual_match"] = {
+                    "score": round(float(llm_score), 4),
+                    "source": "llm",
+                    "is_match": bool(is_match),
+                    "reason": result.get("reason"),
+                    "differences": result.get("differences") or [],
+                }
+                _update_supplier_rank_scores(sup)
 
                 logger.info(
                     f"[llm-verifier] {sup.supplier_name[:20]} | "
                     f"match={is_match} conf={llm_score:.2f} "
                     f"reason={result.get('reason','')[:30]}"
                 )
+            except CancellationRequested:
+                raise
             except Exception as e:
                 logger.warning(f"[llm-verifier] {sup.supplier_name[:20]} 验证失败: {e}")
 
         client.close()
 
         # 重新排序和过滤
-        suppliers.sort(key=lambda s: s.match_quality_score or 0, reverse=True)
+        suppliers.sort(key=_supplier_sort_key, reverse=True)
+        ranked = list(suppliers)
         before = len(suppliers)
         suppliers = [s for s in suppliers if (s.match_quality_score or 0) > threshold]
         if len(suppliers) < before:
@@ -229,7 +301,7 @@ class LLMVisualVerifier:
 
         if not suppliers:
             logger.warning("[llm-verifier] 全部被过滤，保留 top 3 兜底")
-            suppliers = sorted(suppliers, key=lambda s: s.match_quality_score or 0, reverse=True)[:3]
+            suppliers = ranked[:3]
 
         return suppliers
 
@@ -299,6 +371,10 @@ class LLMVisualVerifier:
 # 辅助函数
 # ============================================================
 
+def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, value))
+
+
 def _material_match(expected: str, actual: str) -> bool:
     return any(a in actual for a in _material_aliases(expected))
 
@@ -352,6 +428,115 @@ def _keyword_title_score(offer_title: str, keywords: list[str]) -> float:
         if hits >= 2:
             best = max(best, min(hits / len(grams), 1.0))
     return best
+
+
+def _update_supplier_rank_scores(supplier: SupplierDTO) -> None:
+    quality_score = _supplier_quality_score(supplier)
+    business_score = _supplier_business_score(supplier)
+    supplier.raw_data["supplier_quality_score"] = quality_score
+    supplier.raw_data["supplier_business_score"] = business_score
+    supplier.raw_data["supplier_candidate_score"] = _candidate_score(
+        match_score=supplier.match_quality_score,
+        supplier_quality_score=quality_score,
+        business_score=business_score,
+    )
+
+
+def _supplier_sort_key(supplier: SupplierDTO) -> tuple[float, float, float]:
+    raw = supplier.raw_data or {}
+    return (
+        float(raw.get("supplier_candidate_score") or 0.0),
+        float(supplier.match_quality_score or 0.0),
+        float(raw.get("supplier_quality_score") or 0.0),
+    )
+
+
+def _candidate_score(
+    *,
+    match_score: float | None,
+    supplier_quality_score: float,
+    business_score: float,
+) -> float:
+    match = _clamp(float(match_score or 0.0))
+    return round(0.65 * match + 0.25 * supplier_quality_score + 0.10 * business_score, 4)
+
+
+def _supplier_quality_score(supplier: SupplierDTO) -> float:
+    sales_score = _sales_score(supplier.monthly_sales)
+    repeat_score = _repeat_score(supplier.repeat_buyer_rate)
+    factory_score = 1.0 if supplier.is_factory is True else 0.45 if supplier.is_factory is False else 0.65
+    delivery_score = _delivery_score(supplier.delivery_days)
+    return round(
+        _clamp(0.35 * sales_score + 0.30 * repeat_score + 0.25 * factory_score + 0.10 * delivery_score),
+        4,
+    )
+
+
+def _supplier_business_score(supplier: SupplierDTO) -> float:
+    moq_score = _moq_score(supplier.moq)
+    price_score = _price_score(supplier.base_price_cny)
+    return round(_clamp(0.65 * moq_score + 0.35 * price_score), 4)
+
+
+def _sales_score(value: int | None) -> float:
+    if value is None:
+        return 0.5
+    if value >= 5000:
+        return 1.0
+    if value >= 1000:
+        return 0.85
+    if value >= 300:
+        return 0.7
+    if value >= 50:
+        return 0.55
+    return 0.35
+
+
+def _repeat_score(value: float | None) -> float:
+    if value is None:
+        return 0.5
+    value = float(value)
+    if value > 1:
+        value = value / 100
+    return _clamp(value)
+
+
+def _delivery_score(value: int | None) -> float:
+    if value is None:
+        return 0.5
+    if value <= 7:
+        return 1.0
+    if value <= 15:
+        return 0.85
+    if value <= 30:
+        return 0.65
+    return 0.35
+
+
+def _moq_score(value: int | None) -> float:
+    if value is None:
+        return 0.5
+    if value <= 50:
+        return 1.0
+    if value <= 100:
+        return 0.85
+    if value <= 300:
+        return 0.65
+    if value <= 500:
+        return 0.45
+    return 0.25
+
+
+def _price_score(value: float | None) -> float:
+    if value is None:
+        return 0.5
+    if value <= 20:
+        return 1.0
+    if value <= 50:
+        return 0.8
+    if value <= 100:
+        return 0.6
+    return 0.4
 
 
 def _bigrams(text: str) -> list[str]:

@@ -288,3 +288,26 @@ class RunLog(Base):
     status: Mapped[str] = mapped_column(String(20), default="running")
     # running | success | failed | aborted
     error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+
+# ============================================================
+# 7. RunEvent — Agent loop 事件流
+# ============================================================
+class RunEvent(Base):
+    __tablename__ = "run_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    job_id: Mapped[Optional[str]] = mapped_column(String(40), index=True)
+
+    event: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    stage: Mapped[Optional[str]] = mapped_column(String(40), index=True)
+    asin: Mapped[Optional[str]] = mapped_column(String(20), index=True)
+    message: Mapped[Optional[str]] = mapped_column(Text)
+    index: Mapped[Optional[int]] = mapped_column(Integer)
+    total: Mapped[Optional[int]] = mapped_column(Integer)
+    payload: Mapped[Optional[dict]] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )

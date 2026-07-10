@@ -22,7 +22,7 @@ python main.py init-db
 
 # 4. 跑完整流水线
 python main.py run --category "Home & Kitchen" --limit 10
-python main.py run --category "Toys & Games" --limit 10 --marketplace UK
+python main.py run --category "Toys & Games" --limit 10 --marketplace US
 
 # 5. 跑测试（纯单元测试，不联网、不需 API key）
 pytest tests/
@@ -44,17 +44,37 @@ WebUI 能做：
 - 查看 Recent Runs：读取 `data/exports/candidates_*.json` / `.xlsx`。
 - 查看和搜索历史候选商品：按 ASIN、标题、供应商搜索，并下载对应 Excel。
 - 保存/取消保存候选商品：保存状态写入 `data/agent_saved_items.json`。
+- Browser Assistant（可选）：在 Settings 中通过本地 `browser-use` 辅助检查 1688 登录态、诊断 Amazon/1688 页面、补采 1688 详情字段；不替换主 pipeline 爬虫。
+
+Browser Assistant 默认只允许访问 `amazon.com`、`1688.com`、`detail.1688.com`、`s.1688.com`、`127.0.0.1`、`localhost`。Docker 镜像会把 `browser-use` 安装到独立的 `/opt/browser-agent` venv，避免影响主 pipeline 依赖。本地非 Docker 运行时如需启用：
+
+```bash
+pip install browser-use
+python -m playwright install chromium
+```
+
+可通过 `.env` 覆盖白名单：
+
+```bash
+BROWSER_AGENT_ALLOWED_DOMAINS=amazon.com,1688.com,detail.1688.com,s.1688.com,127.0.0.1,localhost
+```
+
+Docker 中 `browser-use` 已内置，但它需要连接到一个已启用 remote debugging 的 Chrome/Edge。若 Browser Assistant 返回 `DevToolsActivePort not found`，请在宿主机或独立浏览器容器启动 Chrome remote debugging，并优先配置稳定 HTTP 入口：
+
+```bash
+BU_CDP_HTTP=http://host.docker.internal:9222
+```
+
+系统会从 `${BU_CDP_HTTP}/json/version` 自动解析当前 `webSocketDebuggerUrl`，所以 Chrome 重启后通常不需要重新复制 `/devtools/browser/<id>`。`BU_CDP_WS=ws://.../devtools/browser/<id>` 仍可用于高级固定端点，但 browser id 可能随 Chrome 重启变化。
 
 ## Docker
 
 本项目支持 Docker 部署，**正式跑默认禁用 mock 供应商**（`alibaba_allow_mock_suppliers` 默认 False，compose 环境变量再次硬设 `false`）。
+完整部署流程见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，包含 `.env` 配置、首次登录 cookies、Docker/本地启动、命令或 WebUI 按钮运行选品、Excel/JSON/Markdown 报告和 Dashboard 查看结果。
 
 ```bash
-# 构建镜像（python:3.12-slim + playwright chromium + scrapling patchright）
-docker compose build
-
-# 启动 Agent WebUI（长驻服务，端口映射到本机 127.0.0.1:8765）
-docker compose up
+# 一条命令构建并启动 Agent WebUI（端口默认只映射到本机 127.0.0.1:8765）
+docker compose up --build
 # 打开 http://127.0.0.1:8765
 
 # 一次性 CLI 任务（command 会被替换；entrypoint 仍会先跑 init-db）
@@ -66,9 +86,11 @@ docker compose run --rm amazon-selector smoke-run --category "Home & Kitchen" --
 docker compose run --rm amazon-selector pytest tests/ -q
 ```
 
-数据持久化：`./data:/app/data` 卷挂载，SQLite 数据库、缓存、cookies、导出文件都落在这里。首次启动时 entrypoint 会自动跑 `init-db` 建表。
+数据持久化：`./data:/app/data` 卷挂载，SQLite 数据库、缓存、cookies、导出文件、日志都落在这里。首次启动时 entrypoint 会自动创建 `cache/`、`exports/`、`images/`、`logs/` 并跑 `init-db` 建表。
 
-环境变量：参考 `.env.example`（本地文件，未入库）填好 `.env`，至少需要 `PPIO_API_KEY`（视觉识别）。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，容器通过卷挂载读取。关键变量：`PPIO_API_KEY`（视觉识别，必需）、`KEEPA_API_KEY`/`RAINFOREST_API_KEY`（Amazon API 抓取，可选，否则走 scrapling）、`MJJL_API_KEY`（卖家精灵市场分析，可选）、`ALIBABA_ALLOW_MOCK_SUPPLIERS`（正式跑保持 `false`）。
+环境变量：参考 `.env.example`（本地文件，未入库）填好 `.env`，至少需要 `PPIO_API_KEY`（视觉识别）。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，容器通过卷挂载读取。关键变量：`PPIO_API_KEY`（视觉识别，必需）、`KEEPA_API_KEY`/`RAINFOREST_API_KEY`（Amazon API 抓取，可选，否则走 scrapling）、`MJJL_API_KEY`（卖家精灵市场分析，可选）、`ALIBABA_DETAIL_ENRICH_LIMIT=2`（每个商品最多补全的 1688 详情候选数）、`LOG_DIR=data/logs`（日志目录）、`ALIBABA_ALLOW_MOCK_SUPPLIERS=false`（正式跑保持 `false`）。
+
+远程访问：默认 `docker-compose.yml` 使用 `127.0.0.1:8765:8765`，外部电脑无法直接访问。公司内网访问建议优先用 VPN/SSH 隧道；如果要开放到局域网，把端口映射改成 `"8765:8765"`，并在公司电脑防火墙放行 8765。当前 WebUI 没有登录鉴权，不建议直接暴露公网。
 
 ## 一次性登录（首次使用必做）
 

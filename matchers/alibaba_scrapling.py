@@ -201,7 +201,7 @@ def _parse_card(card) -> Optional[SupplierDTO]:
         repeat_buyer_rate=_parse_repeat_rate(full_text),
         is_factory="工厂" in full_text or "源头厂家" in full_text,
         title_cn=title or None,
-        raw_data={"title_cn": title, "full_text": full_text[:200]},
+        raw_data={"title_cn": title, "full_text": full_text[:200], "source": "alibaba_scrapling"},
     )
 
 

@@ -1,17 +1,36 @@
 """Local WebUI server for Amazon Selector Agent."""
 from __future__ import annotations
 
+import csv
 import json
 import mimetypes
+import os
+from io import StringIO
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from agent.history import list_export_runs, list_results, set_saved
+from agent.categories import canonical_category, list_categories
+from agent.browser_agent import run_browser_task
+from agent.chat_tools import answer_chat
+from agent.config_status import (
+    check_alibaba_pifatuan,
+    check_seller_sprite_asin,
+    configure_alibaba_supplier_search,
+    configure_seller_sprite,
+    get_config_status,
+)
+from agent.history import list_accepted_supplier_shortlist, list_export_runs, list_results, set_saved
+from agent.manual_queue import list_manual_queue, update_manual_item
+from agent.review_decisions import set_supplier_review
 from agent.runner import AGENT_SYSTEM_PROMPT, AgentRuntime
+from agent.run_events import list_run_events
 from agent.state import AgentRunConfig
+from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
 from config.settings import settings
+from crawlers.amazon_search import keyword_preview, normalize_keyword
+from matchers.imported_suppliers import import_alibaba_supplier_payload, list_imported_suppliers
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = PROJECT_ROOT / "webui"
@@ -27,8 +46,23 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/preflight":
             return self._json(self.runtime.preflight())
+        if parsed.path == "/api/config/status":
+            return self._json(get_config_status())
+        if parsed.path == "/api/categories":
+            return self._json({"marketplace": "US", "categories": list_categories()})
+        if parsed.path == "/api/keyword-preview":
+            keyword = str((parse_qs(parsed.query).get("keyword") or [""])[0]).strip()
+            if not keyword:
+                return self._json({"error": "keyword is required"}, HTTPStatus.BAD_REQUEST)
+            return self._json(keyword_preview(keyword))
         if parsed.path == "/api/jobs":
             return self._json({"jobs": self.runtime.list_jobs()})
+        if parsed.path == "/api/run-events":
+            qs = parse_qs(parsed.query)
+            run_id = (qs.get("run_id") or [None])[0]
+            job_id = (qs.get("job_id") or [None])[0]
+            limit = int((qs.get("limit") or [200])[0] or 200)
+            return self._json({"events": list_run_events(run_id=run_id, job_id=job_id, limit=limit)})
         if parsed.path.startswith("/api/jobs/"):
             job_id = parsed.path.rsplit("/", 1)[-1]
             job = self.runtime.get_job(job_id)
@@ -39,6 +73,22 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             run_id = (qs.get("run") or [None])[0]
             return self._json(list_results(run_id=run_id))
+        if parsed.path == "/api/reviewed-suppliers":
+            qs = parse_qs(parsed.query)
+            run_id = (qs.get("run") or [None])[0]
+            return self._json(list_accepted_supplier_shortlist(run_id=run_id))
+        if parsed.path == "/api/reviewed-suppliers.csv":
+            qs = parse_qs(parsed.query)
+            run_id = (qs.get("run") or [None])[0]
+            return self._send_reviewed_suppliers_csv(run_id=run_id)
+        if parsed.path == "/api/manual-queue":
+            qs = parse_qs(parsed.query)
+            status = (qs.get("status") or [None])[0]
+            return self._json(list_manual_queue(status=status))
+        if parsed.path == "/api/imported-suppliers":
+            qs = parse_qs(parsed.query)
+            limit = int((qs.get("limit") or [200])[0] or 200)
+            return self._json(list_imported_suppliers(limit=limit))
         if parsed.path == "/api/prompt":
             return self._json({"system_prompt": AGENT_SYSTEM_PROMPT})
         if parsed.path.startswith("/api/exports/"):
@@ -53,14 +103,85 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             body = self._read_json_body()
             if parsed.path == "/api/run":
                 config = _config_from_body(body)
+                market_guard_error = _market_data_guard_error(config)
+                if market_guard_error:
+                    return self._json({"error": market_guard_error}, HTTPStatus.BAD_REQUEST)
                 job = self.runtime.start_run(config)
                 return self._json({"job": job.to_dict()}, HTTPStatus.ACCEPTED)
+            if parsed.path.startswith("/api/jobs/"):
+                status, payload = _handle_job_action(parsed.path, self.runtime)
+                return self._json(payload, status)
+            if parsed.path == "/api/chat":
+                message = str(body.get("message") or "").strip()
+                if not message:
+                    return self._json({"error": "message is required"}, HTTPStatus.BAD_REQUEST)
+                return self._json(answer_chat(
+                    message,
+                    run_id=body.get("run_id"),
+                    selected_asin=body.get("selected_asin"),
+                    use_llm=True,
+                ))
+            if parsed.path == "/api/browser-agent":
+                status, payload = _handle_browser_agent_request(body)
+                return self._json(payload, status)
+            if parsed.path == "/api/config/seller-sprite":
+                result = configure_seller_sprite(
+                    str(body.get("key") or ""),
+                    base_url=body.get("base_url"),
+                )
+                return self._json(result)
+            if parsed.path == "/api/config/seller-sprite/asin-check":
+                result = check_seller_sprite_asin(
+                    str(body.get("asin") or ""),
+                    marketplace=str(body.get("marketplace") or "US"),
+                )
+                return self._json(result)
+            if parsed.path == "/api/config/alibaba/search-api":
+                result = configure_alibaba_supplier_search(
+                    str(body.get("namespace") or ""),
+                    str(body.get("method") or ""),
+                    keyword_param=body.get("keyword_param"),
+                    candidates=body.get("candidates"),
+                )
+                return self._json(result)
+            if parsed.path == "/api/config/alibaba/pifatuan-check":
+                result = check_alibaba_pifatuan(
+                    str(body.get("keyword") or "水杯"),
+                    limit=int(body.get("limit") or 3),
+                )
+                return self._json(result)
+            if parsed.path == "/api/imported-suppliers":
+                result = import_alibaba_supplier_payload(
+                    body.get("payload"),
+                    keyword=str(body.get("keyword") or ""),
+                    note=str(body.get("note") or ""),
+                )
+                return self._json(result)
             if parsed.path == "/api/saved":
                 key = str(body.get("key") or "")
                 if not key:
                     return self._json({"error": "key is required"}, HTTPStatus.BAD_REQUEST)
                 saved = bool(body.get("saved"))
                 return self._json(set_saved(key, saved))
+            if parsed.path == "/api/manual-queue":
+                key = str(body.get("key") or "")
+                if not key:
+                    return self._json({"error": "key is required"}, HTTPStatus.BAD_REQUEST)
+                item = update_manual_item(
+                    key,
+                    status=body.get("status"),
+                    note=body.get("note"),
+                )
+                return self._json({"item": item})
+            if parsed.path == "/api/supplier-review":
+                result = set_supplier_review(
+                    str(body.get("key") or ""),
+                    str(body.get("status") or ""),
+                    note=body.get("note"),
+                )
+                return self._json(result)
+        except KeyError:
+            return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except ValueError as exc:
             return self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
@@ -102,6 +223,21 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
         with path.open("rb") as f:
             self.wfile.write(f.read())
 
+    def _send_reviewed_suppliers_csv(self, run_id: str | None = None) -> None:
+        rows = list_accepted_supplier_shortlist(run_id=run_id)["items"]
+        output = StringIO()
+        writer = csv.DictWriter(output, fieldnames=reviewed_supplier_csv_fields(), extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+        data = output.getvalue().encode("utf-8-sig")
+        filename = f"accepted_suppliers_{run_id or 'all'}.csv"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.end_headers()
+        self.wfile.write(data)
+
 
 def run_server(host: str = "127.0.0.1", port: int = 8765) -> None:
     WEB_DIR.mkdir(parents=True, exist_ok=True)
@@ -110,20 +246,91 @@ def run_server(host: str = "127.0.0.1", port: int = 8765) -> None:
     httpd.serve_forever()
 
 
+def reviewed_supplier_csv_fields() -> list[str]:
+    return [
+        "export_id", "asin", "product_title", "total_score", "profit_margin",
+            "supplier_rank", "supplier", "supplier_title", "offer_url", "price_cny",
+            "moq", "monthly_sales", "repeat_buyer_rate", "is_factory", "sourcing_source",
+            "match_quality", "visual_similarity", "candidate_score",
+        "supplier_quality_score", "supplier_business_score", "spec_match_score",
+        "spec_conflicts", "spec_missing", "reviewed_at", "note",
+    ]
+
+
+def _handle_job_action(path: str, runtime: AgentRuntime) -> tuple[HTTPStatus, dict]:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) != 4 or parts[:2] != ["api", "jobs"]:
+        return HTTPStatus.NOT_FOUND, {"error": "not found"}
+    job_id, action = parts[2], parts[3]
+    if action == "cancel":
+        return HTTPStatus.OK, {"job": runtime.cancel_job(job_id)}
+    if action == "retry":
+        job = runtime.retry_job(job_id)
+        return HTTPStatus.ACCEPTED, {"job": job.to_dict()}
+    return HTTPStatus.NOT_FOUND, {"error": "not found"}
+
+
+def _handle_browser_agent_request(body: dict) -> tuple[HTTPStatus, dict]:
+    task_type = str(body.get("task_type") or "").strip()
+    if not task_type:
+        raise ValueError("task_type is required")
+    result = run_browser_task(
+        task_type,
+        url=str(body.get("url") or ""),
+        offer_url=str(body.get("offer_url") or ""),
+        asin=str(body.get("asin") or ""),
+        keyword=str(body.get("keyword") or ""),
+    )
+    return HTTPStatus.OK, result
+
+
 def _config_from_body(body: dict) -> AgentRunConfig:
-    category = str(body.get("category") or "").strip()
-    if not category:
-        raise ValueError("category is required")
     marketplace = str(body.get("marketplace") or "US").strip().upper()
-    if marketplace not in {"US", "UK", "DE", "JP"}:
-        raise ValueError("marketplace must be one of US, UK, DE, JP")
+    if marketplace != "US":
+        raise ValueError("marketplace is fixed to Amazon US")
+    source_mode = str(body.get("source_mode") or "category").strip().lower()
+    if source_mode not in {"category", "keyword"}:
+        raise ValueError("source_mode must be category or keyword")
+    keyword = str(body.get("keyword") or "").strip()
+    category = str(body.get("category") or "").strip()
+    if source_mode == "keyword":
+        if not keyword:
+            raise ValueError("keyword is required")
+        normalized = normalize_keyword(keyword)
+        if normalized.requires_english_query:
+            raise ValueError(
+                "Amazon US keyword sourcing requires an English query. "
+                "Replace the Chinese product phrase with the English phrase shown on Amazon US."
+            )
+        category = ""
+    else:
+        if not category:
+            raise ValueError("category is required")
+        category = canonical_category(category)
     limit = int(body.get("limit") or 10)
     if limit < 1 or limit > 500:
         raise ValueError("limit must be between 1 and 500")
+    request_no_mock = bool(body.get("no_mock", True))
+    no_mock = request_no_mock if _dev_allow_mock_suppliers() else True
     return AgentRunConfig(
         category=category,
+        source_mode=source_mode,  # type: ignore[arg-type]
+        keyword=keyword,
         marketplace=marketplace,
         limit=limit,
-        no_mock=bool(body.get("no_mock", True)),
+        no_mock=no_mock,
         llm_verification=body.get("llm_verification"),
+        require_market_data=bool(body.get("require_market_data", False)),
+        require_supplier_evidence=bool(body.get("require_supplier_evidence", False)),
     )
+
+
+def _dev_allow_mock_suppliers() -> bool:
+    return str(os.getenv("DEV_ALLOW_MOCK_SUPPLIERS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _market_data_guard_error(config: AgentRunConfig) -> str | None:
+    if not config.require_market_data:
+        return None
+    ready, reason = seller_sprite_market_data_guard()
+    return None if ready else reason

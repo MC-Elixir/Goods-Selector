@@ -34,6 +34,7 @@ from urllib.parse import quote, urlparse, parse_qs
 
 from loguru import logger
 
+from matchers.alibaba_detail import apply_1688_detail_to_supplier, parse_1688_offer_detail_html
 from matchers.alibaba_pailitao import SupplierDTO
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -331,10 +332,36 @@ class Alibaba1688PlaywrightMatcher:
                 logger.debug(f"[1688] Playwright 卡片解析失败: {e}")
         return results
 
+    def enrich_supplier_detail(self, supplier: SupplierDTO) -> SupplierDTO:
+        """Open a 1688 detail page and fill MOQ/spec/logistics/risk fields."""
+        if not supplier.offer_url:
+            return supplier
+        try:
+            with _playwright_context(self.headless, self._proxy) as ctx:
+                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                loaded = _load_cookies_into(ctx)
+                if loaded:
+                    logger.info(f"[1688-detail] 已加载 {loaded} 个 cookies")
+                page.goto(supplier.offer_url, wait_until="domcontentloaded", timeout=60_000)
+                page.wait_for_timeout(int(min(self.page_wait, 5) * 1000))
+                if _is_tmd_block(page.url or "", page.title()):
+                    raise RuntimeError("1688 TMD 验证码拦截，请刷新 1688 登录态并手动解验证码")
+                html = page.content()
+            return _enrich_supplier_from_detail_html(supplier, html)
+        except Exception as exc:
+            logger.warning(f"[1688-detail] 详情页补采失败 offer={supplier.alibaba_offer_id}: {exc}")
+            supplier.raw_data.setdefault("detail_error", str(exc))
+            return supplier
+
 
 def _card_full_text(card) -> str:
     text_nodes = card.css("::text").getall() if hasattr(card, 'css') else []
     return "\n".join(t.strip() for t in text_nodes if t.strip()) if text_nodes else ""
+
+
+def _enrich_supplier_from_detail_html(supplier: SupplierDTO, html: str) -> SupplierDTO:
+    detail = parse_1688_offer_detail_html(html)
+    return apply_1688_detail_to_supplier(supplier, detail)
 
 
 def _parse_card(card) -> Optional[SupplierDTO]:
@@ -406,7 +433,7 @@ def _parse_card(card) -> Optional[SupplierDTO]:
         delivery_days=None,
         fba_ready=None,
         title_cn=title,
-        raw_data={"title_cn": title, "full_text": full_text[:200]},
+        raw_data={"title_cn": title, "full_text": full_text[:200], "source": "alibaba_playwright"},
     )
 
 
@@ -481,7 +508,7 @@ def _parse_playwright_card(card) -> Optional[SupplierDTO]:
         delivery_days=None,
         fba_ready=None,
         title_cn=title,
-        raw_data={"title_cn": title, "full_text": full_text[:200]},
+        raw_data={"title_cn": title, "full_text": full_text[:200], "source": "alibaba_playwright"},
     )
 
 

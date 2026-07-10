@@ -7,12 +7,16 @@ import time
 from pathlib import Path
 from typing import Any
 
+from agent.alibaba_diagnostics import load_alibaba_open_diagnostic
+from agent.seller_sprite_diagnostics import load_seller_sprite_diagnostic
 from config.settings import DATA_DIR, settings
 
 
 def run_preflight() -> dict[str, Any]:
     checks = [
         _check_ppio(),
+        _check_seller_sprite(),
+        _check_alibaba_open(),
         _check_amazon_cookies(),
         _check_1688_cookies(),
         _check_database(),
@@ -37,6 +41,56 @@ def _check_ppio() -> dict[str, Any]:
     return _err("vision", "Vision model key missing", "Set PPIO_API_KEY or ANTHROPIC_API_KEY")
 
 
+def _check_seller_sprite() -> dict[str, Any]:
+    if settings.mjjl_api_key:
+        diagnostic = load_seller_sprite_diagnostic()
+        if diagnostic.get("has_market_evidence"):
+            return _ok(
+                "seller_sprite",
+                "SellerSprite ASIN check passed",
+                f"{diagnostic.get('asin') or '-'} · key {diagnostic.get('key_length')} chars",
+            )
+        if diagnostic.get("error"):
+            return _warn(
+                "seller_sprite",
+                "SellerSprite ASIN check failed",
+                str(diagnostic.get("error")),
+            )
+        return _warn(
+            "seller_sprite",
+            "SellerSprite API key configured but unverified",
+            "Run SellerSprite ASIN check before requiring market data",
+        )
+    return _warn("seller_sprite", "SellerSprite API key missing", "Set MJJL_API_KEY")
+
+
+def _check_alibaba_open() -> dict[str, Any]:
+    if settings.alibaba_app_key and settings.alibaba_app_secret and settings.alibaba_access_token:
+        diagnostic = load_alibaba_open_diagnostic()
+        if diagnostic.get("has_supplier_evidence"):
+            return _ok(
+                "alibaba_open",
+                "1688 pifatuan check passed",
+                f"{diagnostic.get('keyword') or '-'} · {diagnostic.get('count') or 0} suppliers",
+            )
+        if diagnostic.get("error"):
+            return _warn(
+                "alibaba_open",
+                "1688 pifatuan check failed",
+                str(diagnostic.get("error")),
+            )
+        return _warn(
+            "alibaba_open",
+            "1688 Open Platform configured but unverified",
+            "Run 1688 pifatuan check before relying on API sourcing",
+        )
+    return _warn(
+        "alibaba_open",
+        "1688 Open Platform config missing",
+        "Set ALIBABA_APP_KEY / ALIBABA_APP_SECRET / ALIBABA_ACCESS_TOKEN",
+    )
+
+
 def _check_amazon_cookies() -> dict[str, Any]:
     path = DATA_DIR / "amazon_cookies.json"
     if path.exists() and path.stat().st_size > 1000:
@@ -46,15 +100,22 @@ def _check_amazon_cookies() -> dict[str, Any]:
 
 def _check_1688_cookies() -> dict[str, Any]:
     path = DATA_DIR / "1688_cookies.json"
+    api_ready = bool(load_alibaba_open_diagnostic().get("has_supplier_evidence"))
     if not path.exists():
+        if api_ready:
+            return _warn("1688_cookies", "1688 browser cookies missing", "Open Platform verified; Playwright fallback unavailable")
         return _err("1688_cookies", "1688 cookies missing", "Run python setup_1688_login.py")
     try:
         cookies = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
+        if api_ready:
+            return _warn("1688_cookies", "1688 browser cookies unreadable", "Open Platform verified; Playwright fallback unavailable")
         return _err("1688_cookies", "1688 cookies unreadable", str(path))
     names = {c.get("name") for c in cookies if isinstance(c, dict)}
     if "unb" in names:
         return _ok("1688_cookies", "1688 login cookie valid", f"{len(cookies)} cookies")
+    if api_ready:
+        return _warn("1688_cookies", "1688 browser cookie incomplete", "Open Platform verified; Playwright fallback unavailable")
     return _err("1688_cookies", "1688 login cookie incomplete", "Login cookie unb not found")
 
 

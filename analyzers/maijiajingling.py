@@ -79,6 +79,8 @@ class MarketAnalysisDTO:
     # ---- 关键词 ----
     main_keyword: Optional[str] = None
     search_volume_monthly: Optional[int] = None
+    monthly_purchases: Optional[int] = None
+    purchase_rate: Optional[float] = None
     keyword_difficulty: Optional[float] = None
     opportunity_score: Optional[float] = None
     seasonality: dict = field(default_factory=dict)
@@ -217,14 +219,25 @@ def _extract_keyword_metrics(body: dict) -> dict[str, Any]:
     return {
         "main_keyword": _pick(best, _KEYWORD_KEYS),
         "search_volume_monthly": search_volume,
+        "monthly_purchases": _to_int(_pick(best, _PURCHASE_KEYS)),
+        "purchase_rate": _to_float(_pick(best, _PURCHASE_RATE_KEYS)),
         "keyword_difficulty": difficulty,
         "opportunity_score": opportunity,
         "seasonality": _extract_seasonality(best),
     }
 
 
-_KEYWORD_KEYS = ("keyword", "keywords", "keywordText", "searchTerm", "phrase")
+def _top_node_id(node_id_path: Optional[str]) -> Optional[str]:
+    """Return the top-level numeric node id needed by BSR prediction."""
+    if not node_id_path:
+        return None
+    first = str(node_id_path).split(":", 1)[0].strip()
+    return first or None
+
+
+_KEYWORD_KEYS = ("keyword", "keywords", "keywrod", "keywordText", "searchTerm", "phrase")
 _SEARCH_VOLUME_KEYS = (
+    "search",
     "searches",
     "searchVolume",
     "searchVolumeMonthly",
@@ -232,6 +245,7 @@ _SEARCH_VOLUME_KEYS = (
     "search_volume_monthly",
     "searchesMonthly",
 )
+_PURCHASE_KEYS = ("purchase", "purchases", "monthlyPurchases", "purchaseCount")
 _DIFFICULTY_KEYS = (
     "keywordDifficulty",
     "difficulty",
@@ -255,6 +269,40 @@ def _extract_items(body: dict) -> list[dict]:
         if data:
             return [data]
     return []
+
+
+def _competitor_items(body: dict) -> list[dict]:
+    data = body.get("data") if isinstance(body, dict) else None
+    if isinstance(data, dict):
+        for key in ("items", "list", "records", "rows"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [i for i in value if isinstance(i, dict)]
+    if isinstance(data, list):
+        return [i for i in data if isinstance(i, dict)]
+    return []
+
+
+def _item_float(item: dict, *keys: str) -> Optional[float]:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, dict):
+            value = value.get("amount")
+        parsed = _to_float(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _item_int(item: dict, *keys: str) -> Optional[int]:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, dict):
+            value = value.get("amount")
+        parsed = _to_int(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _pick(item: dict, keys: tuple[str, ...]) -> Any:
@@ -386,28 +434,30 @@ class MaijiajinglingClient:
             logger.warning("MJJL_API_KEY 未配置，跳过市场分析")
             return MarketAnalysisDTO()
 
-        # ---- 1. ASIN 详情 ----
-        detail = self.asin_detail(marketplace, asin)
-        if not detail:
-            return MarketAnalysisDTO(asin=asin, marketplace=marketplace)
+        dto = MarketAnalysisDTO(asin=asin, marketplace=marketplace)
 
-        dto = MarketAnalysisDTO(
-            asin=detail.asin,
-            marketplace=detail.marketplace,
-            brand=detail.brand,
-            seller_name=detail.seller_name,
-            title=detail.title,
-            bsr=detail.bsr,
-            bsr_category=detail.bsr_category_name,
-            price=detail.price or detail.list_price,
-            currency=detail.currency,
-            rating=detail.rating,
-            review_count=detail.review_count,
-            available_date=detail.available_date,
-            has_a_plus=detail.has_a_plus,
-            is_best_seller=detail.is_best_seller,
-            is_amazon_choice=detail.is_amazon_choice,
-        )
+        # ---- 1. ASIN 详情 ----
+        detail = AsinDetailDTO(asin=asin, marketplace=marketplace)
+        try:
+            detail = self.asin_detail(marketplace, asin)
+            if detail:
+                dto.brand = detail.brand
+                dto.seller_name = detail.seller_name
+                dto.title = detail.title
+                dto.bsr = detail.bsr
+                dto.bsr_category = detail.bsr_category_name
+                dto.price = detail.price or detail.list_price
+                dto.currency = detail.currency
+                dto.rating = detail.rating
+                dto.review_count = detail.review_count
+                dto.available_date = detail.available_date
+                dto.has_a_plus = detail.has_a_plus
+                dto.is_best_seller = detail.is_best_seller
+                dto.is_amazon_choice = detail.is_amazon_choice
+                dto.raw_data["asin_detail"] = detail.raw
+        except Exception as e:
+            dto.raw_data["asin_detail_error"] = str(e)
+            logger.debug(f"ASIN 详情失败 asin={asin}: {e}")
 
         # ---- 2. BSR 销量预测 ----
         if detail.bsr is not None and detail.bsr_category_id:
@@ -432,12 +482,24 @@ class MaijiajinglingClient:
                 size=10,
             )
             dto.raw_data["competitor_lookup"] = comp_data
-            items = comp_data.get("data", {}).get("items") or comp_data.get("data", {}).get("list") or []
+            items = _competitor_items(comp_data)
             if items:
-                prices = [i.get("price") or i.get("listPrice", {}).get("amount") for i in items if i.get("price") or (i.get("listPrice") or {}).get("amount")]
-                reviews = [i.get("reviewCount") or i.get("review_count") or 0 for i in items]
+                prices = [
+                    value for value in (
+                        _item_float(i, "price", "listPrice", "buyBoxPrice", "averagePrice")
+                        for i in items
+                    )
+                    if value is not None
+                ]
+                reviews = [
+                    value for value in (
+                        _item_int(i, "reviewCount", "review_count", "reviews", "ratings")
+                        for i in items
+                    )
+                    if value is not None
+                ]
                 total_revenue = sum(
-                    (i.get("totalRevenue") or i.get("total_revenue") or 0)
+                    _item_float(i, "totalRevenue", "total_revenue", "monthlyRevenue", "revenue", "amzSales") or 0
                     for i in items
                 )
                 if prices:
@@ -446,11 +508,48 @@ class MaijiajinglingClient:
                     dto.avg_review_count_top10 = round(sum(reviews) / len(reviews))
                 dto.competing_listings = len(items)
                 # 头部集中度：当前 ASIN 销额 ÷ 前10销额和
-                target_revenue = items[0].get("totalRevenue") or items[0].get("total_revenue") or 0
+                target_revenue = _item_float(
+                    items[0],
+                    "totalRevenue",
+                    "total_revenue",
+                    "monthlyRevenue",
+                    "revenue",
+                    "amzSales",
+                ) or 0
                 if total_revenue > 0 and target_revenue > 0:
                     dto.top10_revenue_share = round(target_revenue / total_revenue, 4)
+                target = next(
+                    (i for i in items if str(i.get("asin") or "").upper() == asin.upper()),
+                    items[0],
+                )
+                dto.title = dto.title or target.get("title") or target.get("productTitle")
+                dto.brand = dto.brand or target.get("brand")
+                dto.seller_name = dto.seller_name or target.get("sellerName") or target.get("seller_name")
+                dto.price = dto.price or _item_float(target, "price", "listPrice", "buyBoxPrice")
+                dto.rating = dto.rating or _item_float(target, "rating", "ratingValue")
+                dto.review_count = dto.review_count or _item_int(
+                    target,
+                    "reviewCount",
+                    "review_count",
+                    "reviews",
+                    "ratings",
+                )
+                dto.bsr = dto.bsr or _item_int(target, "bsr", "bsrRank")
+                monthly_units = _item_int(
+                    target,
+                    "units",
+                    "amzUnit",
+                    "totalUnits",
+                    "total_units",
+                    "monthlySales",
+                    "monthly_sales",
+                )
+                if monthly_units is not None:
+                    dto.est_monthly_sales = dto.est_monthly_sales or monthly_units
+                    dto.est_daily_sales = dto.est_daily_sales or max(round(monthly_units / 30), 1)
         except Exception as e:
             logger.debug(f"竞品查询失败 asin={asin}: {e}")
+            dto.raw_data["competitor_lookup_error"] = str(e)
 
         # ---- 4. 关键词选品 ----
         keyword_candidate = _choose_keyword(keyword, detail)
@@ -464,14 +563,30 @@ class MaijiajinglingClient:
                 metrics = _extract_keyword_metrics(kw_data)
                 dto.main_keyword = metrics.get("main_keyword") or keyword_candidate
                 dto.search_volume_monthly = metrics.get("search_volume_monthly")
+                dto.monthly_purchases = metrics.get("monthly_purchases")
+                dto.purchase_rate = metrics.get("purchase_rate")
                 dto.keyword_difficulty = metrics.get("keyword_difficulty")
                 dto.opportunity_score = metrics.get("opportunity_score")
                 dto.seasonality = metrics.get("seasonality") or {}
             except Exception as e:
                 logger.debug(f"关键词选品失败 asin={asin} keyword={keyword_candidate!r}: {e}")
+                try:
+                    trend_data = self.keyword_research_trends(
+                        keyword=keyword_candidate,
+                        marketplace=marketplace,
+                    )
+                    dto.raw_data["keyword_research_trends"] = trend_data
+                    metrics = _extract_keyword_metrics(trend_data)
+                    dto.main_keyword = metrics.get("main_keyword") or keyword_candidate
+                    dto.search_volume_monthly = metrics.get("search_volume_monthly")
+                    dto.monthly_purchases = metrics.get("monthly_purchases")
+                    dto.purchase_rate = metrics.get("purchase_rate")
+                    dto.seasonality = metrics.get("seasonality") or {}
+                except Exception as trend_exc:
+                    logger.debug(
+                        f"关键词趋势失败 asin={asin} keyword={keyword_candidate!r}: {trend_exc}"
+                    )
 
-        # 保留原始数据
-        dto.raw_data["asin_detail"] = detail.raw
         return dto
 
     # --------------------------------------------------------
@@ -518,29 +633,29 @@ class MaijiajinglingClient:
             brand_url=d.get("brandUrl"),
             seller_name=d.get("sellerName"),
             seller_url=d.get("sellerUrl"),
-            fulfilled_by_amazon=d.get("fulfilledByAmazon") == "Y",
+            fulfilled_by_amazon=d.get("fulfilledByAmazon") == "Y" or d.get("fulfillment") == "FBA",
             price=d.get("price"),
             list_price=lp.get("amount"),
             currency=lp.get("currency"),
             rating=d.get("rating"),
-            review_count=d.get("reviewCount"),
+            review_count=d.get("reviewCount") or d.get("reviews") or d.get("ratings"),
             answered_count=d.get("answeredCount"),
-            bsr=d.get("bsr"),
-            bsr_category_id=bsr_cat.get("id"),
-            bsr_category_name=bsr_cat.get("name"),
+            bsr=d.get("bsr") or d.get("bsrRank"),
+            bsr_category_id=bsr_cat.get("id") or _top_node_id(d.get("nodeIdPath")) or d.get("bsrId"),
+            bsr_category_name=bsr_cat.get("name") or d.get("bsrLabel"),
             title=d.get("title") or d.get("productTitle"),
             description=d.get("description"),
-            bullet_points=d.get("bulletPoints") or [],
+            bullet_points=d.get("bulletPoints") or d.get("features") or [],
             available_date=available_date,
-            main_image=d.get("mainImage"),
+            main_image=d.get("mainImage") or d.get("imageUrl"),
             images=d.get("images") or [],
             dimensions=d.get("dimensions"),
             weight=d.get("weight"),
-            category_id=cat.get("id"),
-            category_name=cat.get("name"),
-            category_path=cat.get("nodePath"),
-            variation_count=d.get("variationCount"),
-            parent_asin=d.get("parentAsin"),
+            category_id=cat.get("id") or d.get("nodeId"),
+            category_name=cat.get("name") or d.get("nodeLabel"),
+            category_path=cat.get("nodePath") or d.get("nodeLabelPath"),
+            variation_count=d.get("variationCount") or d.get("variations"),
+            parent_asin=d.get("parentAsin") or d.get("parent"),
             raw=d,
         )
 
@@ -671,6 +786,26 @@ class MaijiajinglingClient:
         return body
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5), reraise=True)
+    def keyword_research_trends(
+        self,
+        keyword: str,
+        marketplace: str = "US",
+    ) -> dict:
+        """关键词选品-趋势数据（API 11）— POST /v1/keyword-research/trends"""
+        if not self._configured:
+            return {"code": "SKIP", "data": []}
+
+        resp = self._client.post(
+            "/v1/keyword-research/trends",
+            json={"marketplace": marketplace, "keyword": keyword},
+        )
+        resp.raise_for_status()
+        body: dict = resp.json()
+        if body.get("code") != "OK":
+            raise RuntimeError(f"关键词趋势 API 返回错误: {body.get('message')}")
+        return body
+
+    @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5), reraise=True)
     def category_lookup(
         self,
         marketplace: str,
@@ -678,20 +813,19 @@ class MaijiajinglingClient:
         parent_id: Optional[str] = None,
         depth: int = 2,
     ) -> dict:
-        """查产品类目（API 9）— POST /v1/product/category-lookup"""
+        """查产品类目（API 9）— GET /v1/product/node"""
         if not self._configured:
             return {"code": "SKIP", "data": {"items": []}}
 
-        payload: dict[str, Any] = {
+        params: dict[str, Any] = {
             "marketplace": marketplace,
-            "depth": min(depth, 3),
         }
         if keyword:
-            payload["keyword"] = keyword
+            params["keyword"] = keyword
         if parent_id:
-            payload["parentId"] = parent_id
+            params["nodeIdPath"] = parent_id
 
-        resp = self._client.post("/v1/product/category-lookup", json=payload)
+        resp = self._client.get("/v1/product/node", params=params)
         resp.raise_for_status()
         body: dict = resp.json()
         if body.get("code") != "OK":

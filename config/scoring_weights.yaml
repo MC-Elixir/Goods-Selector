@@ -142,6 +142,22 @@ scoring_curves:
       - "Health & Personal Care"       # FDA 风险
       - "Electronics > Car Electronics" # FCC 认证
 
+    # 标题/类目受限词：杀虫剂、药剂、液体诱饵等通常涉及合规/运输/平台限制
+    restricted_keyword_penalty: 0.25
+    restricted_keywords:
+      - "pesticide"
+      - "insecticide"
+      - "ant killer"
+      - "ant bait"
+      - "bait station"
+      - "liquid bait"
+      - "poison"
+      - "杀虫"
+      - "灭蚁"
+      - "蚂蚁药"
+      - "农药"
+      - "药剂"
+
     # 季节性风险（季节性强 → 库存压力大、资金回转慢）
     seasonality_cv_threshold: 0.4      # 月销售额变异系数 > 0.4 视为强季节性
     seasonality_penalty: 0.7           # 强季节性产品，风险得分 ×0.7
@@ -167,7 +183,12 @@ hard_filters:
   # 供应链
   max_moq: 500                         # MOQ > 500 淘汰（首单资金压力过大）
   min_supplier_count: 1                # 至少 1 家可用供应商
+  min_top_supplier_match_quality: 0.45 # top 供应商图文/参数综合匹配过低则淘汰
+  min_top_supplier_spec_score: 0.45    # top 供应商结构化参数匹配过低则淘汰
+  max_top_supplier_spec_conflicts: 0   # 有明确参数冲突时不进入正式候选
+  min_top_supplier_candidate_score: 0.45 # top 供应商综合候选分过低则淘汰
 
   # 品牌
   exclude_brand_listings: true         # 排除明显大牌 Listing
+  exclude_restricted_keywords: true    # 排除杀虫/药剂等受限合规风险品
   exclude_amazon_choice: false         # 是否排除 Amazon's Choice（默认不排除）

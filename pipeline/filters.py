@@ -18,9 +18,16 @@ def rank_candidates(
     secondary_key: str = "net_profit",
 ) -> list:
     """对通过硬筛的产品按总分排序，取 Top N。"""
-    candidates = [p for p in scored_products if p.score.passed_hard_filter]
+    candidates = [
+        p for p in scored_products
+        if p.score is not None and p.score.passed_hard_filter
+    ]
     candidates.sort(
-        key=lambda p: (p.score.total_score, getattr(p, secondary_key, 0)),
+        key=lambda p: (
+            p.score.total_score,
+            getattr(p, "top_supplier_candidate_score", 0),
+            getattr(p, secondary_key, 0),
+        ),
         reverse=True,
     )
     return candidates[:top_n] if top_n else candidates

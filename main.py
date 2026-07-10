@@ -2,13 +2,17 @@
 
 用法：
     python main.py run --category "Home & Kitchen" --limit 50
+    python main.py smoke-run --category "Home & Kitchen" --limit 3
     python main.py init-db
 """
 from __future__ import annotations
 
+import json
+
 import click
 from loguru import logger
 
+from config.settings import PROJECT_ROOT
 from db.init_db import init_db as _init_db
 from pipeline.orchestrator import run_pipeline
 
@@ -32,6 +36,109 @@ def run_cmd(category: str, limit: int, marketplace: str):
     """跑一次完整选品流水线。"""
     run_id = run_pipeline(category=category, limit=limit, marketplace=marketplace)
     logger.info(f"完成，RunLog id = {run_id}")
+
+
+@cli.command("smoke-run")
+@click.option("--category", required=True, help='Amazon 一级类目，如 "Home & Kitchen"')
+@click.option("--limit", default=3, type=click.IntRange(1, 20), help="抓取数量，建议 1-5")
+@click.option("--top-n", default=5, type=click.IntRange(1, 20), help="最终候选数量")
+@click.option("--marketplace", default="US", type=click.Choice(["US", "UK", "DE", "JP"]))
+@click.option("--allow-mock", is_flag=True, default=False, help="允许 mock 供应商；正式试跑默认禁用")
+@click.option("--llm-verification", is_flag=True, default=False, help="启用 LLM 视觉验证")
+@click.option("--skip-preflight", is_flag=True, default=False, help="跳过 preflight 阻塞检查")
+@click.option("--require-market-data", is_flag=True, default=False, help="要求导出结果全部带 SellerSprite 市场数据")
+@click.option("--require-supplier-evidence", is_flag=True, default=False, help="要求导出结果全部带真实供应商匹配证据")
+@click.option("--timeout-seconds", default=180, type=click.IntRange(0, 3600), help="试跑总超时；0 表示不限制")
+def smoke_run_cmd(
+    category: str,
+    limit: int,
+    top_n: int,
+    marketplace: str,
+    allow_mock: bool,
+    llm_verification: bool,
+    skip_preflight: bool,
+    require_market_data: bool,
+    require_supplier_evidence: bool,
+    timeout_seconds: int,
+):
+    """受控小批量 E2E 试跑，输出 JSON 审计摘要。"""
+    from agent.smoke_run import SmokeRunConfig, run_smoke
+
+    result = run_smoke(SmokeRunConfig(
+        category=category,
+        marketplace=marketplace,
+        limit=limit,
+        top_n=top_n,
+        no_mock=not allow_mock,
+        llm_verification=llm_verification,
+        require_preflight=not skip_preflight,
+        require_market_data=require_market_data,
+        require_supplier_evidence=require_supplier_evidence,
+        timeout_seconds=timeout_seconds,
+    ))
+    click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    if result.get("status") != "success":
+        raise click.exceptions.Exit(2)
+
+
+@cli.command("seller-sprite-check")
+@click.option("--asin", default="B01M16WBW1", help="用于 ASIN/竞品能力探针的 ASIN")
+@click.option("--marketplace", default="US", type=click.Choice(["US", "UK", "DE", "JP"]))
+@click.option("--keyword", default="water bottle", help="用于关键词趋势能力探针的关键词")
+def seller_sprite_check_cmd(asin: str, marketplace: str, keyword: str):
+    """低额度检查卖家精灵 API 能力，不打印密钥。"""
+    from agent.config_status import check_seller_sprite_capabilities
+
+    payload = check_seller_sprite_capabilities(
+        asin=asin,
+        marketplace=marketplace,
+        keyword=keyword,
+    )
+    click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    authorized_data_api_count = payload.get("authorized_data_api_count", payload.get("authorized_api_count"))
+    if not payload["configured"] or not authorized_data_api_count:
+        raise click.exceptions.Exit(2)
+
+
+@cli.command("seller-sprite-asin-check")
+@click.option("--asin", required=True, help="要检查的 Amazon ASIN，只调用一次 ASIN 详情接口")
+@click.option("--marketplace", default="US", type=click.Choice(["US", "UK", "DE", "JP"]))
+def seller_sprite_asin_check_cmd(asin: str, marketplace: str):
+    """用单个 ASIN 详情调用验证卖家精灵 key 与解析字段，不打印密钥。"""
+    from agent.config_status import check_seller_sprite_asin
+
+    payload = check_seller_sprite_asin(asin, marketplace)
+    click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    if not payload["configured"] or payload["error"] or not payload["has_market_evidence"]:
+        raise click.exceptions.Exit(2)
+
+
+@cli.command("seller-sprite-configure")
+@click.option("--key", prompt=True, hide_input=True, help="卖家精灵 secret-key；不会回显")
+@click.option("--base-url", default=None, help="可选 API base，默认不修改")
+def seller_sprite_configure_cmd(key: str, base_url: str | None):
+    """安全写入卖家精灵配置到本地 .env，不打印密钥。"""
+    from agent.config_status import configure_seller_sprite
+
+    try:
+        payload = configure_seller_sprite(key, base_url)
+    except ValueError as exc:
+        click.echo(json.dumps({"configured": False, "error": str(exc)}, ensure_ascii=False, indent=2))
+        raise click.exceptions.Exit(2)
+    click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@cli.command("alibaba-pifatuan-check")
+@click.option("--keyword", default="水杯", help="用于检查 1688 分销严选 API 的关键词")
+@click.option("--limit", default=3, type=click.IntRange(1, 10), help="最多返回候选摘要数量")
+def alibaba_pifatuan_check_cmd(keyword: str, limit: int):
+    """用一次小流量关键词搜索验证 1688 分销严选开放平台，不打印密钥。"""
+    from agent.config_status import check_alibaba_pifatuan
+
+    payload = check_alibaba_pifatuan(keyword, limit)
+    click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    if not payload["configured"] or payload["error"]:
+        raise click.exceptions.Exit(2)
 
 
 @cli.command("agent-web")

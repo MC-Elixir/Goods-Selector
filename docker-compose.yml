@@ -10,5 +10,7 @@ services:
       - ./data:/app/data
     ports:
       - "127.0.0.1:8765:8765"   # local-only; drop "127.0.0.1:" prefix to expose remotely
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["agent-web", "--host", "0.0.0.0", "--port", "8765"]
     restart: unless-stopped

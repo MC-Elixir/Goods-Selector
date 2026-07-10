@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import asdict
 
 from crawlers.amazon_bsr import ProductDTO
 from matchers.alibaba_pailitao import SupplierDTO
@@ -34,6 +35,28 @@ def _mock_supplier() -> SupplierDTO:
     )
 
 
+def _rejected_supplier() -> SupplierDTO:
+    return SupplierDTO(
+        alibaba_offer_id="780485617590",
+        offer_url="https://detail.1688.com/offer/780485617590.html",
+        base_price_cny=12.5,
+        moq=10,
+        match_quality_score=0.31,
+        match_verification_method="heuristic_rejected",
+    )
+
+
+def _low_quality_supplier() -> SupplierDTO:
+    return SupplierDTO(
+        alibaba_offer_id="780485617591",
+        offer_url="https://detail.1688.com/offer/780485617591.html",
+        base_price_cny=12.5,
+        moq=10,
+        match_quality_score=0.20,
+        match_verification_method="heuristic",
+    )
+
+
 def test_cache_round_trip_real_supplier(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "_CACHE_FILE", tmp_path / "real_supplier_results.json")
 
@@ -51,6 +74,41 @@ def test_mock_supplier_is_not_cached(tmp_path, monkeypatch):
 
     key = cache.make_cache_key(_product(), ["keyword"], top_k=5)
     cache.save_cached_suppliers(key, [_mock_supplier()])
+
+    assert cache.load_cached_suppliers(key, ttl_seconds=3600) == []
+
+
+def test_rejected_supplier_is_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "_CACHE_FILE", tmp_path / "real_supplier_results.json")
+
+    key = cache.make_cache_key(_product(), ["keyword"], top_k=5)
+    cache.save_cached_suppliers(key, [_rejected_supplier()])
+
+    assert cache.load_cached_suppliers(key, ttl_seconds=3600) == []
+
+
+def test_low_quality_supplier_is_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "_CACHE_FILE", tmp_path / "real_supplier_results.json")
+
+    key = cache.make_cache_key(_product(), ["keyword"], top_k=5)
+    cache.save_cached_suppliers(key, [_low_quality_supplier()])
+
+    assert cache.load_cached_suppliers(key, ttl_seconds=3600) == []
+
+
+def test_legacy_rejected_cache_entry_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "_CACHE_FILE", tmp_path / "real_supplier_results.json")
+
+    key = cache.make_cache_key(_product(), ["keyword"], top_k=5)
+    cache._write_json(
+        cache._CACHE_FILE,
+        {
+            key: {
+                "created_at": time.time(),
+                "suppliers": [asdict(_rejected_supplier())],
+            },
+        },
+    )
 
     assert cache.load_cached_suppliers(key, ttl_seconds=3600) == []
 
@@ -75,3 +133,21 @@ def test_circuit_breaker_opens_and_expires(tmp_path, monkeypatch):
         {"blocked_until": time.time() - 1, "reason": "expired"},
     )
     assert cache.circuit_is_open() is False
+
+
+def test_offer_detail_cache_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "_DETAIL_CACHE_FILE", tmp_path / "offer_details.json")
+
+    cache.save_cached_offer_detail("780485617589", {"moq": 20, "delivery_days": 7})
+
+    assert cache.load_cached_offer_detail("780485617589", ttl_seconds=3600) == {
+        "moq": 20,
+        "delivery_days": 7,
+    }
+
+
+def test_offer_detail_cache_respects_ttl(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "_DETAIL_CACHE_FILE", tmp_path / "offer_details.json")
+    cache.save_cached_offer_detail("780485617589", {"moq": 20})
+
+    assert cache.load_cached_offer_detail("780485617589", ttl_seconds=0) == {}

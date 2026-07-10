@@ -229,7 +229,7 @@ def _item_to_dto(item: dict) -> SupplierDTO:
         delivery_days=None,       # 需调详情接口补充
         fba_ready=None,           # 需人工确认或详情接口
         title_cn=subject or None,
-        raw_data=item,
+        raw_data={**item, "source": "alibaba_text_search"},
     )
 
 

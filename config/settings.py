@@ -5,7 +5,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     ppio_api_base: str = "https://api.ppio.com/openai"
     ppio_model: str = "qwen/qwen3.5-plus"  # PPIO 上的视觉模型（需支持 image 输入）
 
-    # PPIO 长上下文文本模型（用于大文档分析、批量总结等，文本专用）
-    # 2026-06 新增：GLM-5.2 (1M 上下文，¥80/¥280，性价比优于 v4-pro)
-    ppio_text_model: str = "zai-org/glm-5.2"
+    # PPIO OpenAI-compatible text model used for run summaries and base LLM tasks.
+    ppio_text_model: str = "minimax/minimax-m3"
+    llm_request_timeout_seconds: float = 30.0
 
     # Anthropic — Claude Vision（PPIO 未配置时的备用）
     anthropic_api_key: str = ""
@@ -59,10 +59,56 @@ class Settings(BaseSettings):
     alibaba_app_secret: str = ""
     alibaba_access_token: str = ""
     alibaba_api_gateway: str = "https://gw.open.1688.com/openapi/"
+    alibaba_supplier_search_namespace: str = Field(
+        default="com.alibaba.pifatuan",
+        validation_alias=AliasChoices(
+            "ALIBABA_SUPPLIER_SEARCH_NAMESPACE",
+            "ALIBABA_PIFATUAN_NAMESPACE",
+        ),
+    )
+    alibaba_supplier_search_method: str = Field(
+        default="alibaba.pifatuan.product.list",
+        validation_alias=AliasChoices(
+            "ALIBABA_SUPPLIER_SEARCH_METHOD",
+            "ALIBABA_PIFATUAN_METHOD",
+        ),
+    )
+    alibaba_supplier_search_keyword_param: str = Field(
+        default="keywords",
+        validation_alias=AliasChoices(
+            "ALIBABA_SUPPLIER_SEARCH_KEYWORD_PARAM",
+            "ALIBABA_PIFATUAN_KEYWORD_PARAM",
+        ),
+    )
+    alibaba_supplier_search_candidates: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ALIBABA_SUPPLIER_SEARCH_CANDIDATES",
+            "ALIBABA_PIFATUAN_CANDIDATES",
+        ),
+    )
 
     # ---------- 卖家精灵 ----------
-    mjjl_api_key: str = ""
-    mjjl_api_base: str = "https://api.sellersprite.com/v1"
+    mjjl_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MJJL_API_KEY",
+            "SELLERSPRITE_API_KEY",
+            "SELLER_SPRITE_API_KEY",
+            "SELLERSPRITE_KEY",
+        ),
+    )
+    mjjl_api_base: str = Field(
+        default="https://api.sellersprite.com/v1",
+        validation_alias=AliasChoices("MJJL_API_BASE", "SELLERSPRITE_API_BASE"),
+    )
+    mjjl_max_products_per_run: int = Field(
+        default=3,
+        validation_alias=AliasChoices(
+            "MJJL_MAX_PRODUCTS_PER_RUN",
+            "SELLERSPRITE_MAX_PRODUCTS_PER_RUN",
+        ),
+    )
 
     # ---------- 行为开关 ----------
     enable_api_cache: bool = True
@@ -71,10 +117,23 @@ class Settings(BaseSettings):
     # 默认禁用、直接降级 Playwright；待该路径修好后置 True 启用。
     enable_scrapling_matcher: bool = False
     alibaba_real_result_cache_ttl_seconds: int = 604800
+    alibaba_detail_enrich_limit: int = 2
+    alibaba_detail_cache_ttl_seconds: int = 604800
     alibaba_block_cooldown_seconds: int = 900
     alibaba_allow_mock_suppliers: bool = False  # formal runs: mock off by default; smoke-run --allow-mock opts in
+    pipeline_crawl_timeout_seconds: float = 300.0
+    pipeline_match_timeout_seconds: float = 900.0
+    pipeline_profit_timeout_seconds: float = 300.0
+    pipeline_market_timeout_seconds: float = 300.0
+    pipeline_score_timeout_seconds: float = 300.0
+    pipeline_export_timeout_seconds: float = 120.0
+    browser_agent_allowed_domains: str = "amazon.com,www.amazon.com,1688.com,detail.1688.com,s.1688.com,127.0.0.1,localhost"
     cache_ttl_seconds: int = 86400
     log_level: str = "INFO"
+    log_dir_override: str = Field(
+        default="",
+        validation_alias=AliasChoices("LOG_DIR"),
+    )
 
     # ---------- 路径 ----------
     @property
@@ -94,6 +153,23 @@ class Settings(BaseSettings):
         p = DATA_DIR / "exports"
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    @property
+    def log_dir(self) -> Path:
+        p = Path(self.log_dir_override) if self.log_dir_override else DATA_DIR / "logs"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def ensure_runtime_dirs(self) -> dict[str, Path]:
+        dirs = {
+            "cache": self.cache_dir,
+            "exports": self.export_dir,
+            "images": self.image_dir,
+            "logs": self.log_dir,
+        }
+        for path in dirs.values():
+            path.mkdir(parents=True, exist_ok=True)
+        return dirs
 
 
 settings = Settings()

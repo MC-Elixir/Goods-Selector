@@ -85,6 +85,11 @@ def _sigmoid(x: float, center: float, k: float) -> float:
     return 1.0 / (1.0 + math.exp(-k * (x - center)))
 
 
+def _contains_any_keyword(text: str, keywords: list[str]) -> bool:
+    haystack = (text or "").lower()
+    return any(str(k).lower() in haystack for k in keywords if str(k).strip())
+
+
 def _first_number(*values) -> Optional[float]:
     """返回第一个可用数字，避免把搜索量误当成销量等语义串线。"""
     for value in values:
@@ -95,6 +100,32 @@ def _first_number(*values) -> Optional[float]:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _supplier_raw_data(supplier) -> dict:
+    raw = getattr(supplier, "raw_data", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _supplier_raw_number(supplier, key: str) -> Optional[float]:
+    value = _supplier_raw_data(supplier).get(key)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _supplier_number(supplier, attr: str, raw_key: Optional[str] = None) -> Optional[float]:
+    value = getattr(supplier, attr, None)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return _supplier_raw_number(supplier, raw_key or attr)
+
+
+def _supplier_spec_match(supplier) -> dict:
+    spec = _supplier_raw_data(supplier).get("spec_match")
+    return spec if isinstance(spec, dict) else {}
 
 
 # ============================================================
@@ -282,8 +313,25 @@ def score_supply(suppliers: list, curve: dict) -> float:
         getattr(s, "fba_ready", False) for s in suppliers
     ) else 0.0
 
-    base = (0.25 * n_score + 0.25 * repeat_avg + 0.15 * moq_score
-            + 0.15 * delivery_score + 0.10 * capital_score + 0.10 * match_score)
+    factory_values = [getattr(s, "is_factory", None) for s in suppliers]
+    known_factory = [v for v in factory_values if v is not None]
+    factory_score = (
+        sum(1.0 if v is True else 0.45 for v in known_factory) / len(known_factory)
+        if known_factory else 0.65
+    )
+
+    monthly_sales = [
+        getattr(s, "monthly_sales", None) for s in suppliers
+        if getattr(s, "monthly_sales", None) is not None
+    ]
+    avg_supplier_sales = sum(monthly_sales) / len(monthly_sales) if monthly_sales else None
+    supplier_sales_score = _clamp((avg_supplier_sales or 0) / 1000) if avg_supplier_sales is not None else 0.5
+
+    base = (
+        0.20 * n_score + 0.18 * repeat_avg + 0.12 * moq_score
+        + 0.12 * delivery_score + 0.08 * capital_score + 0.15 * match_score
+        + 0.10 * factory_score + 0.05 * supplier_sales_score
+    )
     return _clamp(base + fba_bonus)
 
 
@@ -334,6 +382,7 @@ def score_risk(
     brand: Optional[str],
     curve: dict,
     *,
+    title: Optional[str] = None,
     seasonality: Optional[dict] = None,
 ) -> float:
     """风险等级 → [0,1]，从 1.0 递减。"""
@@ -351,6 +400,11 @@ def score_risk(
     cat = (category or "").strip()
     if any(cat.startswith(bc) or bc in cat for bc in blacklist_cats):
         s *= c.get("cert_required_penalty", 0.7)
+
+    restricted_keywords = c.get("restricted_keywords", [])
+    restricted_text = " ".join(filter(None, [title, category]))
+    if _contains_any_keyword(restricted_text, restricted_keywords):
+        s *= c.get("restricted_keyword_penalty", 0.4)
 
     # 季节性风险：月销售额变异系数 > 0.4
     if seasonality and isinstance(seasonality, dict):
@@ -379,8 +433,14 @@ def apply_hard_filters(
     brand: Optional[str],
     config: dict,
     *,
+    product_title: Optional[str] = None,
+    product_category: Optional[str] = None,
     monthly_sales: Optional[int] = None,
     selling_price: Optional[float] = None,
+    top_supplier_match_quality: Optional[float] = None,
+    top_supplier_spec_score: Optional[float] = None,
+    top_supplier_spec_conflicts: Optional[list[str]] = None,
+    top_supplier_candidate_score: Optional[float] = None,
 ) -> tuple[bool, list[str]]:
     """返回 (是否通过, 拒绝原因列表)。"""
     hf = config["hard_filters"]
@@ -410,6 +470,43 @@ def apply_hard_filters(
     if hf.get("exclude_brand_listings", True) and brand:
         if brand.strip().lower() in _BRAND_BLACKLIST:
             reasons.append("brand_excluded")
+
+    if hf.get("exclude_restricted_keywords", True):
+        restricted_keywords = config.get("scoring_curves", {}).get("risk", {}).get(
+            "restricted_keywords", []
+        )
+        restricted_text = " ".join(filter(None, [product_title, product_category]))
+        if _contains_any_keyword(restricted_text, restricted_keywords):
+            reasons.append("restricted_product")
+
+    min_match = hf.get("min_top_supplier_match_quality")
+    if (
+        min_match is not None
+        and top_supplier_match_quality is not None
+        and top_supplier_match_quality < min_match
+    ):
+        reasons.append("supplier_match_too_low")
+
+    min_spec = hf.get("min_top_supplier_spec_score")
+    if (
+        min_spec is not None
+        and top_supplier_spec_score is not None
+        and top_supplier_spec_score < min_spec
+    ):
+        reasons.append("supplier_spec_too_low")
+
+    max_conflicts = hf.get("max_top_supplier_spec_conflicts")
+    if max_conflicts is not None and top_supplier_spec_conflicts is not None:
+        if len(top_supplier_spec_conflicts) > max_conflicts:
+            reasons.append("supplier_spec_conflict")
+
+    min_candidate = hf.get("min_top_supplier_candidate_score")
+    if (
+        min_candidate is not None
+        and top_supplier_candidate_score is not None
+        and top_supplier_candidate_score < min_candidate
+    ):
+        reasons.append("supplier_candidate_too_low")
 
     passed = len(reasons) == 0
     return passed, reasons
@@ -489,6 +586,7 @@ def score_product(
         category=getattr(product, "category", None),
         brand=getattr(product, "brand", None),
         curve=curves["risk"],
+        title=getattr(product, "title", None),
         seasonality=getattr(ma, "seasonality", None),
     )
 
@@ -507,6 +605,11 @@ def score_product(
         (getattr(s, "moq", None) for s in suppliers if getattr(s, "moq", None) is not None),
         default=None,
     )
+    top_supplier = suppliers[0] if suppliers else None
+    top_spec = _supplier_spec_match(top_supplier) if top_supplier else {}
+    spec_conflicts = top_spec.get("conflicts") if top_spec else None
+    if spec_conflicts is not None and not isinstance(spec_conflicts, list):
+        spec_conflicts = [str(spec_conflicts)]
     passed, reasons = apply_hard_filters(
         profit_margin=profit_breakdown.profit_margin if profit_breakdown else 0.0,
         total_score=total,
@@ -514,8 +617,17 @@ def score_product(
         supplier_count=len(suppliers),
         brand=getattr(product, "brand", None),
         config=config,
+        product_title=getattr(product, "title", None),
+        product_category=getattr(product, "category", None),
         monthly_sales=estimated_monthly_sales,
         selling_price=getattr(product, "price", None),
+        top_supplier_match_quality=_supplier_number(top_supplier, "match_quality_score") if top_supplier else None,
+        top_supplier_spec_score=_first_number(top_spec.get("score")) if top_spec else None,
+        top_supplier_spec_conflicts=spec_conflicts,
+        top_supplier_candidate_score=_first_number(
+            _supplier_raw_number(top_supplier, "supplier_rank_score") if top_supplier else None,
+            _supplier_number(top_supplier, "candidate_score", "supplier_candidate_score") if top_supplier else None,
+        ),
     )
 
     logger.info(

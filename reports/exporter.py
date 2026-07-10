@@ -12,13 +12,24 @@ candidates 为 PipelineRecord 列表（见 pipeline/orchestrator.py）。
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
 from config.settings import settings
+
+
+def _supplier_raw_score(supplier, key: str):
+    raw = getattr(supplier, "raw_data", None) if supplier else None
+    value = (raw or {}).get(key)
+    return round(float(value), 3) if value is not None else None
+
+
+def _display_score(value) -> str:
+    return "-" if value is None else f"{value:.3f}"
 
 
 # ============================================================
@@ -50,6 +61,7 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
         "利润得分", "需求得分", "竞争得分", "供应得分", "物流得分", "风险得分",
         "采购成本($)", "头程($)", "FBA费($)", "佣金($)", "广告费($)", "退货损耗($)",
         "供应商数", "Top1供应商", "Top1货源链接", "Top1采购价(CNY)", "Top1 MOQ",
+        "Top1来源", "Top1视觉相似", "Top1匹配分", "Top1候选分", "Top1供应商质量分", "Top1业务条件分",
         "通过筛选", "拒绝原因",
     ]
 
@@ -80,6 +92,14 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
             v = getattr(obj, attr, default)
             return v if v is not None else default
 
+        def _score(obj, attr):
+            value = getattr(obj, attr, None) if obj else None
+            return round(float(value), 3) if value is not None else ""
+
+        def _raw_score(obj, key):
+            value = _supplier_raw_score(obj, key)
+            return value if value is not None else ""
+
         row_data = [
             _v(p, "asin"),
             _v(p, "title"),
@@ -109,6 +129,12 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
             _v(top_sup, "offer_url") if top_sup else "",
             _v(top_sup, "base_price_cny") if top_sup else "",
             _v(top_sup, "moq") if top_sup else "",
+            _supplier_source(top_sup),
+            _score(top_sup, "image_similarity"),
+            _score(top_sup, "match_quality_score"),
+            _raw_score(top_sup, "supplier_candidate_score"),
+            _raw_score(top_sup, "supplier_quality_score"),
+            _raw_score(top_sup, "supplier_business_score"),
             "✓" if passed else "✗",
             ", ".join(sc.rejection_reasons) if sc else "",
         ]
@@ -124,6 +150,7 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
                   10, 10, 10, 10, 10, 10,
                   10, 8, 8, 8, 8, 10,
                   8, 25, 40, 12, 8,
+                  12, 10, 10, 10, 12, 12,
                   8, 25]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -228,16 +255,22 @@ def export_markdown(candidates: list, output_dir: Optional[Path] = None) -> list
             )
 
         # 货源表格
-        sup_lines = ["| # | 供应商 | 货源链接 | 采购价(CNY) | MOQ | 月销 | 回头率 |",
-                     "|---|---|---|---|---|---|---|"]
+        sup_lines = [
+            "| # | 来源 | 供应商 | 货源链接 | 采购价(CNY) | MOQ | 月销 | 回头率 | 匹配分 | 候选分 | 供应商质量分 |",
+            "|---|---|---|---|---|---|---|---|---|---|---|",
+        ]
         for i, s in enumerate(sups[:5], 1):
             sup_lines.append(
-                f"| {i} | {getattr(s,'supplier_name','-')} "
+                f"| {i} | {_supplier_source(s)} "
+                f"| {getattr(s,'supplier_name','-')} "
                 f"| [{getattr(s,'alibaba_offer_id','-')}]({getattr(s,'offer_url','#')}) "
                 f"| {getattr(s,'base_price_cny','-')} "
                 f"| {getattr(s,'moq','-')} "
                 f"| {getattr(s,'monthly_sales','-')} "
-                f"| {getattr(s,'repeat_buyer_rate','-')} |"
+                f"| {getattr(s,'repeat_buyer_rate','-')} "
+                f"| {_display_score(getattr(s,'match_quality_score', None))} "
+                f"| {_display_score(_supplier_raw_score(s, 'supplier_candidate_score'))} "
+                f"| {_display_score(_supplier_raw_score(s, 'supplier_quality_score'))} |"
             )
 
         content = _MD_TEMPLATE.format(
@@ -297,7 +330,10 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
         p = rec.product
         pb = rec.profit
         sc = rec.score
+        market = getattr(rec, "market", None)
         sups = rec.suppliers or []
+        raw = getattr(p, "raw_data", None) if p else None
+        raw = raw if isinstance(raw, dict) else {}
 
         return {
             "product": {
@@ -307,6 +343,12 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
                           "weight_kg", "length_cm", "width_cm", "height_cm",
                           "main_image_url", "listing_url")
             },
+            "source_mode": raw.get("source_mode"),
+            "source_query": raw.get("source_query") or raw.get("source_keyword") or raw.get("source_category"),
+            "source_keyword": raw.get("source_keyword"),
+            "keyword_normalized": raw.get("keyword_normalized"),
+            "source_rank": raw.get("source_rank"),
+            "source_warning": raw.get("keyword_warning"),
             "profit": {
                 "selling_price": pb.selling_price,
                 "purchase_cost": pb.purchase_cost,
@@ -330,15 +372,8 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
                 "passed_hard_filter": sc.passed_hard_filter,
                 "rejection_reasons": sc.rejection_reasons,
             } if sc else None,
-            "suppliers": [
-                {
-                    k: getattr(s, k, None)
-                    for k in ("alibaba_offer_id", "supplier_name", "offer_url",
-                              "base_price_cny", "moq", "monthly_sales",
-                              "repeat_buyer_rate", "is_factory", "delivery_days")
-                }
-                for s in sups[:10]
-            ],
+            "market": _market_payload(market),
+            "suppliers": [_supplier_payload(s) for s in sups[:10]],
         }
 
     data = [_serialize(r) for r in candidates]
@@ -348,3 +383,74 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
     )
     logger.info(f"JSON 导出完成：{output_path}（{len(data)} 条）")
     return output_path
+
+
+def _supplier_payload(supplier) -> dict[str, Any]:
+    payload = {
+        k: getattr(supplier, k, None)
+        for k in ("alibaba_offer_id", "supplier_name", "offer_url",
+                  "base_price_cny", "moq", "monthly_sales",
+                  "repeat_buyer_rate", "is_factory", "delivery_days",
+                  "title_cn", "offer_image_url", "image_similarity",
+                  "match_quality_score",
+                  "match_verification_method", "raw_data")
+    }
+    payload["supplier_quality_score"] = _supplier_raw_score(supplier, "supplier_quality_score")
+    payload["supplier_business_score"] = _supplier_raw_score(supplier, "supplier_business_score")
+    payload["candidate_score"] = _supplier_raw_score(supplier, "supplier_candidate_score")
+    payload["sourcing_source"] = _supplier_source(supplier)
+    payload["invalid_for_decision"] = _supplier_invalid_for_decision(supplier)
+    return payload
+
+
+def _supplier_source(supplier) -> str:
+    if not supplier:
+        return ""
+    raw = getattr(supplier, "raw_data", None) or {}
+    source = getattr(supplier, "sourcing_source", None) or raw.get("source")
+    if source:
+        return str(source)
+    method = str(getattr(supplier, "match_verification_method", "") or "").lower()
+    if method == "mock":
+        return "mock"
+    return "unknown"
+
+
+def _supplier_invalid_for_decision(supplier) -> bool:
+    if not supplier:
+        return False
+    raw = getattr(supplier, "raw_data", None) or {}
+    source = _supplier_source(supplier).lower()
+    method = str(getattr(supplier, "match_verification_method", "") or "").lower()
+    name = str(getattr(supplier, "supplier_name", "") or "").lower()
+    offer_id = str(getattr(supplier, "alibaba_offer_id", "") or "")
+    return bool(
+        raw.get("invalid_for_decision")
+        or source == "mock"
+        or method == "mock"
+        or "mock" in name
+        or (offer_id and not offer_id.isdigit())
+    )
+
+
+def _market_payload(market) -> dict[str, Any] | None:
+    if not market:
+        return None
+    if is_dataclass(market):
+        data = asdict(market)
+    else:
+        keys = (
+            "asin", "marketplace", "brand", "seller_name", "title",
+            "bsr", "bsr_category", "est_daily_sales", "est_monthly_sales",
+            "price", "currency", "rating", "review_count", "available_date",
+            "has_a_plus", "is_best_seller", "is_amazon_choice",
+            "competing_listings", "avg_price_top10", "avg_review_count_top10",
+            "top10_revenue_share", "main_keyword", "search_volume_monthly",
+            "monthly_purchases", "purchase_rate", "keyword_difficulty",
+            "opportunity_score", "seasonality", "raw_data",
+        )
+        data = {key: getattr(market, key, None) for key in keys}
+    available = data.get("available_date")
+    if isinstance(available, datetime):
+        data["available_date"] = available.isoformat()
+    return {key: value for key, value in data.items() if value not in (None, "", [], {})}

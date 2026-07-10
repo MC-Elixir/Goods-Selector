@@ -3,10 +3,11 @@
 ==============
 
 降级链（自动按顺序尝试）：
-  1. VisionAnalyzer → Alibaba1688TextSearch  视觉识别 + 1688 官方 API（需 key，默认未配）
-  2. Alibaba1688ScraplingMatcher             Scrapling HTTP 路径（被 TMD 拦，默认禁用）
-  3. Alibaba1688PlaywrightMatcher            Playwright 兜底（图搜 + 关键词）← 默认主路径
-  4. mock                                    单元测试 / 完全离线兜底
+  1. AlibabaPifatuanSearch                  1688 分销严选开放平台（需 app + token）
+  2. VisionAnalyzer → Alibaba1688TextSearch 视觉识别 + 1688 官方 API（需 key）
+  3. Alibaba1688ScraplingMatcher            Scrapling HTTP 路径（被 TMD 拦，默认禁用）
+  4. Alibaba1688PlaywrightMatcher           Playwright 兜底（图搜 + 关键词）
+  5. mock                                   单元测试 / 完全离线兜底
 
 匹配验证：
   搜索结果经 Verifier 启发式验证后过滤低匹配度货源。
@@ -22,19 +23,26 @@ from typing import Optional
 
 from loguru import logger
 
+from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
 from crawlers.amazon_bsr import ProductDTO
+from agent.manual_queue import enqueue_sourcing_block
 from matchers.alibaba_pailitao import SupplierDTO
+from matchers.alibaba_pifatuan import AlibabaPifatuanSearch
 from matchers.alibaba_playwright import Alibaba1688PlaywrightMatcher
 from matchers.alibaba_text_search import Alibaba1688TextSearch
+from matchers.alibaba_detail import apply_1688_detail_to_supplier
+from matchers.imported_suppliers import find_imported_suppliers
 from matchers.vision_analyzer import VisionAnalyzer
 from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier
 from matchers.alibaba_result_cache import (
     circuit_is_open,
+    load_cached_offer_detail,
     load_cached_suppliers,
     make_cache_key,
     is_real_supplier,
     open_circuit,
     reset_circuit,
+    save_cached_offer_detail,
     save_cached_suppliers,
 )
 
@@ -53,10 +61,13 @@ __all__ = [
     "Alibaba1688ScraplingMatcher",
     "Alibaba1688PlaywrightMatcher",
     "SupplierDTO",
+    "AlibabaPifatuanSearch",
+    "find_imported_suppliers",
 ]
 
 # 模块级单例（懒初始化，整条流水线复用）
 _vision: Optional[VisionAnalyzer] = None
+_pifatuan_search: Optional[AlibabaPifatuanSearch] = None
 _text_search: Optional[Alibaba1688TextSearch] = None
 _scrapling: Optional[Alibaba1688ScraplingMatcher] = None
 _playwright: Optional[Alibaba1688PlaywrightMatcher] = None
@@ -68,6 +79,7 @@ def match_suppliers(
     product: ProductDTO,
     top_k: int = 20,
     vision_api_key: Optional[str] = None,
+    cancel_check: CancelCheck | None = None,
 ) -> list[SupplierDTO]:
     """Amazon 产品 → 1688 货源列表。
 
@@ -81,7 +93,9 @@ def match_suppliers(
     浏览器路径会被 redirect 到 login.taobao.com，官方 API 也可能因权限返回 4xx。
     首次使用请跑 `python setup_1688_login.py` 完成一次手动登录。
     """
-    global _vision, _text_search, _scrapling, _playwright, _verifier, _llm_verifier
+    global _vision, _pifatuan_search, _text_search, _scrapling, _playwright, _verifier, _llm_verifier
+
+    _check_cancel(cancel_check, "match start")
 
     # ── Step 0: 从标题提取规格关键词 ──────────────────────
     dim_keywords = _extract_dimensional_keywords(
@@ -97,10 +111,12 @@ def match_suppliers(
         logger.warning(f"[match] ASIN={product.asin} 无主图 URL")
         keywords = _title_fallback_keywords(product.title)
     else:
+        _check_cancel(cancel_check, "vision analysis")
         if _vision is None:
             _vision = VisionAnalyzer(api_key=vision_api_key)
         try:
             analysis = _vision.analyze(image_url=product.main_image_url)
+            _check_cancel(cancel_check, "vision analysis")
             keywords = analysis.keywords_zh
             logger.info(
                 f"[match] ASIN={product.asin} → {analysis.category_zh} "
@@ -118,31 +134,63 @@ def match_suppliers(
             [analysis.category_zh, analysis.title_zh],
         )
 
-    # ── Step 2a: 1688 官方 API ─────────────────────────────
+    # ── Step 2a: 1688 分销严选开放平台 ─────────────────────
     from config.settings import settings as _cfg
+    if not enriched_keywords:
+        reason = "no usable 1688 search keywords"
+        logger.warning(f"[match] ASIN={product.asin} {reason}; stop automatic supplier search")
+        _enqueue_manual_block(product, enriched_keywords, reason)
+        return []
+
     cache_key = make_cache_key(product, enriched_keywords, top_k)
+    suppliers: list[SupplierDTO] = []
     cached_suppliers = load_cached_suppliers(
         cache_key,
         ttl_seconds=_cfg.alibaba_real_result_cache_ttl_seconds,
     )
     if cached_suppliers:
-        return cached_suppliers[:top_k]
+        suppliers = cached_suppliers[:top_k]
 
-    suppliers: list[SupplierDTO] = []
+    # Imported Open Platform test payloads are real 1688 candidates copied from
+    # the user's console. Use them before browser/API scraping so blocked 1688
+    # sessions can still produce verifiable supplier shortlists.
+    if not suppliers:
+        suppliers = find_imported_suppliers(enriched_keywords, top_k=top_k)
+        if suppliers:
+            logger.info(f"[match] ASIN={product.asin} 使用导入的 1688 候选 {len(suppliers)} 条")
+
     real_search_blocked = False
-    if _cfg.alibaba_app_key and _cfg.alibaba_app_secret:
+    if not suppliers and _cfg.alibaba_app_key and _cfg.alibaba_app_secret and _cfg.alibaba_access_token:
+        _check_cancel(cancel_check, "1688 pifatuan search")
+        if _pifatuan_search is None:
+            _pifatuan_search = AlibabaPifatuanSearch()
+        try:
+            suppliers = _pifatuan_search.search(keywords=enriched_keywords, top_k=top_k)
+            _check_cancel(cancel_check, "1688 pifatuan search")
+        except CancellationRequested:
+            raise
+        except Exception as e:
+            logger.info(f"[match] 1688 分销严选 API 不可用 ({e})，尝试通用文字 API")
+
+    # ── Step 2b: 1688 通用文字 API ─────────────────────────
+    if not suppliers and _cfg.alibaba_app_key and _cfg.alibaba_app_secret:
+        _check_cancel(cancel_check, "1688 text search")
         if _text_search is None:
             _text_search = Alibaba1688TextSearch()
         try:
             suppliers = _text_search.search(keywords=enriched_keywords, top_k=top_k)
+            _check_cancel(cancel_check, "1688 text search")
+        except CancellationRequested:
+            raise
         except Exception as e:
             logger.info(f"[match] 1688 API 不可用 ({e})，尝试 Scrapling")
     else:
         logger.debug(f"[match] ASIN={product.asin} 跳过 1688 API（未配置 key）")
 
-    # ── Step 2b: Scrapling 爬取（默认禁用：HTTP header cookies 被 1688 TMD 拦、0 结果；
+    # ── Step 2c: Scrapling 爬取（默认禁用：HTTP header cookies 被 1688 TMD 拦、0 结果；
     #        直接降级 Playwright。待修好后 settings.enable_scrapling_matcher=True） ──
     if not suppliers and _SCRAPLING_AVAILABLE and _cfg.enable_scrapling_matcher:
+        _check_cancel(cancel_check, "1688 scrapling search")
         if _scrapling is None:
             _scrapling = Alibaba1688ScraplingMatcher(page_wait=5)
         try:
@@ -154,11 +202,20 @@ def match_suppliers(
                 )
             else:
                 suppliers = _scrapling.search_by_keyword(enriched_keywords[:2], limit=top_k)
+            _check_cancel(cancel_check, "1688 scrapling search")
+        except CancellationRequested:
+            raise
         except Exception as e:
             logger.warning(f"[match] Scrapling 搜索失败 ({product.asin}): {e}，降级到 Playwright")
 
-    # ── Step 2c: Playwright 兜底 ─────────────────────────────
-    if not suppliers and not circuit_is_open():
+    # ── Step 2d: Playwright 兜底 ───────────────────────────
+    circuit_open = circuit_is_open()
+    if not suppliers and circuit_open:
+        real_search_blocked = True
+        _enqueue_manual_block(product, enriched_keywords, "1688 search cooldown active")
+
+    if not suppliers and not circuit_open:
+        _check_cancel(cancel_check, "1688 playwright search")
         if _playwright is None:
             _playwright = Alibaba1688PlaywrightMatcher(page_wait=5)
         try:
@@ -170,10 +227,14 @@ def match_suppliers(
                 )
             else:
                 suppliers = _playwright.search_by_keyword(enriched_keywords[:5], limit=top_k)
+            _check_cancel(cancel_check, "1688 playwright search")
+        except CancellationRequested:
+            raise
         except Exception as e:
             if "TMD" in str(e) or "验证码" in str(e):
                 real_search_blocked = True
                 open_circuit(_cfg.alibaba_block_cooldown_seconds, reason=str(e)[:200])
+                _enqueue_manual_block(product, enriched_keywords, str(e)[:200])
             logger.warning(f"[match] Playwright 搜索失败 ({product.asin}): {e}")
 
     # ── Step 3: mock 兜底 ──────────────────────────────────
@@ -187,7 +248,13 @@ def match_suppliers(
         logger.info(f"[match] ASIN={product.asin} 全部方式无结果，使用 mock")
         suppliers = _mock_suppliers(product, enriched_keywords)
 
-    # ── Step 4: 启发式匹配验证 ──────────────────────────────
+    # ── Step 4: 详情页补全（限量、缓存优先）──────────────────
+    _check_cancel(cancel_check, "1688 detail enrichment")
+    suppliers = _enrich_supplier_details(suppliers, _cfg, cancel_check=cancel_check)
+    _check_cancel(cancel_check, "1688 detail enrichment")
+
+    # ── Step 5: 启发式匹配验证 ──────────────────────────────
+    _check_cancel(cancel_check, "supplier verification")
     if _verifier is None:
         _verifier = Alibaba1688Verifier()
     suppliers = _verifier.verify(
@@ -197,16 +264,24 @@ def match_suppliers(
         search_keywords=enriched_keywords,
     )
 
-    # ── Step 5: LLM 视觉验证（可选）─────────────────────────
-    from config.settings import settings as _cfg
+    # ── Step 6: LLM 视觉验证（可选）─────────────────────────
     if getattr(_cfg, 'enable_llm_verification', False) and len(suppliers) > 1:
-        try:
-            if _llm_verifier is None:
-                _llm_verifier = LLMVisualVerifier()
-            suppliers = _llm_verifier.verify(suppliers, product, top_k=3)
-            logger.info(f"[match] ASIN={product.asin} LLM 视觉验证完成")
-        except Exception as e:
-            logger.warning(f"[match] LLM 验证跳过 ({product.asin}): {e}")
+        if not product.main_image_url:
+            logger.info(f"[match] ASIN={product.asin} LLM 视觉验证跳过：Amazon 产品无主图")
+        elif not any(getattr(s, "offer_image_url", None) for s in suppliers[:3]):
+            logger.info(f"[match] ASIN={product.asin} LLM 视觉验证跳过：供应商候选无图片")
+        else:
+            try:
+                _check_cancel(cancel_check, "LLM visual verification")
+                if _llm_verifier is None:
+                    _llm_verifier = LLMVisualVerifier()
+                suppliers = _llm_verifier.verify(suppliers, product, top_k=3, cancel_check=cancel_check)
+                _check_cancel(cancel_check, "LLM visual verification")
+                logger.info(f"[match] ASIN={product.asin} LLM 视觉验证完成")
+            except CancellationRequested:
+                raise
+            except Exception as e:
+                logger.warning(f"[match] LLM 验证跳过 ({product.asin}): {e}")
 
     logger.info(f"[match] ASIN={product.asin} → {len(suppliers)} 条货源（已验证）")
     save_cached_suppliers(cache_key, suppliers)
@@ -276,6 +351,109 @@ def _extract_dimensional_keywords(
     return keywords
 
 
+def _enqueue_manual_block(product: ProductDTO, keywords: list[str], reason: str) -> None:
+    try:
+        enqueue_sourcing_block(product, keywords=keywords, reason=reason, source="1688")
+    except Exception as exc:
+        logger.debug(f"[match] manual queue write failed asin={product.asin}: {exc}")
+
+
+def _enrich_supplier_details(
+    suppliers: list[SupplierDTO],
+    cfg,
+    *,
+    cancel_check: CancelCheck | None = None,
+) -> list[SupplierDTO]:
+    """Fill sourcing evidence from 1688 detail pages without unbounded browsing."""
+    global _playwright
+    limit = int(getattr(cfg, "alibaba_detail_enrich_limit", 0) or 0)
+    if limit <= 0 or not suppliers:
+        return suppliers
+    ttl_seconds = int(
+        getattr(
+            cfg,
+            "alibaba_detail_cache_ttl_seconds",
+            getattr(cfg, "alibaba_real_result_cache_ttl_seconds", 604800),
+        )
+        or 0
+    )
+
+    enriched = 0
+    for idx, supplier in enumerate(list(suppliers)):
+        _check_cancel(cancel_check, "1688 detail enrichment")
+        if enriched >= limit:
+            break
+        if not _should_enrich_supplier_detail(supplier):
+            continue
+        offer_id = _supplier_offer_id(supplier)
+        cached_detail = load_cached_offer_detail(offer_id, ttl_seconds) if offer_id else {}
+        if cached_detail:
+            suppliers[idx] = apply_1688_detail_to_supplier(supplier, cached_detail)
+            suppliers[idx].raw_data["detail_enrichment"] = {
+                "source": "cache",
+                "offer_id": offer_id,
+            }
+            enriched += 1
+            continue
+
+        if not supplier.offer_url:
+            continue
+        try:
+            _check_cancel(cancel_check, "1688 detail page")
+            if _playwright is None:
+                _playwright = Alibaba1688PlaywrightMatcher(page_wait=5)
+            updated = _playwright.enrich_supplier_detail(supplier)
+            _check_cancel(cancel_check, "1688 detail page")
+            suppliers[idx] = updated
+            detail = updated.raw_data.get("detail") or {}
+            if detail:
+                updated.raw_data["detail_enrichment"] = {
+                    "source": "playwright",
+                    "offer_id": offer_id,
+                }
+                if offer_id:
+                    save_cached_offer_detail(offer_id, detail)
+            enriched += 1
+        except CancellationRequested:
+            raise
+        except Exception as exc:
+            supplier.raw_data["detail_enrichment"] = {
+                "source": "playwright",
+                "offer_id": offer_id,
+                "error": str(exc)[:200],
+            }
+            logger.info(f"[match] 1688 detail enrichment skipped offer={offer_id or supplier.offer_url}: {exc}")
+    return suppliers
+
+
+def _check_cancel(cancel_check: CancelCheck | None, context: str) -> None:
+    raise_if_cancelled(cancel_check, context)
+
+
+def _should_enrich_supplier_detail(supplier: SupplierDTO) -> bool:
+    method = (supplier.match_verification_method or "").lower()
+    source = str((supplier.raw_data or {}).get("source") or "").lower()
+    if method == "mock" or source == "mock":
+        return False
+    if not supplier.alibaba_offer_id and not supplier.offer_url:
+        return False
+    return not (
+        supplier.moq
+        and supplier.delivery_days
+        and supplier.product_dimensions_cm
+        and supplier.product_weight_g
+        and supplier.raw_data.get("risk_flags")
+    )
+
+
+def _supplier_offer_id(supplier: SupplierDTO) -> str:
+    offer_id = str(supplier.alibaba_offer_id or "").strip()
+    if offer_id:
+        return offer_id
+    match = re.search(r"/offer/(\d+)", supplier.offer_url or "")
+    return match.group(1) if match else ""
+
+
 def _to_ml(value: float, unit: str) -> Optional[float]:
     """单位转换为毫升。"""
     if unit in ("oz", "floz"):
@@ -294,13 +472,18 @@ def _to_ml(value: float, unit: str) -> Optional[float]:
 
 
 def _build_enriched_keywords(dim_keywords: list[str], vision_keywords: list[str]) -> list[str]:
-    """合并规格关键词和视觉关键词，规格词前置（更精准）。"""
+    """合并视觉/标题关键词和规格关键词。
+
+    搜索召回优先使用品类/功能词，数量词只做辅助。像 "12 Count"
+    这类 pack 规格如果排在最前，会把 1688 搜索带到厨具/套装等泛结果。
+    """
     seen: set[str] = set()
     result: list[str] = []
-    for kw in dim_keywords + vision_keywords:
-        if kw and kw not in seen:
-            seen.add(kw)
-            result.append(kw)
+    for kw in vision_keywords + dim_keywords:
+        value = str(kw or "").strip()
+        if value and not _is_noisy_search_keyword(value) and value not in seen:
+            seen.add(value)
+            result.append(value)
     return result
 
 
@@ -329,11 +512,104 @@ def _mock_suppliers(product: ProductDTO, keywords: list[str]) -> list[SupplierDT
             title_cn=kw,
             match_quality_score=0.5,
             match_verification_method="mock",
+            raw_data={"source": "mock"},
         ))
     return suppliers
 
 
 def _title_fallback_keywords(title: str) -> list[str]:
-    """无主图时从英文标题截取关键词（效果有限，仅作应急）。"""
-    words = title.split()[:6]
-    return [" ".join(words), " ".join(words[:3])]
+    """Generate Chinese 1688 search keywords from an Amazon title when vision is unavailable."""
+    raw = title or ""
+    lowered = raw.lower()
+    keywords: list[str] = []
+
+    category_rules = (
+        ("保温杯", ("insulated water bottle", "vacuum bottle", "thermos", "travel mug")),
+        ("水杯", ("water bottle", "tumbler", "sports bottle", "drinking bottle", "bottle")),
+        ("瑜伽垫", ("yoga mat", "exercise mat", "fitness mat")),
+        ("收纳盒", ("storage box", "storage bin", "organizer box", "organizer")),
+        ("厨房垫", ("kitchen mat", "sink mat", "counter mat", "dish drying mat")),
+        ("枕头", ("pillow", "neck pillow", "bed pillow")),
+        ("手机支架", ("phone stand", "phone holder", "tablet stand")),
+        ("折叠桌", ("folding table", "foldable table", "camping table")),
+        ("毛巾", ("towel", "dish towel", "kitchen towel")),
+    )
+    for label, needles in category_rules:
+        if any(needle in lowered for needle in needles):
+            keywords.append(label)
+
+    material_prefix = ""
+    if any(term in lowered for term in ("stainless steel", "304 steel", "304 stainless")):
+        material_prefix = "不锈钢"
+        keywords.append("不锈钢")
+    elif "silicone" in lowered:
+        material_prefix = "硅胶"
+        keywords.append("硅胶")
+    elif any(term in lowered for term in ("plastic", "pp ", "abs ")):
+        material_prefix = "塑料"
+        keywords.append("塑料")
+    elif any(term in lowered for term in ("aluminum", "aluminium")):
+        material_prefix = "铝合金"
+        keywords.append("铝合金")
+
+    for category in list(keywords):
+        if material_prefix and category not in {"不锈钢", "硅胶", "塑料", "铝合金"}:
+            keywords.insert(0, f"{material_prefix}{category}")
+            break
+
+    feature_rules = (
+        ("吸管", ("straw",)),
+        ("带盖", ("with lid", "lid")),
+        ("折叠", ("folding", "foldable")),
+        ("防滑", ("non slip", "non-slip", "anti slip", "anti-slip")),
+        ("防水", ("waterproof",)),
+        ("可机洗", ("machine washable",)),
+    )
+    for label, needles in feature_rules:
+        if any(needle in lowered for needle in needles):
+            keywords.append(label)
+
+    words = [w.strip(" ,;:/()[]") for w in raw.split() if w.strip(" ,;:/()[]")]
+    clean_words = [
+        w for w in words
+        if w.lower() not in {"with", "for", "and", "or", "the", "a", "an"}
+    ]
+    keywords.extend([
+        " ".join(words[:8]),
+        " ".join(clean_words[:7]),
+        " ".join(words[:3]),
+    ])
+    return _dedupe_keywords(keywords)
+
+
+def _dedupe_keywords(keywords: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for keyword in keywords:
+        value = str(keyword or "").strip()
+        if value and not _is_noisy_search_keyword(value) and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def _is_noisy_search_keyword(keyword: str) -> bool:
+    value = str(keyword or "").strip()
+    if not value:
+        return True
+    if value in {"大容量", "小容量", "多尺寸规格"}:
+        return True
+    parts = [part.strip(" ,;:/()[]") for part in value.split()]
+    if len(parts) > 1 and all(_is_noisy_search_keyword(part) for part in parts):
+        return True
+    if re.fullmatch(r"B0[A-Z0-9]{8}", value, flags=re.I):
+        return True
+    if re.fullmatch(r"\d+(?:\.\d+)?\s*(?:ml|l|oz|fl\s*oz|gallon|quart|pint)", value, flags=re.I):
+        return True
+    if (
+        re.fullmatch(r"[A-Z0-9]{2,12}", value, flags=re.I)
+        and not re.search(r"[\u4e00-\u9fff]", value)
+        and (re.search(r"\d", value) or value.isupper())
+    ):
+        return True
+    return False

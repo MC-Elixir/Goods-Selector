@@ -95,6 +95,19 @@ class TestParsePriceText:
     def test_usd_with_comma(self):
         assert _parse_price_text("$1,299.00") == 1299.00
 
+    def test_usd_compact_amazon_price(self):
+        assert _parse_price_text("$1499") == 14.99
+        assert _parse_price_text("$599") == 5.99
+
+    def test_usd_split_amazon_price(self):
+        assert _parse_price_text("$14 99") == 14.99
+
+    def test_usd_comma_without_decimal_is_not_compact_cents(self):
+        assert _parse_price_text("$1,499") == 1499.00
+
+    def test_list_price_is_ignored(self):
+        assert _parse_price_text("List: $29.99") is None
+
     def test_jpy_with_symbol(self):
         v = _parse_price_text("¥6980")
         assert v is not None and 46 < v < 48
@@ -131,6 +144,17 @@ class TestExtractPrice:
     def test_falls_back_to_offscreen_scan(self):
         # 没有结构化选择器命中，但页面里有 a-offscreen 含主价
         html = '<span class="a-offscreen">$24.99</span>'
+        assert extract_price(_page(html)) == 24.99
+
+    def test_parses_compact_amazon_offscreen_price(self):
+        html = '<span class="a-price"><span class="a-offscreen">$1499</span></span>'
+        assert extract_price(_page(html)) == 14.99
+
+    def test_skips_list_price_during_offscreen_scan(self):
+        html = """
+        <span class="a-offscreen">List: $29.99</span>
+        <span class="a-offscreen">$24.99</span>
+        """
         assert extract_price(_page(html)) == 24.99
 
 

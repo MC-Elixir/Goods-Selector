@@ -214,7 +214,11 @@ class VisionAnalyzer:
             if not key:
                 raise ValueError("PPIO_API_KEY 未配置，请在 .env 中设置")
             self._model = self._model or settings.ppio_model
-            return _openai.OpenAI(api_key=key, base_url=base)
+            return _openai.OpenAI(
+                api_key=key,
+                base_url=base,
+                timeout=float(settings.llm_request_timeout_seconds),
+            )
 
         if self._provider == "anthropic":
             if not _HAS_ANTHROPIC:
@@ -223,7 +227,10 @@ class VisionAnalyzer:
             if not key:
                 raise ValueError("ANTHROPIC_API_KEY 未配置，请在 .env 中设置")
             self._model = self._model or settings.anthropic_model
-            return _anthropic.Anthropic(api_key=key)
+            return _anthropic.Anthropic(
+                api_key=key,
+                timeout=float(settings.llm_request_timeout_seconds),
+            )
 
         raise ValueError(f"未知 provider: {self._provider}，可选：ppio / anthropic")
 

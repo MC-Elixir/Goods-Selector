@@ -13,53 +13,54 @@
           <div class="brand-mark">AS</div>
           <div>
             <strong>Amazon Selector</strong>
-            <span>Agent Console</span>
+            <span data-i18n="brand.subtitle">Agent Console</span>
           </div>
         </div>
         <nav class="nav">
           <button class="nav-item active" data-section="run">
             <span class="icon">▶</span>
-            Run Agent
+            <span data-i18n="nav.run">Run Agent</span>
           </button>
           <button class="nav-item" data-section="results">
             <span class="icon">▦</span>
-            Results Library
+            <span data-i18n="nav.results">Results Library</span>
           </button>
           <button class="nav-item" data-section="settings">
             <span class="icon">⚙</span>
-            Settings
+            <span data-i18n="nav.settings">Settings</span>
           </button>
         </nav>
         <div class="side-status">
           <div>
-            <span>System Status</span>
+            <span data-i18n="sidebar.systemStatus">System Status</span>
             <strong id="sideStatus">Checking</strong>
           </div>
           <span class="status-dot" id="sideDot"></span>
         </div>
         <div class="plan-box">
-          <strong>Agent Definition</strong>
-          <p>Environment, tools, and prompt policy are wired into a local execution loop.</p>
+          <strong data-i18n="sidebar.agentDefinition">Agent Definition</strong>
+          <p data-i18n="sidebar.agentDefinitionText">Environment, tools, and prompt policy are wired into a local execution loop.</p>
         </div>
-        <footer>v0.3 Agent Preview</footer>
+        <footer data-i18n="sidebar.footer">v0.3 Agent Preview</footer>
       </aside>
 
       <main class="main">
         <header class="topbar">
           <div>
-            <h1>Amazon Selector Agent</h1>
-            <p>Launch sourcing runs, inspect preflight health, and read saved product candidates.</p>
+            <h1 data-i18n="hero.title">Amazon Selector Agent</h1>
+            <p data-i18n="hero.subtitle">Launch sourcing runs, inspect preflight health, and read saved product candidates.</p>
           </div>
           <div class="top-metrics">
             <div class="metric">
-              <span>Agent</span>
+              <span data-i18n="metrics.agent">Agent</span>
               <strong id="agentMetric">Online</strong>
             </div>
             <div class="metric">
-              <span>Cookie Health</span>
+              <span data-i18n="metrics.cookieHealth">Cookie Health</span>
               <strong id="cookieMetric">Checking</strong>
             </div>
-            <button class="ghost-button" id="refreshButton">Refresh</button>
+            <button class="ghost-button language-toggle" id="languageButton" type="button" aria-pressed="false">中</button>
+            <button class="ghost-button" id="refreshButton" data-i18n="actions.refresh">Refresh</button>
           </div>
         </header>
 
@@ -67,44 +68,72 @@
           <div class="panel run-panel">
             <div class="panel-head">
               <div>
-                <h2>Run Agent</h2>
-                <p>Configure a sourcing run. Formal mode disables mock suppliers.</p>
+                <h2 data-i18n="run.title">Run Agent</h2>
+                <p data-i18n="run.subtitle">Configure a sourcing run and review the generated analysis summary.</p>
               </div>
-              <button class="ghost-button" id="resetButton">Reset</button>
+              <button class="ghost-button" id="resetButton" data-i18n="actions.reset">Reset</button>
             </div>
 
             <form id="runForm" class="run-form">
-              <label>
-                <span>Category</span>
-                <input name="category" value="Home & Kitchen" autocomplete="off">
-              </label>
-              <label>
-                <span>Marketplace</span>
-                <select name="marketplace">
-                  <option value="US">Amazon US</option>
-                  <option value="UK">Amazon UK</option>
-                  <option value="DE">Amazon DE</option>
-                  <option value="JP">Amazon JP</option>
+              <div class="source-mode-field full-span">
+                <span data-i18n="run.sourceMode">Source Mode</span>
+                <div class="source-mode-options">
+                  <label>
+                    <input name="source_mode" type="radio" value="category" checked>
+                    <span data-i18n="run.sourceCategory">Category</span>
+                  </label>
+                  <label>
+                    <input name="source_mode" type="radio" value="keyword">
+                    <span data-i18n="run.sourceKeyword">Product Keyword</span>
+                  </label>
+                  <label class="disabled">
+                    <input name="source_mode_disabled" type="radio" value="asin" disabled>
+                    <span data-i18n="run.sourceAsin">ASIN</span>
+                  </label>
+                </div>
+              </div>
+              <label data-source-field="category">
+                <span data-i18n="run.category">Category</span>
+                <select name="category" id="categorySelect">
+                  <option value="Home & Kitchen">家居厨具 / Home & Kitchen</option>
+                  <option value="Kitchen & Dining">厨房餐饮 / Kitchen & Dining</option>
+                  <option value="Sports & Outdoors">运动户外 / Sports & Outdoors</option>
+                  <option value="Pet Supplies">宠物用品 / Pet Supplies</option>
+                  <option value="Toys & Games">玩具游戏 / Toys & Games</option>
+                  <option value="Office Products">办公用品 / Office Products</option>
                 </select>
               </label>
+              <label data-source-field="keyword" class="hidden">
+                <span data-i18n="run.keyword">Keyword</span>
+                <input name="keyword" placeholder="水杯 / desk lamp" autocomplete="off">
+                <small id="keywordHint" class="field-hint"></small>
+              </label>
               <label>
-                <span>Limit</span>
+                <span data-i18n="run.marketplace">Marketplace</span>
+                <input name="marketplace_label" value="Amazon US" disabled data-marketplace-value="US">
+              </label>
+              <label>
+                <span data-i18n="run.limit">Limit</span>
                 <input name="limit" type="number" min="1" max="500" value="10">
               </label>
               <label class="switch-row">
-                <span>No-Mock Mode</span>
-                <input name="no_mock" type="checkbox" checked>
+                <span data-i18n="run.llmVerify">LLM Verify</span>
+                <input name="llm_verification" type="checkbox">
               </label>
               <label class="switch-row">
-                <span>LLM Verify</span>
-                <input name="llm_verification" type="checkbox">
+                <span data-i18n="run.requireMarketData">Require Market Data</span>
+                <input name="require_market_data" type="checkbox">
+              </label>
+              <label class="switch-row">
+                <span data-i18n="run.requireSupplierEvidence">Require Supplier Evidence</span>
+                <input name="require_supplier_evidence" type="checkbox">
               </label>
             </form>
 
             <div class="preflight-wrap">
               <div>
                 <div class="section-title">
-                  <h3>Preflight Checklist</h3>
+                  <h3 data-i18n="preflight.title">Preflight Checklist</h3>
                   <span id="preflightBadge" class="badge muted">Checking</span>
                 </div>
                 <div id="preflightList" class="check-list"></div>
@@ -113,7 +142,7 @@
                 <span class="ready-icon">↗</span>
                 <strong>Waiting for preflight</strong>
                 <p>The agent checks cookies, database, exports, and 1688 cooldown before running.</p>
-                <button class="primary-button" id="runButton" type="button">Run Agent</button>
+                <button class="primary-button" id="runButton" type="button" data-i18n="actions.runAgent">Run Agent</button>
                 <small id="runHint">Estimated time depends on 1688 and LLM verification.</small>
               </div>
             </div>
@@ -121,58 +150,194 @@
 
           <aside class="panel recent-panel">
             <div class="panel-head compact">
-              <h2>Recent Runs</h2>
-              <button class="link-button" id="loadRunsButton">View all</button>
+              <h2 data-i18n="recent.title">Recent Runs</h2>
+              <button class="link-button" id="loadRunsButton" data-i18n="actions.viewAll">View all</button>
             </div>
             <div id="jobList" class="timeline"></div>
             <div class="divider"></div>
             <div id="exportRunList" class="export-runs"></div>
+            <div class="divider"></div>
+            <div class="manual-queue-head">
+              <h3 data-i18n="manual.title">1688 Manual Queue</h3>
+              <span id="manualQueueCount">0</span>
+            </div>
+            <div id="manualQueueList" class="manual-queue"></div>
           </aside>
         </section>
 
-        <section class="panel results-panel" id="resultsSection">
-          <div class="panel-head">
-            <div>
-              <h2>Saved Product Selection Results</h2>
-              <p>Read previous crawl and sourcing outputs from local JSON and Excel exports.</p>
+        <section class="results-workspace" id="resultsSection">
+          <div class="panel results-panel">
+            <div class="panel-head">
+              <div>
+                <h2 data-i18n="results.title">Saved Product Selection Results</h2>
+                <p data-i18n="results.subtitle">Read previous crawl and sourcing outputs from local JSON and Excel exports.</p>
+              </div>
+              <div class="table-tools">
+                <input id="searchInput" placeholder="Search ASIN, title, or supplier" data-i18n-placeholder="results.searchPlaceholder">
+                <select id="reviewFilter"></select>
+                <select id="runSelect">
+                  <option value="">All exports</option>
+                </select>
+              </div>
             </div>
-            <div class="table-tools">
-              <input id="searchInput" placeholder="Search ASIN, title, or supplier">
-              <select id="runSelect">
-                <option value="">All exports</option>
-              </select>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="table.saved">Saved</th>
+                    <th data-i18n="table.review">Review</th>
+                    <th data-i18n="table.asin">ASIN</th>
+                    <th data-i18n="table.title">Title</th>
+                    <th data-i18n="table.supplier">Supplier</th>
+                    <th data-i18n="table.buyCost">Buy Cost</th>
+                    <th data-i18n="table.margin">Margin</th>
+                    <th data-i18n="table.match">Match</th>
+                    <th data-i18n="table.score">Score</th>
+                    <th data-i18n="table.status">Status</th>
+                    <th data-i18n="table.export">Export</th>
+                  </tr>
+                </thead>
+                <tbody id="resultsBody"></tbody>
+              </table>
+            </div>
+            <div class="table-footer">
+              <span id="resultCount">0 results</span>
+              <div class="table-footer-actions">
+                <a class="ghost-button" id="downloadReviewedButton" href="/api/reviewed-suppliers.csv" data-i18n="actions.downloadAccepted">Download accepted</a>
+                <button class="ghost-button" id="reloadResultsButton" data-i18n="actions.reloadResults">Reload Results</button>
+              </div>
             </div>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Saved</th>
-                  <th>ASIN</th>
-                  <th>Title</th>
-                  <th>Supplier</th>
-                  <th>Buy Cost</th>
-                  <th>Margin</th>
-                  <th>Score</th>
-                  <th>Status</th>
-                  <th>Export</th>
-                </tr>
-              </thead>
-              <tbody id="resultsBody"></tbody>
-            </table>
-          </div>
-          <div class="table-footer">
-            <span id="resultCount">0 results</span>
-            <button class="ghost-button" id="reloadResultsButton">Reload Results</button>
-          </div>
+          <aside class="panel chat-panel" id="chatPanel">
+            <div class="panel-head compact">
+              <h2 data-i18n="chat.title">Selection Assistant</h2>
+            </div>
+            <div id="chatContext" class="chat-context">Amazon US</div>
+            <div id="chatMessages" class="chat-messages"></div>
+            <form id="chatForm" class="chat-form">
+              <textarea id="chatInput" name="message" rows="3" data-i18n-placeholder="chat.placeholder" placeholder="Ask about candidates"></textarea>
+              <button class="primary-button" type="submit" data-i18n="chat.send">Send</button>
+            </form>
+          </aside>
         </section>
 
         <section class="panel settings-panel" id="settingsSection">
           <div class="panel-head">
             <div>
-              <h2>Agent Policy</h2>
-              <p>The local agent follows the repository system prompt and deterministic tools.</p>
+              <h2 data-i18n="settings.title">Agent Policy</h2>
+              <p data-i18n="settings.subtitle">The local agent follows the repository system prompt and deterministic tools.</p>
             </div>
+          </div>
+          <div class="settings-status" id="configStatusGrid"></div>
+          <form class="settings-config-form browser-agent-form" id="browserAgentForm">
+            <label>
+              <span data-i18n="browser.taskType">Browser task</span>
+              <select name="task_type">
+                <option value="cookie_check" data-i18n="browser.cookieCheck">1688 session check</option>
+                <option value="supplier_detail_enrich" data-i18n="browser.supplierDetail">1688 detail enrich</option>
+                <option value="page_diagnostic" data-i18n="browser.pageDiagnostic">Page diagnostic</option>
+              </select>
+            </label>
+            <label>
+              <span data-i18n="browser.url">Page URL</span>
+              <input name="url" type="url" placeholder="https://s.1688.com/selloffer/offer_search.htm">
+            </label>
+            <label>
+              <span data-i18n="browser.offerUrl">1688 offer URL</span>
+              <input name="offer_url" type="url" placeholder="https://detail.1688.com/offer/...html">
+            </label>
+            <label>
+              <span data-i18n="table.asin">ASIN</span>
+              <input name="asin" autocomplete="off" placeholder="B0...">
+            </label>
+            <label>
+              <span data-i18n="run.keyword">Keyword</span>
+              <input name="keyword" autocomplete="off" placeholder="水杯">
+            </label>
+            <button class="ghost-button" type="submit" data-i18n="browser.run">Run Browser Assistant</button>
+            <small id="browserAgentStatus"></small>
+            <pre class="browser-agent-result" id="browserAgentResult"></pre>
+          </form>
+          <form class="settings-config-form" id="sellerSpriteForm">
+            <label>
+              <span data-i18n="settings.sellerSpriteKey">SellerSprite key</span>
+              <input id="sellerSpriteKeyInput" name="key" type="password" autocomplete="off">
+            </label>
+            <label>
+              <span data-i18n="settings.sellerSpriteBase">API base</span>
+              <input id="sellerSpriteBaseInput" name="base_url" type="url" placeholder="https://api.sellersprite.com/v1">
+            </label>
+            <button class="ghost-button" type="submit" data-i18n="settings.saveSellerSprite">Save SellerSprite</button>
+            <small id="sellerSpriteConfigStatus"></small>
+          </form>
+          <form class="settings-config-form" id="sellerSpriteAsinForm">
+            <label>
+              <span data-i18n="settings.sellerSpriteAsin">SellerSprite ASIN check</span>
+              <input id="sellerSpriteAsinInput" name="asin" value="B01M16WBW1" autocomplete="off">
+            </label>
+            <label>
+              <span data-i18n="run.marketplace">Marketplace</span>
+              <input name="marketplace_label" value="Amazon US" disabled data-marketplace-value="US">
+            </label>
+            <button class="ghost-button" type="submit" data-i18n="settings.checkAsin">Check ASIN</button>
+            <small id="sellerSpriteAsinStatus"></small>
+          </form>
+          <form class="settings-config-form three-col" id="alibabaSearchApiForm">
+            <label>
+              <span data-i18n="settings.alibabaNamespace">1688 namespace</span>
+              <input id="alibabaNamespaceInput" name="namespace" autocomplete="off" placeholder="com.alibaba.pifatuan">
+            </label>
+            <label>
+              <span data-i18n="settings.alibabaMethod">1688 method</span>
+              <input id="alibabaMethodInput" name="method" autocomplete="off" placeholder="alibaba.pifatuan.product.list">
+            </label>
+            <label>
+              <span data-i18n="settings.alibabaKeywordParam">Keyword param</span>
+              <input id="alibabaKeywordParamInput" name="keyword_param" autocomplete="off" placeholder="keywords">
+            </label>
+            <button class="ghost-button" type="submit" data-i18n="settings.saveAlibabaSearch">Save 1688 API</button>
+            <small id="alibabaSearchApiStatus"></small>
+            <label class="full-span">
+              <span data-i18n="settings.alibabaCandidates">Fallback candidates</span>
+              <textarea id="alibabaCandidatesInput" name="candidates" rows="3" placeholder="com.alibaba.example|alibaba.example.search|keywords"></textarea>
+            </label>
+          </form>
+          <form class="settings-config-form" id="alibabaPifatuanForm">
+            <label>
+              <span data-i18n="settings.alibabaPifatuan">1688 pifatuan check</span>
+              <input id="alibabaPifatuanKeywordInput" name="keyword" value="水杯" autocomplete="off">
+            </label>
+            <label>
+              <span data-i18n="settings.checkLimit">Limit</span>
+              <input name="limit" type="number" min="1" max="10" value="3">
+            </label>
+            <button class="ghost-button" type="submit" data-i18n="settings.checkPifatuan">Check 1688 API</button>
+            <small id="alibabaPifatuanStatus"></small>
+          </form>
+          <form class="settings-config-form" id="alibabaImportForm">
+            <label>
+              <span data-i18n="settings.importKeyword">Import keyword</span>
+              <input id="alibabaImportKeywordInput" name="keyword" value="水杯" autocomplete="off">
+            </label>
+            <label>
+              <span data-i18n="settings.importNote">Note</span>
+              <input name="note" autocomplete="off" placeholder="API test tool output">
+            </label>
+            <label class="full-span">
+              <span data-i18n="settings.importPayload">1688 API JSON payload</span>
+              <textarea id="alibabaImportPayloadInput" name="payload" rows="6" placeholder='{"result": {"productList": [...]}}'></textarea>
+            </label>
+            <button class="ghost-button" type="submit" data-i18n="settings.importAlibaba">Import 1688 JSON</button>
+            <small id="alibabaImportStatus"></small>
+          </form>
+          <div class="imported-suppliers-panel">
+            <div class="settings-subhead">
+              <h3 data-i18n="settings.importedTitle">Imported 1688 candidates</h3>
+            </div>
+            <div id="importedSupplierList" class="imported-supplier-list"></div>
+          </div>
+          <div class="settings-subhead">
+            <h3 data-i18n="settings.promptTitle">Runtime Prompt</h3>
           </div>
           <pre id="promptBox"></pre>
         </section>

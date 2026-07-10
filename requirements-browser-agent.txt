@@ -1,0 +1,5 @@
+# Optional Browser Assistant sidecar.
+#
+# Installed into /opt/browser-agent inside Docker so browser-use can manage its
+# fast-moving AI/browser dependencies without changing the main pipeline env.
+browser-use==0.13.3

@@ -291,10 +291,17 @@ _JPY_TO_USD = 0.0067  # 2025/2026 年均汇率
 
 def _parse_price_text(t: str) -> Optional[float]:
     """从价格文本提取 USD 金额，自动处理 JPY。"""
-    t = t.replace("\xa0", " ").strip()
+    t = re.sub(r"\s+", " ", t.replace("\xa0", " ")).strip()
+    lower = t.lower()
+    if lower.startswith(("list:", "list price", "was:", "typical price", "rrp")):
+        return None
     if "JPY" in t or "¥" in t:
         v = _parse_float(t.replace("JPY", "").replace("¥", ""))
         return round(v * _JPY_TO_USD, 2) if v and v > 0 else None
+    if "$" in t or "USD" in t.upper():
+        v = _parse_usd_price_text(t)
+        if v is not None:
+            return v
     v = _parse_float(t)
     if not v or v <= 0:
         return None
@@ -302,6 +309,28 @@ def _parse_price_text(t: str) -> Optional[float]:
         # 裸数字且 ≥ 500：兜底视为 JPY
         return round(v * _JPY_TO_USD, 2)
     return v
+
+
+def _parse_usd_price_text(text: str) -> Optional[float]:
+    if "." in text or "," in text:
+        return None
+
+    split = re.search(
+        r"(?:US\$|\$|USD)\s*(\d{1,4})\s+(\d{2})(?!\d)",
+        text,
+        flags=re.I,
+    )
+    if split:
+        dollars = int(split.group(1))
+        cents = int(split.group(2))
+        return round(dollars + cents / 100, 2)
+
+    compact = re.search(r"(?:US\$|\$|USD)\s*(\d{3,5})(?!\d)", text, flags=re.I)
+    if compact:
+        digits = compact.group(1)
+        return round(int(digits) / 100, 2)
+
+    return None
 
 
 def _parse_float(text: str) -> Optional[float]:
