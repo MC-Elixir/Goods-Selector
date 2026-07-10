@@ -12,13 +12,38 @@ def install_sqlite_foreign_keys(engine: Engine) -> None:
     if engine.dialect.name != "sqlite" or getattr(engine, "_fk_listener", False):
         return
 
-    @event.listens_for(engine, "connect")
-    def set_foreign_keys(dbapi_connection, _connection_record):
+    def set_and_verify_foreign_keys(dbapi_connection) -> None:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA foreign_keys")
+        enabled = cursor.fetchone()[0]
         cursor.close()
+        if enabled != 1:
+            raise RuntimeError("failed to enable SQLite foreign keys")
+
+    @event.listens_for(engine, "connect")
+    def set_foreign_keys_on_connect(dbapi_connection, _connection_record):
+        set_and_verify_foreign_keys(dbapi_connection)
+
+    @event.listens_for(engine, "checkout")
+    def set_foreign_keys_on_checkout(dbapi_connection, _connection_record, _connection_proxy):
+        set_and_verify_foreign_keys(dbapi_connection)
 
     setattr(engine, "_fk_listener", True)
+
+
+def _validated_migrations() -> list[object]:
+    versions: set[str] = set()
+    ordered: list[object] = []
+    for migration in MIGRATIONS:
+        version = getattr(migration, "VERSION", None)
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError("migrations must define a non-empty VERSION")
+        if version in versions:
+            raise ValueError(f"duplicate migration VERSION: {version}")
+        versions.add(version)
+        ordered.append(migration)
+    return sorted(ordered, key=lambda item: item.VERSION)
 
 
 def _run_sqlite_transaction(connection: Connection, operation: Callable[[], None]) -> None:
@@ -83,10 +108,11 @@ def _apply_sqlite_migration(engine: Engine, migration: object) -> bool:
 
 
 def run_migrations(engine: Engine) -> list[str]:
+    migrations = _validated_migrations()
     install_sqlite_foreign_keys(engine)
     _prepare_database(engine)
     applied_now: list[str] = []
-    for migration in sorted(MIGRATIONS, key=lambda item: item.VERSION):
+    for migration in migrations:
         if engine.dialect.name == "sqlite":
             if _apply_sqlite_migration(engine, migration):
                 applied_now.append(migration.VERSION)
