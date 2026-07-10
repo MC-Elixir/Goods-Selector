@@ -295,4 +295,90 @@ def test_high_confidence_negative_is_rejected(monkeypatch):
 
     assert result == []
     assert supplier.match_quality_score == 0.0
-    assert supplier.raw_data["visual_match"]["decision"] == "reject"
+    assert supplier.match_verification_method == "llm_rejected"
+    assert supplier.raw_data["visual_match"] == {
+        "score": 0.0,
+        "classification_confidence": 0.99,
+        "source": "llm",
+        "is_match": False,
+        "decision": "reject",
+        "reason": "整机与替换滤芯",
+        "differences": ["功能不同"],
+    }
+
+
+def test_positive_visual_match_blends_confidence_with_existing_score(monkeypatch):
+    product = SimpleNamespace(main_image_url="https://amazon/image.jpg")
+    supplier = SupplierDTO(
+        alibaba_offer_id="positive",
+        supplier_name="同款供应商",
+        offer_image_url="https://1688/image.jpg",
+        match_quality_score=0.8,
+    )
+    verifier = LLMVisualVerifier(api_key="test", api_base="https://example.invalid", model="test")
+    monkeypatch.setattr(
+        verifier,
+        "_compare_images",
+        lambda *_: {
+            "is_match": True,
+            "confidence": 0.9,
+            "reason": "结构与功能一致",
+            "differences": [],
+        },
+    )
+
+    result = verifier.verify([supplier], product, threshold=0.3)
+
+    assert result == [supplier]
+    assert supplier.match_quality_score == 0.86
+    assert supplier.match_verification_method == "llm"
+    assert supplier.raw_data["visual_match"]["decision"] == "keep"
+
+
+def test_visual_compare_exception_is_failed_closed_with_audit_metadata(monkeypatch):
+    product = SimpleNamespace(main_image_url="https://amazon/image.jpg")
+    supplier = SupplierDTO(
+        alibaba_offer_id="failed",
+        supplier_name="异常供应商",
+        offer_image_url="https://1688/image.jpg",
+        match_quality_score=0.95,
+    )
+    verifier = LLMVisualVerifier(api_key="test", api_base="https://example.invalid", model="test")
+
+    def fail_compare(*_):
+        raise RuntimeError("upstream token=super-secret")
+
+    monkeypatch.setattr(verifier, "_compare_images", fail_compare)
+
+    result = verifier.verify([supplier], product, threshold=0.3)
+
+    assert result == []
+    assert supplier.match_quality_score == 0.0
+    assert supplier.match_verification_method == "llm_failed"
+    assert supplier.raw_data["visual_match"]["source"] == "llm"
+    assert supplier.raw_data["visual_match"]["decision"] == "manual_review"
+    assert supplier.raw_data["visual_match"]["is_match"] is None
+    assert supplier.raw_data["visual_match"]["score"] == 0.0
+    assert "RuntimeError" in supplier.raw_data["visual_match"]["reason"]
+    assert "super-secret" not in supplier.raw_data["visual_match"]["reason"]
+
+
+@pytest.mark.parametrize("payload", [{"confidence": 0.9}, {"is_match": "false", "confidence": 0.9}])
+def test_invalid_is_match_evidence_is_failed_closed(monkeypatch, payload):
+    product = SimpleNamespace(main_image_url="https://amazon/image.jpg")
+    supplier = SupplierDTO(
+        alibaba_offer_id="invalid",
+        supplier_name="无效证据供应商",
+        offer_image_url="https://1688/image.jpg",
+        match_quality_score=0.95,
+    )
+    verifier = LLMVisualVerifier(api_key="test", api_base="https://example.invalid", model="test")
+    monkeypatch.setattr(verifier, "_compare_images", lambda *_: payload)
+
+    result = verifier.verify([supplier], product, threshold=0.3)
+
+    assert result == []
+    assert supplier.match_quality_score == 0.0
+    assert supplier.match_verification_method == "llm_failed"
+    assert supplier.raw_data["visual_match"]["decision"] == "manual_review"
+    assert supplier.raw_data["visual_match"]["is_match"] is None

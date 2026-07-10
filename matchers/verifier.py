@@ -263,8 +263,10 @@ class LLMVisualVerifier:
             try:
                 result = self._compare_images(client, amazon_img, sup.offer_image_url)
                 raise_if_cancelled(cancel_check, "LLM visual verification")
+                is_match = result.get("is_match")
+                if type(is_match) is not bool:
+                    raise ValueError("invalid is_match evidence")
                 llm_score = result.get("confidence", 0.5)
-                is_match = result.get("is_match", True)
 
                 if not is_match:
                     sup.match_quality_score = 0.0
@@ -292,7 +294,19 @@ class LLMVisualVerifier:
             except CancellationRequested:
                 raise
             except Exception as e:
-                logger.warning(f"[llm-verifier] {sup.supplier_name[:20]} 验证失败: {e}")
+                error_reason = f"visual verification failed ({type(e).__name__})"
+                sup.match_quality_score = 0.0
+                sup.match_verification_method = "llm_failed"
+                sup.raw_data["visual_match"] = {
+                    "score": 0.0,
+                    "source": "llm",
+                    "is_match": None,
+                    "decision": "manual_review",
+                    "reason": error_reason,
+                    "differences": [],
+                }
+                _update_supplier_rank_scores(sup)
+                logger.warning(f"[llm-verifier] {sup.supplier_name[:20]} 验证失败: {error_reason}")
 
         client.close()
 
