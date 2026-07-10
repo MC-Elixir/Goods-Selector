@@ -27,7 +27,11 @@
       "Bash(taskkill /F /IM python.exe)",
       "Bash(ls data/*.db)",
       "Bash(ls *.db)",
-      "Bash(ls db/*.db)"
+      "Bash(ls db/*.db)",
+      "Bash(.venv/bin/scrapling --help)",
+      "Bash(.venv/bin/scrapling install *)",
+      "Bash(sqlite3 /home/dell/code/amazon_selector/data/amazon_selector.db \".tables\")",
+      "Bash(sqlite3 /home/dell/code/amazon_selector/data/amazon_selector.db \"SELECT 'products', count\\(*\\) FROM products UNION ALL SELECT 'suppliers', count\\(*\\) FROM suppliers UNION ALL SELECT 'profit_snapshots', count\\(*\\) FROM profit_snapshots UNION ALL SELECT 'scores', count\\(*\\) FROM scores UNION ALL SELECT 'market_analyses', count\\(*\\) FROM market_analyses UNION ALL SELECT 'run_logs', count\\(*\\) FROM run_logs;\")"
     ]
   }
 }
