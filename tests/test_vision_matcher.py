@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +19,7 @@ from matchers.vision_analyzer import (
 )
 from matchers.alibaba_text_search import _parse_search_response, _item_to_dto
 from matchers.alibaba_pailitao import SupplierDTO
+from matchers.verifier import LLMVisualVerifier
 
 
 @pytest.fixture(autouse=True)
@@ -263,3 +265,34 @@ class TestVisionAnalyzerAutoDetect:
 
             analyzer = VisionAnalyzer(provider="auto")
             assert analyzer._provider == "ppio"
+
+
+def test_high_confidence_negative_is_rejected(monkeypatch):
+    product = SimpleNamespace(main_image_url="https://amazon/image.jpg")
+    supplier = SupplierDTO(
+        alibaba_offer_id="negative",
+        supplier_name="整机供应商",
+        offer_image_url="https://1688/image.jpg",
+        match_quality_score=0.8,
+    )
+    verifier = LLMVisualVerifier(
+        api_key="test",
+        api_base="https://example.invalid",
+        model="test",
+    )
+    monkeypatch.setattr(
+        verifier,
+        "_compare_images",
+        lambda *_: {
+            "is_match": False,
+            "confidence": 0.99,
+            "reason": "整机与替换滤芯",
+            "differences": ["功能不同"],
+        },
+    )
+
+    result = verifier.verify([supplier], product, threshold=0.3)
+
+    assert result == []
+    assert supplier.match_quality_score == 0.0
+    assert supplier.raw_data["visual_match"]["decision"] == "reject"

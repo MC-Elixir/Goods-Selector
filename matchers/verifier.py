@@ -105,15 +105,11 @@ class Alibaba1688Verifier:
         if len(filtered) < before + len(rejected):
             logger.info(f"[verifier] 过滤 {before + len(rejected) - len(filtered)} 条不匹配供应商 (threshold={self.threshold_demote})")
 
-        if filtered:
-            return filtered
-
-        fallback = sorted([*results, *rejected], key=_supplier_sort_key, reverse=True)[:3]
-        for sup in fallback:
-            sup.match_verification_method = "heuristic_rejected"
-        if fallback:
-            logger.warning("[verifier] 全部供应商低于阈值，保留 top rejected 供人工复核")
-        return fallback
+        filtered_ids = {id(supplier) for supplier in filtered}
+        for sup in [*results, *rejected]:
+            if id(sup) not in filtered_ids:
+                sup.match_verification_method = "heuristic_rejected"
+        return filtered
 
     def _compute_match_quality(self, supplier, product, analysis, keywords):
         attr_score = self._attribute_score(supplier, analysis)
@@ -270,15 +266,19 @@ class LLMVisualVerifier:
                 llm_score = result.get("confidence", 0.5)
                 is_match = result.get("is_match", True)
 
-                # 混合分数：LLM 权重 60%，启发式 40%
-                old_score = sup.match_quality_score or 0.5
-                new_score = 0.6 * llm_score + 0.4 * old_score
-                sup.match_quality_score = round(new_score, 4)
-                sup.match_verification_method = "llm"
+                if not is_match:
+                    sup.match_quality_score = 0.0
+                    sup.match_verification_method = "llm_rejected"
+                else:
+                    old_score = sup.match_quality_score if sup.match_quality_score is not None else 0.0
+                    sup.match_quality_score = round(0.6 * float(llm_score) + 0.4 * old_score, 4)
+                    sup.match_verification_method = "llm"
                 sup.raw_data["visual_match"] = {
-                    "score": round(float(llm_score), 4),
+                    "score": float(llm_score) if is_match else 0.0,
+                    "classification_confidence": float(llm_score),
                     "source": "llm",
                     "is_match": bool(is_match),
+                    "decision": "keep" if is_match else "reject",
                     "reason": result.get("reason"),
                     "differences": result.get("differences") or [],
                 }
@@ -298,15 +298,10 @@ class LLMVisualVerifier:
 
         # 重新排序和过滤
         suppliers.sort(key=_supplier_sort_key, reverse=True)
-        ranked = list(suppliers)
         before = len(suppliers)
         suppliers = [s for s in suppliers if (s.match_quality_score or 0) > threshold]
         if len(suppliers) < before:
             logger.info(f"[llm-verifier] 过滤 {before - len(suppliers)} 条不匹配供应商")
-
-        if not suppliers:
-            logger.warning("[llm-verifier] 全部被过滤，保留 top 3 兜底")
-            suppliers = ranked[:3]
 
         return suppliers
 

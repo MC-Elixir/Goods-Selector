@@ -68,25 +68,23 @@ def test_verifier_records_spec_match_and_penalizes_conflicts():
     assert (result[0].match_quality_score or 0) > (result[1].match_quality_score or 0)
 
 
-def test_verifier_keeps_rejected_fallback_for_manual_review():
+def test_all_low_quality_suppliers_are_not_reintroduced():
     supplier = SupplierDTO(
-        alibaba_offer_id="123456789",
-        supplier_name="低相关工厂",
-        title_cn="木质桌面收纳盒",
+        alibaba_offer_id="irrelevant",
+        supplier_name="无关工厂",
+        title_cn="完全无关的工业轴承",
         base_price_cny=10,
     )
 
-    result = Alibaba1688Verifier().verify(
+    result = Alibaba1688Verifier(threshold_demote=0.4).verify(
         [supplier],
         _product(),
-        _analysis(),
-        ["不锈钢保温杯"],
+        analysis=_analysis(),
+        search_keywords=["瑜伽垫"],
     )
 
-    assert len(result) == 1
-    assert result[0].match_verification_method == "heuristic_rejected"
-    assert result[0].raw_data["target_spec"]["category"] == "保温杯"
-    assert result[0].raw_data["spec_match"]["conflicts"] == ["title_relevance"]
+    assert result == []
+    assert supplier.match_verification_method == "heuristic_rejected"
 
 
 def test_verifier_uses_visual_similarity_as_ranking_signal():
