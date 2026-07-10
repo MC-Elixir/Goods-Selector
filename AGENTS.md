@@ -39,7 +39,7 @@ This repository implements the principle above as a local product sourcing agent
 ### Environment
 
 - Repository code and configuration.
-- Terminal process running `python main.py agent-web`.
+- Terminal process running `docker compose up -d --build amazon-selector` for the official WebUI runtime.
 - SQLite database at `data/amazon_selector.db`.
 - Cookie files in `data/amazon_cookies.json` and `data/1688_cookies.json`.
 - Exported result files in `data/exports/`.
@@ -69,7 +69,7 @@ Policy summary:
 Run:
 
 ```bash
-python main.py agent-web
+docker compose up -d --build amazon-selector
 ```
 
 Open:
@@ -77,5 +77,7 @@ Open:
 ```text
 http://127.0.0.1:8765
 ```
+
+`python main.py agent-web` remains available only for local debugging fallback.
 
 The UI can launch new sourcing runs, show preflight health, read previous product selection exports, search candidates, download Excel files, and save product selections to `data/agent_saved_items.json`.

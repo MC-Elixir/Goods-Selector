@@ -51,9 +51,12 @@ python main.py run --category "Home & Kitchen" --limit 50
 python main.py run --category "Home & Kitchen" --limit 50 --marketplace US   # default
 python main.py run --category "Toys & Games" --limit 10 --marketplace UK
 
-# Start the local Agent WebUI
-python main.py agent-web
+# Start the local Agent WebUI (official runtime)
+docker compose up -d --build amazon-selector
 # then open http://127.0.0.1:8765
+
+# Local debugging fallback only
+python main.py agent-web
 
 # Run all tests (pure unit tests, no network or API keys required)
 pytest tests/
@@ -125,7 +128,7 @@ Agent components under the design principle:
 - **Tools**: preflight checks, `run_pipeline`, export readers, saved-selection writer, Excel/JSON download endpoints.
 - **System Prompt**: `agent.runner.AGENT_SYSTEM_PROMPT`; it requires real data preference, no-mock formal mode, preflight before runs, human handoff for 1688 captcha/popup blockers, and post-run audit.
 
-The WebUI is intentionally local-only by default (`127.0.0.1:8765`) and does not add external web framework dependencies.
+The WebUI is intentionally local-only by default (`127.0.0.1:8765`) and does not add external web framework dependencies. The official runtime is Docker on `127.0.0.1:8765`; `python main.py agent-web` is only a local debugging fallback.
 
 ### Data flow objects
 

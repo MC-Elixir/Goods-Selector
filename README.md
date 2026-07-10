@@ -30,12 +30,14 @@ pytest tests/
 
 ## Agent WebUI
 
-本项目现在提供一个本地 Agent 控制台，把"环境 + 工具 + 系统提示 + 循环"落到可操作界面：
+本项目现在提供一个本地 Agent 控制台，把"环境 + 工具 + 系统提示 + 循环"落到可操作界面。正式使用默认走 Docker，只保留 `8765` 这一套运行方式：
 
 ```bash
-python main.py agent-web
+docker compose up -d --build amazon-selector
 # 打开 http://127.0.0.1:8765
 ```
+
+`python main.py agent-web` 仅用于本机调试备用，不建议作为日常启动方式，否则很容易和 Docker 同时开出两套服务。
 
 WebUI 能做：
 
@@ -70,11 +72,11 @@ BU_CDP_HTTP=http://host.docker.internal:9222
 ## Docker
 
 本项目支持 Docker 部署，**正式跑默认禁用 mock 供应商**（`alibaba_allow_mock_suppliers` 默认 False，compose 环境变量再次硬设 `false`）。
-完整部署流程见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，包含 `.env` 配置、首次登录 cookies、Docker/本地启动、命令或 WebUI 按钮运行选品、Excel/JSON/Markdown 报告和 Dashboard 查看结果。
+完整部署流程见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，包含 `.env` 配置、首次登录 cookies、Docker 启动、命令或 WebUI 按钮运行选品、Excel/JSON/Markdown 报告和 Dashboard 查看结果。
 
 ```bash
 # 一条命令构建并启动 Agent WebUI（端口默认只映射到本机 127.0.0.1:8765）
-docker compose up --build
+docker compose up -d --build amazon-selector
 # 打开 http://127.0.0.1:8765
 
 # 一次性 CLI 任务（command 会被替换；entrypoint 仍会先跑 init-db）
@@ -89,6 +91,14 @@ docker compose run --rm amazon-selector pytest tests/ -q
 数据持久化：`./data:/app/data` 卷挂载，SQLite 数据库、缓存、cookies、导出文件、日志都落在这里。首次启动时 entrypoint 会自动创建 `cache/`、`exports/`、`images/`、`logs/` 并跑 `init-db` 建表。
 
 环境变量：参考 `.env.example`（本地文件，未入库）填好 `.env`，至少需要 `PPIO_API_KEY`（视觉识别）。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，容器通过卷挂载读取。关键变量：`PPIO_API_KEY`（视觉识别，必需）、`KEEPA_API_KEY`/`RAINFOREST_API_KEY`（Amazon API 抓取，可选，否则走 scrapling）、`MJJL_API_KEY`（卖家精灵市场分析，可选）、`ALIBABA_DETAIL_ENRICH_LIMIT=2`（每个商品最多补全的 1688 详情候选数）、`LOG_DIR=data/logs`（日志目录）、`ALIBABA_ALLOW_MOCK_SUPPLIERS=false`（正式跑保持 `false`）。
+
+本机调试备用入口：
+
+```bash
+python main.py agent-web
+```
+
+这个入口仅用于本机调试，例如临时排查静态页面或接口，不作为正式使用路径。
 
 远程访问：默认 `docker-compose.yml` 使用 `127.0.0.1:8765:8765`，外部电脑无法直接访问。公司内网访问建议优先用 VPN/SSH 隧道；如果要开放到局域网，把端口映射改成 `"8765:8765"`，并在公司电脑防火墙放行 8765。当前 WebUI 没有登录鉴权，不建议直接暴露公网。
 

@@ -148,6 +148,11 @@ def agent_web_cmd(host: str, port: int):
     """启动 Amazon Selector Agent WebUI。"""
     from agent.server import run_server
 
+    if host == "127.0.0.1" and port == 8765:
+        click.echo(
+            "提示：正式使用默认走 Docker：`docker compose up -d --build amazon-selector`，"
+            "然后打开 http://127.0.0.1:8765 。`python main.py agent-web` 仅用于本机调试备用。"
+        )
     run_server(host=host, port=port)
 
 

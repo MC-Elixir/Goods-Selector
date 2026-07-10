@@ -108,6 +108,19 @@ def test_smoke_run_cli_prints_json(monkeypatch, tmp_path):
     assert '"run_log_id": 456' in result.output
 
 
+def test_agent_web_cli_warns_that_docker_is_the_default_runtime(monkeypatch):
+    called = []
+    monkeypatch.setattr("agent.server.run_server", lambda **kwargs: called.append(kwargs))
+
+    result = CliRunner().invoke(cli, ["agent-web"])
+
+    assert result.exit_code == 0
+    assert "Docker" in result.output
+    assert "docker compose up -d --build amazon-selector" in result.output
+    assert "http://127.0.0.1:8765" in result.output
+    assert called == [{"host": "127.0.0.1", "port": 8765}]
+
+
 def test_run_smoke_can_require_market_data(monkeypatch, tmp_path):
     export = tmp_path / "candidates_live.json"
     export.write_text("[]", encoding="utf-8")

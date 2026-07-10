@@ -59,6 +59,19 @@ def test_compose_uses_single_persistent_data_volume_and_local_only_port():
     assert 'ALIBABA_ALLOW_MOCK_SUPPLIERS: "false"' in compose
 
 
+def test_docs_present_docker_as_the_default_webui_runtime():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    agents = Path("AGENTS.md").read_text(encoding="utf-8")
+    claude = Path("CLAUDE.md").read_text(encoding="utf-8")
+
+    assert "docker compose up -d --build amazon-selector" in readme
+    assert "正式使用默认走 Docker" in readme
+    assert "python main.py agent-web" in readme
+    assert "仅用于本机调试" in readme
+    assert "docker compose up -d --build amazon-selector" in agents
+    assert "docker compose up -d --build amazon-selector" in claude
+
+
 def test_env_example_documents_deployment_paths_and_formal_mock_policy():
     env_example = Path(".env.example").read_text(encoding="utf-8")
 
