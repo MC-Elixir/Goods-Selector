@@ -50,6 +50,43 @@ def _record_review_status(record) -> str:
     return "rejected"
 
 
+def _evidence_payload(record) -> dict[str, Any]:
+    slice_result = getattr(record, "sourcing_slice", None)
+    recommendation = getattr(slice_result, "recommendation", None)
+    status = getattr(recommendation, "status", None)
+    status = getattr(status, "value", status)
+
+    def _model(value):
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        if is_dataclass(value):
+            return asdict(value)
+        return value
+
+    matches = []
+    if slice_result:
+        evaluated = getattr(slice_result, "evaluated_matches", None)
+        values = evaluated if evaluated is not None else [
+            *getattr(slice_result, "accepted_matches", []),
+            *getattr(slice_result, "rejected_matches", []),
+        ]
+        matches = [_model(item) for item in values]
+    return {
+        "schema_version": "2.0",
+        "run_ref": getattr(slice_result, "run_ref", None),
+        "query_plan_and_hit_rates": getattr(slice_result, "query_attempts", []),
+        "match_evidence": matches,
+        "recommendation_status": status,
+        "recommendation_reasons": list(getattr(recommendation, "recommendation_reasons", []) or []),
+        "evidence_rejection_reasons": list(getattr(recommendation, "rejection_reasons", []) or []),
+        "manual_verification_tasks": list(getattr(recommendation, "manual_verification_tasks", []) or []),
+    }
+
+
+def _json_cell(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 # ============================================================
 # Excel
 # ============================================================
@@ -81,6 +118,8 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
         "供应商数", "Top1供应商", "Top1货源链接", "Top1采购价(CNY)", "Top1 MOQ",
         "Top1来源", "Top1视觉相似", "Top1匹配分", "Top1候选分", "Top1供应商质量分", "Top1业务条件分",
         "通过筛选", "审核状态", "拒绝原因",
+        "Schema版本", "Run Ref", "查询计划与命中率", "匹配证据", "推荐状态",
+        "推荐原因", "证据拒绝原因", "人工核验任务",
     ]
 
     header_fill = PatternFill("solid", fgColor="1F4E79")
@@ -157,6 +196,15 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
             _record_review_status(rec),
             ", ".join(_record_rejection_reasons(rec)),
         ]
+        evidence = _evidence_payload(rec)
+        row_data.extend([
+            evidence["schema_version"], evidence["run_ref"],
+            _json_cell(evidence["query_plan_and_hit_rates"]),
+            _json_cell(evidence["match_evidence"]), evidence["recommendation_status"],
+            _json_cell(evidence["recommendation_reasons"]),
+            _json_cell(evidence["evidence_rejection_reasons"]),
+            _json_cell(evidence["manual_verification_tasks"]),
+        ])
 
         for col, val in enumerate(row_data, 1):
             cell = ws.cell(row=row_idx, column=col, value=val)
@@ -171,6 +219,7 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
                   8, 25, 40, 12, 8,
                   12, 10, 10, 10, 12, 12,
                   8, 24, 25]
+    col_widths.extend([12, 18, 35, 35, 24, 30, 30, 30])
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -327,6 +376,19 @@ def export_markdown(candidates: list, output_dir: Optional[Path] = None) -> list
             suppliers_section="\n".join(sup_lines),
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
+        evidence = _evidence_payload(rec)
+        evidence_section = (
+            "\n## 证据链\n\n"
+            f"- Schema version: `{evidence['schema_version']}`\n"
+            f"- Run ref: `{evidence['run_ref'] or '-'}`\n"
+            f"- Recommendation status: `{evidence['recommendation_status'] or '-'}`\n"
+            f"- Query plan and hit rates: `{_json_cell(evidence['query_plan_and_hit_rates'])}`\n"
+            f"- Match evidence: `{_json_cell(evidence['match_evidence'])}`\n"
+            f"- Recommendation reasons: `{_json_cell(evidence['recommendation_reasons'])}`\n"
+            f"- Rejection reasons: `{_json_cell(evidence['evidence_rejection_reasons'])}`\n"
+            f"- Manual verification tasks: `{_json_cell(evidence['manual_verification_tasks'])}`\n\n"
+        )
+        content = content.replace("\n---\n\n*生成时间", f"{evidence_section}\n---\n\n*生成时间")
 
         out = output_dir / f"{asin}.md"
         out.write_text(content, encoding="utf-8")
@@ -355,7 +417,7 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
         raw = getattr(p, "raw_data", None) if p else None
         raw = raw if isinstance(raw, dict) else {}
 
-        return {
+        payload = {
             "review_status": _record_review_status(rec),
             "rejection_reasons": _record_rejection_reasons(rec),
             "product": {
@@ -397,6 +459,8 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
             "market": _market_payload(market),
             "suppliers": [_supplier_payload(s) for s in sups[:10]],
         }
+        payload.update(_evidence_payload(rec))
+        return payload
 
     data = [_serialize(r) for r in candidates]
     output_path.write_text(
