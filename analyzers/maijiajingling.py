@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
+import json
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -91,6 +93,39 @@ class MarketAnalysisDTO:
     def __bool__(self) -> bool:
         """没有 ASIN 视为空结果。"""
         return bool(self.asin)
+
+
+@dataclass
+class MarketEvidenceResult:
+    status: str
+    data: MarketAnalysisDTO | None
+    missing_fields: list[str] = field(default_factory=list)
+    error_code: str | None = None
+    diagnostic: str | None = None
+
+
+class MarketDataError(RuntimeError):
+    """Stable, sanitized failure raised at the SellerSprite boundary."""
+
+    def __init__(self, error_code: str, diagnostic: str):
+        self.error_code = error_code
+        self.diagnostic = diagnostic
+        super().__init__(f"{error_code}: {diagnostic}")
+
+    @classmethod
+    def from_exception(cls, exc: BaseException) -> "MarketDataError":
+        if isinstance(exc, cls):
+            return exc
+        if isinstance(exc, httpx.TimeoutException):
+            return cls("TIMEOUT", "SellerSprite request timed out")
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            if status in (401, 403):
+                return cls("AUTH_REQUIRED", f"SellerSprite authentication failed ({status})")
+            if status == 429:
+                return cls("RATE_LIMITED", "SellerSprite rate limit reached")
+            return cls("UPSTREAM_ERROR", f"SellerSprite HTTP failure ({status})")
+        return cls("UPSTREAM_ERROR", f"SellerSprite request failed ({type(exc).__name__})")
 
 
 @dataclass
@@ -398,6 +433,7 @@ class MaijiajinglingClient:
             self.base_url = self.base_url[:-3]
 
         self._configured: bool = bool(self.api_key)
+        self._response_diagnostics: list[dict[str, str]] = []
         if not self._configured:
             logger.warning("MJJL_API_KEY 未配置 — 所有 API 调用将跳过")
 
@@ -409,6 +445,97 @@ class MaijiajinglingClient:
                 "x-request-id": str(uuid4()),
             },
             timeout=30.0,
+        )
+
+    def _request(self, method: str, endpoint: str, **kwargs) -> tuple[dict, dict]:
+        """Request JSON with stable errors and non-sensitive diagnostics."""
+        try:
+            response = self._client.request(method, endpoint, **kwargs)
+            response.raise_for_status()
+            body = response.json()
+        except Exception as exc:
+            raise MarketDataError.from_exception(exc) from exc
+        if not isinstance(body, dict):
+            raise MarketDataError("MISSING_REQUIRED_DATA", "SellerSprite response was not an object")
+        code = str(body.get("code") or "")
+        message = str(body.get("message") or "")
+        normalized = f"{code} {message}".lower()
+        if any(token in normalized for token in ("invalid key", "invalid secret", "unauthorized", "forbidden")):
+            raise MarketDataError("AUTH_REQUIRED", "SellerSprite credentials were rejected")
+        if code and code != "OK":
+            raise MarketDataError("UPSTREAM_ERROR", f"SellerSprite API returned code {code}")
+        if "data" not in body:
+            raise MarketDataError("MISSING_REQUIRED_DATA", "SellerSprite response omitted data")
+        received_at = datetime.now(timezone.utc)
+        safe_hash = hashlib.sha256(
+            json.dumps(body, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        return body, {
+            "endpoint": endpoint,
+            "response_timestamp": received_at.isoformat(),
+            "response_hash": safe_hash,
+        }
+
+    def _send(self, method: str, endpoint: str, **kwargs):
+        """Compatibility response helper used by existing DTO parsers."""
+        try:
+            response = getattr(self._client, method.lower())(endpoint, **kwargs)
+            response.raise_for_status()
+            body = response.json()
+        except Exception as exc:
+            raise MarketDataError.from_exception(exc) from exc
+        if not isinstance(body, dict):
+            raise MarketDataError("MISSING_REQUIRED_DATA", "SellerSprite response was not an object")
+        normalized = f"{body.get('code', '')} {body.get('message', '')}".lower()
+        if any(token in normalized for token in ("invalid key", "invalid secret", "unauthorized", "forbidden")):
+            raise MarketDataError("AUTH_REQUIRED", "SellerSprite credentials were rejected")
+        self._response_diagnostics.append({
+            "endpoint": endpoint,
+            "response_timestamp": datetime.now(timezone.utc).isoformat(),
+            "response_hash": hashlib.sha256(
+                json.dumps(body, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest(),
+        })
+        return response
+
+    def analyze_market_evidence(
+        self,
+        asin: str,
+        marketplace: str = "US",
+        keyword: Optional[str] = None,
+    ) -> MarketEvidenceResult:
+        if (marketplace or "US").upper() != "US":
+            return MarketEvidenceResult(
+                status="failed", data=None, error_code="UNSUPPORTED_MARKETPLACE",
+                diagnostic="Amazon market evidence currently supports US only",
+            )
+        if not self._configured:
+            return MarketEvidenceResult(
+                status="failed", data=None, error_code="AUTH_REQUIRED",
+                diagnostic="SellerSprite API key is not configured",
+            )
+        try:
+            data = self.analyze_market(asin, marketplace=marketplace, keyword=keyword)
+        except Exception as exc:
+            error = MarketDataError.from_exception(exc)
+            return MarketEvidenceResult(
+                status="failed", data=None, error_code=error.error_code,
+                diagnostic=error.diagnostic,
+            )
+        if not data or not data.asin:
+            return MarketEvidenceResult(
+                status="failed", data=None, error_code="MISSING_REQUIRED_DATA",
+                diagnostic="SellerSprite returned no market analysis",
+            )
+        required = (
+            "est_monthly_sales", "competing_listings",
+            "search_volume_monthly", "top10_revenue_share",
+        )
+        missing = [name for name in required if getattr(data, name, None) is None]
+        return MarketEvidenceResult(
+            status="partial" if missing else "success",
+            data=data,
+            missing_fields=missing,
         )
 
     # --------------------------------------------------------
@@ -434,6 +561,7 @@ class MaijiajinglingClient:
             logger.warning("MJJL_API_KEY 未配置，跳过市场分析")
             return MarketAnalysisDTO()
 
+        self._response_diagnostics = []
         dto = MarketAnalysisDTO(asin=asin, marketplace=marketplace)
 
         # ---- 1. ASIN 详情 ----
@@ -587,6 +715,8 @@ class MaijiajinglingClient:
                         f"关键词趋势失败 asin={asin} keyword={keyword_candidate!r}: {trend_exc}"
                     )
 
+        if self._response_diagnostics:
+            dto.raw_data["seller_sprite_diagnostics"] = list(self._response_diagnostics)
         return dto
 
     # --------------------------------------------------------
@@ -599,13 +729,14 @@ class MaijiajinglingClient:
         if not self._configured:
             return AsinDetailDTO()
 
-        resp = self._client.get(f"/v1/asin/{marketplace}/{asin}")
-        resp.raise_for_status()
+        resp = self._send("GET", f"/v1/asin/{marketplace}/{asin}")
         body: dict = resp.json()
         if body.get("code") != "OK":
             raise RuntimeError(f"ASIN 详情 API 返回错误: {body.get('message')}")
 
         d = body.get("data") or {}
+        if not d:
+            raise MarketDataError("MISSING_REQUIRED_DATA", "SellerSprite ASIN detail omitted data")
         badge = d.get("badge") or {}
         lp = d.get("listPrice") or {}
         bsr_cat = d.get("bsrCategory") or {}
@@ -670,11 +801,10 @@ class MaijiajinglingClient:
         if not self._configured:
             return BsrPredictionDTO()
 
-        resp = self._client.get(
+        resp = self._send("GET",
             "/v1/sales/prediction/bsr",
             params={"marketplace": marketplace, "bsr": bsr, "categoryId": category_id},
         )
-        resp.raise_for_status()
         body: dict = resp.json()
         if body.get("code") != "OK":
             raise RuntimeError(f"BSR 预测 API 返回错误: {body.get('message')}")
@@ -730,8 +860,7 @@ class MaijiajinglingClient:
             payload["nodeIdPath"] = node_id_path
         payload.update(extra_params)
 
-        resp = self._client.post("/v1/product/competitor-lookup", json=payload)
-        resp.raise_for_status()
+        resp = self._send("POST", "/v1/product/competitor-lookup", json=payload)
         body: dict = resp.json()
         if body.get("code") != "OK":
             raise RuntimeError(f"竞品查询 API 返回错误: {body.get('message')}")
@@ -778,8 +907,7 @@ class MaijiajinglingClient:
             payload["departments"] = departments
         payload.update(extra_params)
 
-        resp = self._client.post("/v1/keyword-research", json=payload)
-        resp.raise_for_status()
+        resp = self._send("POST", "/v1/keyword-research", json=payload)
         body: dict = resp.json()
         if body.get("code") != "OK":
             raise RuntimeError(f"关键词选品 API 返回错误: {body.get('message')}")
@@ -795,11 +923,10 @@ class MaijiajinglingClient:
         if not self._configured:
             return {"code": "SKIP", "data": []}
 
-        resp = self._client.post(
+        resp = self._send("POST",
             "/v1/keyword-research/trends",
             json={"marketplace": marketplace, "keyword": keyword},
         )
-        resp.raise_for_status()
         body: dict = resp.json()
         if body.get("code") != "OK":
             raise RuntimeError(f"关键词趋势 API 返回错误: {body.get('message')}")
@@ -825,8 +952,7 @@ class MaijiajinglingClient:
         if parent_id:
             params["nodeIdPath"] = parent_id
 
-        resp = self._client.get("/v1/product/node", params=params)
-        resp.raise_for_status()
+        resp = self._send("GET", "/v1/product/node", params=params)
         body: dict = resp.json()
         if body.get("code") != "OK":
             raise RuntimeError(f"类目查询 API 返回错误: {body.get('message')}")
@@ -854,8 +980,7 @@ class MaijiajinglingClient:
         if star_list:
             payload["starList"] = star_list
 
-        resp = self._client.post("/v1/review", json=payload)
-        resp.raise_for_status()
+        resp = self._send("POST", "/v1/review", json=payload)
         body: dict = resp.json()
         if body.get("code") != "OK":
             raise RuntimeError(f"评论 API 返回错误: {body.get('message')}")
@@ -876,8 +1001,7 @@ class MaijiajinglingClient:
         if month:
             payload["month"] = month
 
-        resp = self._client.post("/v1/discount/asin", json=payload)
-        resp.raise_for_status()
+        resp = self._send("POST", "/v1/discount/asin", json=payload)
         body: dict = resp.json()
         if body.get("code") != "OK":
             raise RuntimeError(f"优惠趋势 API 返回错误: {body.get('message')}")
@@ -892,8 +1016,7 @@ class MaijiajinglingClient:
         if not self._configured:
             return {"code": "SKIP", "message": "API key not configured"}
 
-        resp = self._client.get("/v1/visits")
-        resp.raise_for_status()
+        resp = self._send("GET", "/v1/visits")
         return resp.json()
 
     # --------------------------------------------------------

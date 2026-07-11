@@ -13,6 +13,7 @@ from scrapling.parser import Adaptor
 
 from crawlers._amazon_cookies import load_cookies
 from crawlers.amazon_bsr import ProductDTO
+from schemas.sourcing import EvidenceStatus, FieldEvidence
 
 
 _ASIN_RE = re.compile(r"/dp/([A-Z0-9]{10})")
@@ -27,6 +28,38 @@ _DEFAULT_COOKIES: list[dict] = [
     {"name": "i18n-prefs", "value": "USD", "domain": ".amazon.com", "path": "/"},
     {"name": "lc-main", "value": "en_US", "domain": ".amazon.com", "path": "/"},
 ]
+
+
+def apply_detail_evidence(
+    product: ProductDTO,
+    fields: dict[str, FieldEvidence],
+) -> ProductDTO:
+    """Persist the evidence envelope and safely hydrate legacy DTO fields."""
+    raw = product.raw_data if isinstance(product.raw_data, dict) else {}
+    product.raw_data = raw
+    raw["field_evidence"] = {
+        name: item.model_dump(mode="json") for name, item in fields.items()
+    }
+
+    allowed = {EvidenceStatus.EXTRACTED, EvidenceStatus.VERIFIED}
+    simple_mapping = {
+        "title": "title",
+        "brand": "brand",
+        "price": "price",
+        "bsr": "bsr_rank",
+        "rating": "rating",
+        "review_count": "review_count",
+        "weight_kg": "weight_kg",
+        "main_image": "main_image_url",
+    }
+    for evidence_name, dto_name in simple_mapping.items():
+        item = fields.get(evidence_name)
+        if item is not None and item.status in allowed and item.value is not None:
+            setattr(product, dto_name, item.value)
+    dimensions = fields.get("product_dimensions")
+    if dimensions is not None and dimensions.status in allowed and dimensions.value:
+        product.length_cm, product.width_cm, product.height_cm = dimensions.value
+    return product
 
 
 @dataclass(frozen=True)
@@ -269,6 +302,13 @@ def search_amazon_products(keyword: str, marketplace: str = "US", limit: int = 1
                 product = scraper._scrape_product(session, _AMAZON_US, result.asin, "US", None)  # type: ignore[arg-type]
                 raw = product.raw_data if isinstance(product.raw_data, dict) else {}
                 product.raw_data = raw
+                existing_evidence = raw.get("field_evidence")
+                if isinstance(existing_evidence, dict):
+                    parsed = {
+                        name: value if isinstance(value, FieldEvidence) else FieldEvidence.model_validate(value)
+                        for name, value in existing_evidence.items()
+                    }
+                    apply_detail_evidence(product, parsed)
                 raw.update({
                     "source_mode": "keyword",
                     "source_keyword": normalized.original,

@@ -7,6 +7,8 @@ from analyzers.maijiajingling import (
     AsinDetailDTO,
     BsrPredictionDTO,
     MaijiajinglingClient,
+    MarketAnalysisDTO,
+    MarketDataError,
     _extract_keyword_metrics,
 )
 
@@ -29,6 +31,10 @@ class _RecordingHttpClient:
 
     def get(self, path, params=None):
         self.calls.append(SimpleNamespace(method="GET", path=path, params=params))
+        return _FakeResponse(self.payload)
+
+    def request(self, method, path, **kwargs):
+        self.calls.append(SimpleNamespace(method=method, path=path, params=kwargs.get("params")))
         return _FakeResponse(self.payload)
 
 
@@ -270,3 +276,60 @@ def test_analyze_market_continues_when_asin_detail_unavailable():
     assert dto.main_keyword == "fallback keyword"
     assert "asin_detail_error" in dto.raw_data
     assert "competitor_lookup" in dto.raw_data
+
+
+def test_invalid_key_is_failed_evidence_not_empty_market(monkeypatch):
+    client = MaijiajinglingClient(api_key="invalid")
+    monkeypatch.setattr(
+        client, "analyze_market",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            MarketDataError("AUTH_REQUIRED", "invalid key")
+        ),
+    )
+    result = client.analyze_market_evidence(
+        "B000TEST", marketplace="US", keyword="water filter"
+    )
+    assert result.status == "failed"
+    assert result.error_code == "AUTH_REQUIRED"
+    assert result.data is None
+
+
+def test_partial_market_result_lists_missing_fields(monkeypatch):
+    client = MaijiajinglingClient(api_key="test")
+    monkeypatch.setattr(
+        client, "analyze_market",
+        lambda *args, **kwargs: MarketAnalysisDTO(
+            asin="B000TEST", est_monthly_sales=500
+        ),
+    )
+    result = client.analyze_market_evidence(
+        "B000TEST", marketplace="US", keyword="water filter"
+    )
+    assert result.status == "partial"
+    assert "competing_listings" in result.missing_fields
+    assert "search_volume_monthly" in result.missing_fields
+
+
+def test_market_http_failures_have_stable_safe_error_codes():
+    assert MarketDataError.from_exception(__import__("httpx").TimeoutException("late")).error_code == "TIMEOUT"
+    for status, code in ((401, "AUTH_REQUIRED"), (403, "AUTH_REQUIRED"), (429, "RATE_LIMITED")):
+        request = __import__("httpx").Request("GET", "https://api.sellersprite.com/v1/test")
+        response = __import__("httpx").Response(status, request=request)
+        error = MarketDataError.from_exception(__import__("httpx").HTTPStatusError("failed", request=request, response=response))
+        assert error.error_code == code
+        assert "secret" not in error.diagnostic.lower()
+
+
+def test_request_diagnostics_are_hashed_and_do_not_store_api_key():
+    client = MaijiajinglingClient(api_key="top-secret", base_url="https://api.sellersprite.com")
+    client._client = _RecordingHttpClient({"code": "OK", "data": {"value": 1}})
+
+    body, diagnostic = client._request("GET", "/v1/test")
+
+    assert body["data"] == {"value": 1}
+    assert diagnostic["endpoint"] == "/v1/test"
+    assert len(diagnostic["response_hash"]) == 64
+    assert "top-secret" not in str(diagnostic)
+    assert __import__("datetime").datetime.fromisoformat(
+        diagnostic["response_timestamp"]
+    ).utcoffset() is not None

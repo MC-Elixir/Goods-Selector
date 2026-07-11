@@ -21,9 +21,13 @@ Amazon 字段提取器（共享，2026 版）
 from __future__ import annotations
 
 import re
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from agent.provenance import evidence
 from crawlers._amazon_page import PageLike
+from schemas.sourcing import EvidenceStatus, FieldEvidence
 
 
 # ============================================================
@@ -281,6 +285,121 @@ def is_captcha(page: PageLike) -> bool:
 def extract_title(page: PageLike, fallback: str = "") -> str:
     t = page.text("#productTitle")
     return (t or fallback).strip() if (t or fallback) else (fallback or "")
+
+
+def _field(value, name: str, source_ref: str, confidence: float = 0.9) -> FieldEvidence:
+    """Build Task-1-valid evidence, including explicit missing values."""
+    if value is None or value == "" or value == []:
+        return evidence(
+            value=None,
+            status=EvidenceStatus.MISSING,
+            source_provider="amazon_us",
+            source_type="product_detail",
+            source_ref=source_ref,
+            confidence=0.0,
+            extraction_method=name,
+        )
+    now = datetime.now(timezone.utc)
+    return evidence(
+        value=value,
+        status=EvidenceStatus.EXTRACTED,
+        source_provider="amazon_us",
+        source_type="product_detail",
+        source_ref=source_ref,
+        observed_at=now,
+        expires_at=now + timedelta(days=1),
+        confidence=confidence,
+        extraction_method=name,
+    )
+
+
+def _first_text(page: PageLike, selectors: tuple[str, ...]) -> Optional[str]:
+    for selector in selectors:
+        value = page.text(selector)
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
+def _extract_variation_price(page: PageLike) -> Optional[str]:
+    return _first_text(page, ("#variation_price", ".twister-plus-price-data-price", ".a-price-range"))
+
+
+def _extract_seller_count(page: PageLike) -> Optional[int]:
+    text = _first_text(page, ("#olpLinkWidget_feature_div", "#aod-ingress-link", "#buybox-see-all-buying-choices"))
+    return _parse_int(text or "")
+
+
+def _merchant_text(page: PageLike) -> Optional[str]:
+    return _first_text(page, ("#merchant-info", "#sellerProfileTriggerId", "#tabular-buybox"))
+
+
+def _extract_seller(page: PageLike) -> Optional[str]:
+    text = _merchant_text(page)
+    if not text:
+        return None
+    match = re.search(r"Sold by\s+(.+?)(?:\s+and\s+Fulfilled by|[.\n]|$)", text, re.I)
+    return match.group(1).strip() if match else None
+
+
+def _extract_fulfillment(page: PageLike) -> Optional[str]:
+    text = _merchant_text(page)
+    if not text:
+        return None
+    match = re.search(r"(?:Ships from|Fulfilled by)\s+(.+?)(?=\s+Sold by|\n|$)", text, re.I)
+    return match.group(1).strip() if match else None
+
+
+def _extract_secondary_images(page: PageLike) -> list[str]:
+    encoded = page.attr("#altImages", "data-secondary-images")
+    if encoded:
+        try:
+            value = json.loads(encoded)
+            if isinstance(value, list):
+                return [url for url in value if isinstance(url, str) and url.startswith("http")]
+            if isinstance(value, dict):
+                return [url for url in value if isinstance(url, str) and url.startswith("http")]
+        except (TypeError, ValueError):
+            pass
+    urls: list[str] = []
+    for raw in page.text_all("#altImages img"):
+        if raw and raw.startswith("http"):
+            urls.append(raw)
+    return urls
+
+
+def extract_amazon_detail(page: PageLike, source_ref: str) -> dict[str, FieldEvidence]:
+    """Extract a complete Amazon-US detail evidence envelope."""
+    weight_kg, length_cm, width_cm, height_cm = extract_dimensions(page)
+    product_dimensions = _parse_dimensions_from_text(page.table_row("Product Dimensions") or "")
+    package_dimensions = _parse_dimensions_from_text(page.table_row("Package Dimensions") or "")
+    return {
+        "title": _field(extract_title(page), "title_selector", source_ref),
+        "brand": _field(extract_brand(page), "brand_table_or_selector", source_ref),
+        "price": _field(extract_price(page), "price_selector", source_ref),
+        "coupon": _field(_first_text(page, ("#couponTextpctch", "#couponText", ".couponBadgepctch")), "coupon_selector", source_ref),
+        "discount": _field(_first_text(page, (".savingsPercentage", "#regularprice_savings")), "discount_selector", source_ref),
+        "list_price": _field(_first_text(page, (".basisPrice .a-offscreen", ".a-text-price .a-offscreen")), "list_price_selector", source_ref),
+        "variation_price": _field(_extract_variation_price(page), "variation_price", source_ref),
+        "bsr": _field(extract_bsr(page), "bsr_table_or_selector", source_ref),
+        "rating": _field(extract_rating(page), "rating_selector", source_ref),
+        "review_count": _field(extract_reviews(page), "review_selector", source_ref),
+        "weight_kg": _field(weight_kg, "weight_table", source_ref),
+        "product_dimensions": _field(product_dimensions or ((length_cm, width_cm, height_cm) if length_cm else None), "dimensions_table", source_ref),
+        "package_dimensions": _field(package_dimensions, "package_dimensions_table", source_ref),
+        "package_quantity": _field(_parse_int(page.table_row("Number of Items") or page.table_row("Item Package Quantity") or ""), "package_quantity_table", source_ref),
+        "material": _field(page.table_row("Material"), "material_table", source_ref),
+        "seller_count": _field(_extract_seller_count(page), "seller_count", source_ref),
+        "seller": _field(_extract_seller(page), "buybox_seller", source_ref),
+        "fulfillment": _field(_extract_fulfillment(page), "buybox_fulfillment", source_ref),
+        "availability": _field(_first_text(page, ("#availability", "#outOfStock")), "availability_selector", source_ref),
+        "main_image": _field(extract_image(page), "main_image_selector", source_ref),
+        "secondary_images": _field(_extract_secondary_images(page), "secondary_images", source_ref),
+        "bullet_points": _field([v.strip() for v in page.text_all("#feature-bullets li") if v and v.strip()], "bullet_selectors", source_ref),
+        "description": _field(_first_text(page, ("#productDescription", "#bookDescription_feature_div")), "description_selector", source_ref),
+        "a_plus": _field(True if _first_text(page, ("#aplus", "#aplus_feature_div")) else None, "a_plus_selector", source_ref),
+        "first_available_date": _field(page.table_row("Date First Available"), "available_date_table", source_ref),
+    }
 
 
 # ============================================================
