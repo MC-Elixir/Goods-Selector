@@ -5,7 +5,7 @@
 - Added fail-closed classification for auth, captcha, rate-limited, invalid, and offer-identity-mismatch pages.
 - Added explicit nullable detail fields and per-field provenance with source type, observation time, confidence, and artifact hash.
 - Preserved real MOQ and price tiers and extracted structured SKU, material, dimensions, weight, packaging, origin, lead-time, customization, supplier, transaction, image, certification, and return/dispute evidence.
-- Reused the existing Playwright browser context, fetched details serially with configurable jitter, and bounded retries to timeouts and rate-limited pages. Auth/captcha and other blocked artifacts become handoff results and never become detail records.
+- Reused the existing Playwright browser context, fetched details serially with configurable jitter, and bounded retries to timeouts and rate-limited pages. Auth/captcha become human-handoff results; invalid/unverified/mismatched artifacts become `blocked_invalid`; neither becomes a detail record.
 - Added detail-cache schema, freshness timestamps, expiry, and blocked-record rejection.
 - Kept the existing real-supplier cache guard: mock suppliers are not cacheable and no formal no-mock fallback was added.
 
@@ -57,11 +57,31 @@ TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q
 551 passed, 5 skipped, 210 warnings in 196.00s (0:03:16)
 ```
 
+## Authoritative identity follow-up
+
+Identity evidence is now restricted to the final page URL, HTML canonical URL, and the direct primary `offerId` on the same structured payload selected for detail evidence. Related/recommended offer links and nested related-offer IDs are ignored. Any authoritative source conflict fails closed, while absence across all three sources remains `OFFER_ID_UNVERIFIED`.
+
+Fresh focused verification after this change:
+
+```text
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_alibaba_detail.py tests/test_alibaba_playwright_detail.py tests/test_alibaba_result_cache.py tests/test_alibaba_diagnostics.py tests/test_matchers_manual_queue.py -q
+56 passed in 0.89s
+```
+
+Fresh full-suite verification also completed with exit code 0 after a temporary, naturally recovered `jbd2_log_wait_commit` wait:
+
+```text
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q
+556 passed, 5 skipped, 210 warnings in 225.61s (0:03:45)
+```
+
 ## Files
 
 - `matchers/alibaba_detail.py`
 - `matchers/_alibaba_playwright_search.py`
 - `matchers/alibaba_result_cache.py`
+- `matchers/alibaba_playwright.py`
 - `tests/test_alibaba_detail.py`
 - `tests/test_alibaba_playwright_detail.py`
 - `tests/test_alibaba_result_cache.py`
+- `tests/test_matchers_manual_queue.py`

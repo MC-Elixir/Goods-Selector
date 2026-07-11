@@ -261,3 +261,45 @@ def test_final_or_canonical_url_can_verify_offer_identity():
         page_url="https://detail.1688.com/offer/123.html",
     )
     assert result["moq"] is None
+
+
+def test_primary_offer_identity_ignores_related_links_and_payload_ids():
+    html = '''
+      <script>{"offerId":"123","beginAmount":20,"relatedOffers":[
+        {"offerId":"777"},{"offerId":"888"}]}</script>
+      <a href="https://detail.1688.com/offer/999.html">相关推荐</a>
+    '''
+    result = parse_1688_offer_detail_html(html, expected_offer_id="123")
+    assert result["moq"] == 20
+
+
+def test_canonical_offer_identity_mismatch_is_rejected():
+    html = '''
+      <link rel="canonical" href="https://detail.1688.com/offer/999.html">
+      <script>{"offerId":"123","beginAmount":20}</script>
+    '''
+    with pytest.raises(BlockedOfferPage, match="OFFER_ID_MISMATCH"):
+        parse_1688_offer_detail_html(html, expected_offer_id="123")
+
+
+def test_selected_primary_payload_identity_mismatch_is_rejected():
+    html = '''
+      <script>{"offerId":"123"}</script>
+      <script>{"offerId":"999","beginAmount":20,
+        "attributes":[{"name":"材质","value":"硅胶"}]}</script>
+    '''
+    with pytest.raises(BlockedOfferPage, match="OFFER_ID_MISMATCH"):
+        parse_1688_offer_detail_html(html, expected_offer_id="123")
+
+
+def test_final_url_identity_ignores_related_page_noise():
+    html = '''<body>起订量 20件 价格 ￥12
+      <a href="https://detail.1688.com/offer/999.html">相关推荐</a>
+      <script>{"relatedOffers":[{"offerId":"888"}]}</script>
+    </body>'''
+    result = parse_1688_offer_detail_html(
+        html,
+        expected_offer_id="123",
+        page_url="https://detail.1688.com/offer/123.html",
+    )
+    assert result["moq"] == 20

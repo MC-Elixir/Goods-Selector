@@ -126,24 +126,28 @@ def parse_1688_offer_detail_html(
 ) -> dict[str, Any]:
     """Extract detail evidence from a 1688 HTML detail page."""
     _raise_if_blocked(html)
-    if not _looks_like_offer_page(html, page_url=page_url):
-        raise BlockedOfferPage("INVALID_OFFER_PAGE", "missing offer id and product detail markers")
     text = _html_text(html)
     best: dict[str, Any] = {}
-    observed_offer_ids = _offer_ids_from_urls(html)
-    observed_offer_ids.update(_offer_ids_from_urls(page_url or ""))
+    best_obj: dict[str, Any] = {}
     for obj in _embedded_json_objects(html):
-        observed_offer_ids.update(_offer_ids(obj))
         detail = parse_1688_offer_detail(obj)
-        if _extracted_field_count(detail) > _extracted_field_count(best):
+        if not best_obj or _extracted_field_count(detail) > _extracted_field_count(best):
             best = detail
+            best_obj = obj
+    if not _looks_like_offer_page(html, page_url=page_url, primary=best_obj):
+        raise BlockedOfferPage("INVALID_OFFER_PAGE", "missing offer id and product detail markers")
     if expected_offer_id:
-        if not observed_offer_ids:
+        authoritative_ids = {
+            *_offer_ids_from_urls(page_url or ""),
+            *_canonical_offer_ids(html),
+            *_primary_offer_ids(best_obj),
+        }
+        if not authoritative_ids:
             raise BlockedOfferPage("OFFER_ID_UNVERIFIED", f"no identity evidence for offer {expected_offer_id}")
-        if observed_offer_ids != {str(expected_offer_id)}:
+        if authoritative_ids != {str(expected_offer_id)}:
             raise BlockedOfferPage(
                 "OFFER_ID_MISMATCH",
-                f"expected offer {expected_offer_id}, observed {sorted(observed_offer_ids)}",
+                f"expected offer {expected_offer_id}, observed {sorted(authoritative_ids)}",
             )
     fallback = parse_1688_offer_detail(text)
     if not best:
@@ -156,22 +160,27 @@ def parse_1688_offer_detail_html(
     return _with_provenance(merged, html)
 
 
-def _offer_ids(value: Any) -> set[str]:
-    found: set[str] = set()
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key.lower().replace("_", "") == "offerid" and child is not None:
-                found.add(str(child))
-            found.update(_offer_ids(child))
-    elif isinstance(value, list):
-        for item in value:
-            found.update(_offer_ids(item))
-    return found
+def _primary_offer_ids(value: dict[str, Any]) -> set[str]:
+    return {
+        str(child)
+        for key, child in value.items()
+        if key.lower().replace("_", "") == "offerid" and child is not None
+    }
 
 
 def _offer_ids_from_urls(value: str) -> set[str]:
     ids = set(re.findall(r"/offer/(\d+)\.html", value or "", re.I))
     ids.update(re.findall(r"[?&]offerId=(\d+)", value or "", re.I))
+    return ids
+
+
+def _canonical_offer_ids(html: str) -> set[str]:
+    ids: set[str] = set()
+    for tag in re.findall(r"<link\b[^>]*>", html or "", re.I):
+        rel = re.search(r"\brel\s*=\s*(['\"])(.*?)\1", tag, re.I | re.S)
+        href = re.search(r"\bhref\s*=\s*(['\"])(.*?)\1", tag, re.I | re.S)
+        if rel and href and "canonical" in rel.group(2).lower().split():
+            ids.update(_offer_ids_from_urls(href.group(2)))
     return ids
 
 
@@ -232,11 +241,18 @@ def _raise_if_blocked(html: str) -> None:
             raise BlockedOfferPage(error_code, f"blocked page marker: {matches[0]}")
 
 
-def _looks_like_offer_page(html: str, *, page_url: str | None = None) -> bool:
+def _looks_like_offer_page(
+    html: str,
+    *,
+    page_url: str | None = None,
+    primary: dict[str, Any] | None = None,
+) -> bool:
     lowered = (html or "").lower()
-    if re.search(r'["\'](?:offerId|offer_id)["\']\s*:', html or "", re.I):
-        return True
-    if _offer_ids_from_urls(html or "") or _offer_ids_from_urls(page_url or ""):
+    if (
+        _primary_offer_ids(primary or {})
+        or _canonical_offer_ids(html)
+        or _offer_ids_from_urls(page_url or "")
+    ):
         return True
     marker_groups = (
         ("起订", "起批", "beginamount", "minorder", "moq"),
