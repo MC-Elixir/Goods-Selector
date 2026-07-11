@@ -26,8 +26,8 @@ from typing import Any, Callable, Optional
 from loguru import logger
 
 from agent.cancellation import CancellationRequested
-from analyzers.profit_model import ProfitBreakdown, predict_profit
-from analyzers.scorer import ScoreBreakdown, score_product
+from analyzers.profit_model import InsufficientCostEvidence, ProfitBreakdown, predict_profit
+from analyzers.scorer import ScoringEvidenceError, ScoreBreakdown, score_product
 from crawlers.amazon_bsr import ProductDTO
 from db.models import MarketAnalysis, Product, ProfitSnapshot, RunLog, Score, Supplier
 from db.session import session_scope
@@ -60,6 +60,7 @@ class PipelineRecord:
     profit: Optional[ProfitBreakdown] = None
     market: Optional[object] = None       # MarketAnalysisDTO
     score: Optional[ScoreBreakdown] = None
+    rejection_reasons: list[str] = field(default_factory=list)
 
     @property
     def net_profit(self) -> float:
@@ -243,6 +244,11 @@ def run_pipeline(
                     _persist_profit_for_record(rec)
             except (PipelineCancelled, PipelineTimeout):
                 raise
+            except InsufficientCostEvidence as e:
+                rec.rejection_reasons.extend(_evidence_rejection_reasons(e))
+                logger.warning(
+                    f"[run #{run_id}] profit insufficient asin={rec.product.asin}: {e}"
+                )
             except Exception as e:
                 logger.warning(f"[run #{run_id}] profit failed asin={rec.product.asin}: {e}")
 
@@ -313,6 +319,12 @@ def run_pipeline(
                 _persist_score_for_record(rec)
             except (PipelineCancelled, PipelineTimeout):
                 raise
+            except ScoringEvidenceError as e:
+                rec.score = None
+                rec.rejection_reasons.extend(_evidence_rejection_reasons(e))
+                logger.warning(
+                    f"[run #{run_id}] score insufficient asin={rec.product.asin}: {e}"
+                )
             except Exception as e:
                 logger.warning(f"[run #{run_id}] score failed asin={rec.product.asin}: {e}")
 
@@ -713,6 +725,7 @@ def _rank_suppliers_by_profit(product: ProductDTO, suppliers: list[SupplierDTO])
     """Add supplier-level profit evidence and reorder by sourceability."""
     ranked: list[tuple[float, float, float, float, int, SupplierDTO, ProfitBreakdown | None]] = []
 
+    evidence_error: InsufficientCostEvidence | None = None
     for idx, supplier in enumerate(suppliers):
         base_score = _supplier_candidate_score(supplier)
         profit: ProfitBreakdown | None = None
@@ -726,6 +739,12 @@ def _rank_suppliers_by_profit(product: ProductDTO, suppliers: list[SupplierDTO])
             raw["supplier_net_profit"] = round(profit.net_profit, 4)
             raw["supplier_purchase_cost"] = round(profit.purchase_cost, 4)
             raw["supplier_profit_score"] = profit_score
+        except InsufficientCostEvidence as exc:
+            evidence_error = exc
+            logger.debug(
+                f"[profit-rank] supplier profit insufficient asin={getattr(product, 'asin', '?')} "
+                f"offer={getattr(supplier, 'alibaba_offer_id', '?')}: {exc}"
+            )
         except Exception as exc:
             logger.debug(
                 f"[profit-rank] supplier profit skipped asin={getattr(product, 'asin', '?')} "
@@ -752,6 +771,8 @@ def _rank_suppliers_by_profit(product: ProductDTO, suppliers: list[SupplierDTO])
     for _rank_score, _base_score, _margin, _net, _idx, _supplier, profit in deduped_ranked:
         if profit is not None:
             return profit
+    if evidence_error is not None:
+        raise evidence_error
     return None
 
 
@@ -858,14 +879,43 @@ def _safe_float(value) -> float | None:
         return None
 
 
+def _evidence_rejection_reasons(
+    error: InsufficientCostEvidence | ScoringEvidenceError,
+) -> list[str]:
+    fields = set(error.fields)
+    if isinstance(error, InsufficientCostEvidence):
+        if "purchase_price" in fields:
+            return ["missing_purchase_price"]
+        if fields & {"weight_kg", "length_cm", "width_cm", "height_cm"}:
+            return ["missing_logistics_dimensions"]
+    if error.dimension == "competition":
+        return ["missing_market_evidence"]
+    if error.dimension == "logistics":
+        return ["missing_logistics_dimensions"]
+    if error.dimension == "supply":
+        reasons = []
+        if "purchase_price" in fields:
+            reasons.append("missing_purchase_price")
+        if "moq" in fields:
+            reasons.append("missing_moq")
+        return reasons or ["missing_supply_evidence"]
+    return [f"missing_{field}" for field in error.fields]
+
+
 def _review_fallback_records(records: list[PipelineRecord], top_n: int = 5) -> list[PipelineRecord]:
     """Return scored real-supplier records for human review when hard filters reject all."""
     reviewable = [
         rec for rec in records
-        if rec.score is not None and rec.profit is not None and rec.suppliers
+        if rec.suppliers and (
+            (rec.score is not None and rec.profit is not None)
+            or bool(getattr(rec, "rejection_reasons", None))
+        )
     ]
     reviewable.sort(
-        key=lambda rec: (rec.score.total_score, rec.net_profit),
+        key=lambda rec: (
+            rec.score.total_score if rec.score is not None else float("-inf"),
+            rec.net_profit,
+        ),
         reverse=True,
     )
     deduped, _removed = _dedupe_records_by_asin(reviewable)

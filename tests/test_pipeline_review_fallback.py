@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
-from pipeline.orchestrator import _review_fallback_records
+from analyzers.profit_model import InsufficientCostEvidence
+from analyzers.scorer import ScoringEvidenceError
+from pipeline.orchestrator import _evidence_rejection_reasons, _review_fallback_records
 
 
 def _record(total_score, net_profit, has_profit=True, has_suppliers=True):
@@ -23,3 +25,30 @@ def test_review_fallback_records_rank_rejected_reviewable_items():
     records = _review_fallback_records([low, high, tie, no_profit, no_supplier, no_score], top_n=2)
 
     assert records == [tie, high]
+
+
+def test_typed_evidence_errors_map_to_explicit_rejection_reasons():
+    assert _evidence_rejection_reasons(
+        InsufficientCostEvidence(["purchase_price"])
+    ) == ["missing_purchase_price"]
+    assert _evidence_rejection_reasons(
+        InsufficientCostEvidence(["weight_kg", "length_cm"])
+    ) == ["missing_logistics_dimensions"]
+    assert _evidence_rejection_reasons(
+        ScoringEvidenceError("competition", ["competing_listings", "top10_share"])
+    ) == ["missing_market_evidence"]
+    assert _evidence_rejection_reasons(
+        ScoringEvidenceError("supply", ["moq"])
+    ) == ["missing_moq"]
+
+
+def test_review_fallback_includes_explicitly_insufficient_records_without_snapshots():
+    insufficient = SimpleNamespace(
+        score=None,
+        profit=None,
+        suppliers=[object()],
+        rejection_reasons=["missing_purchase_price"],
+        net_profit=0,
+    )
+
+    assert _review_fallback_records([insufficient], top_n=1) == [insufficient]

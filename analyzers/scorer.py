@@ -32,6 +32,13 @@ _BRAND_BLACKLIST = {
 }
 
 
+class ScoringEvidenceError(ValueError):
+    def __init__(self, dimension: str, fields: list[str]):
+        self.dimension = dimension
+        self.fields = fields
+        super().__init__(f"missing {dimension} evidence: {','.join(fields)}")
+
+
 # ============================================================
 # DTO
 # ============================================================
@@ -221,6 +228,10 @@ def score_competition(
     bsr20_low_review_count: Optional[int] = None,
 ) -> float:
     """竞争烈度 → [0,1]，越激烈越低。"""
+    if competing_listings is None and top10_share is None:
+        raise ScoringEvidenceError(
+            "competition", ["competing_listings", "top10_share"]
+        )
     c = curve
     n = competing_listings or 0
 
@@ -256,8 +267,40 @@ def score_supply(suppliers: list, curve: dict) -> float:
 
     六因子：供应商数量 + 回头率 + MOQ + 交期 + 初始资金 + 匹配质量
     """
-    if not suppliers:
-        return 0.0
+    real_suppliers = []
+    for supplier in suppliers:
+        raw = _supplier_raw_data(supplier)
+        method = getattr(supplier, "match_verification_method", None)
+        if raw.get("source") == "mock" or raw.get("method") == "mock" or method == "mock":
+            continue
+        real_suppliers.append(supplier)
+    if not real_suppliers:
+        raise ScoringEvidenceError("supply", ["real_supplier"])
+
+    evidenced = []
+    for supplier in real_suppliers:
+        price = _supplier_number(supplier, "base_price_cny")
+        if price is None:
+            tiers = getattr(supplier, "price_tiers", None) or []
+            price = next(
+                (
+                    _first_number(t.get("price_cny"), t.get("price"))
+                    for t in tiers if isinstance(t, dict)
+                    if _first_number(t.get("price_cny"), t.get("price")) is not None
+                ),
+                None,
+            )
+        if price is not None and price > 0 and _supplier_number(supplier, "moq") is not None:
+            evidenced.append(supplier)
+    if not evidenced:
+        fields = []
+        if not any(_supplier_number(s, "base_price_cny") is not None or getattr(s, "price_tiers", None) for s in real_suppliers):
+            fields.append("purchase_price")
+        if not any(_supplier_number(s, "moq") is not None for s in real_suppliers):
+            fields.append("moq")
+        raise ScoringEvidenceError("supply", fields or ["price_and_moq"])
+
+    suppliers = evidenced
 
     c = curve
 
@@ -348,6 +391,15 @@ def score_logistics(
     三因子：体积重比 + 重量 + 最长边
     危险属性黑名单命中则直接返回 0。
     """
+    values = {
+        "weight_kg": weight_kg,
+        "length_cm": length_cm,
+        "width_cm": width_cm,
+        "height_cm": height_cm,
+    }
+    missing = [name for name, value in values.items() if value is None]
+    if missing:
+        raise ScoringEvidenceError("logistics", missing)
     c = curve
     blacklist = set(c.get("blacklist_attrs", []))
     if attrs and blacklist & set(str(a).lower() for a in attrs):

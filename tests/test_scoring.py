@@ -8,6 +8,7 @@ import pytest
 
 from analyzers import scorer
 from analyzers.scorer import (
+    ScoringEvidenceError,
     ScoreBreakdown,
     apply_hard_filters,
     load_weights_config,
@@ -205,6 +206,10 @@ class TestScoreCompetition:
         for n, share in [(5, 0.3), (100, 0.6), (300, 0.9)]:
             assert 0.0 <= score_competition(n, share, c) <= 1.0
 
+    def test_missing_competition_data_is_not_best_competition(self):
+        with pytest.raises(ScoringEvidenceError, match="competition"):
+            score_competition(None, None, self._curve())
+
 
 # ============================================================
 # score_supply
@@ -213,8 +218,9 @@ class TestScoreSupply:
     def _curve(self):
         return load_weights_config()["scoring_curves"]["supply"]
 
-    def test_empty_suppliers_zero(self):
-        assert score_supply([], self._curve()) == 0.0
+    def test_empty_suppliers_are_insufficient(self):
+        with pytest.raises(ScoringEvidenceError, match="supply"):
+            score_supply([], self._curve())
 
     def test_good_suppliers_high_score(self):
         sups = [_MockSupplier() for _ in range(4)]
@@ -244,6 +250,16 @@ class TestScoreSupply:
         for n in [1, 3, 6]:
             s = score_supply([_MockSupplier() for _ in range(n)], c)
             assert 0.0 <= s <= 1.0
+
+    def test_missing_moq_is_insufficient_supply_evidence(self):
+        with pytest.raises(ScoringEvidenceError, match="moq"):
+            score_supply([_MockSupplier(moq=None)], self._curve())
+
+    def test_mock_supplier_is_not_supply_evidence(self):
+        supplier = _MockSupplier()
+        supplier.raw_data = {"source": "mock"}
+        with pytest.raises(ScoringEvidenceError, match="supply"):
+            score_supply([supplier], self._curve())
 
 
 # ============================================================
@@ -280,6 +296,11 @@ class TestScoreLogistics:
         for w, l, wd, h in [(0.3, 15, 10, 5), (1.5, 35, 25, 15), (3.0, 60, 40, 30)]:
             s = score_logistics(w, l, wd, h, [], c)
             assert 0.0 <= s <= 1.0
+
+    def test_missing_physical_fields_is_insufficient_logistics_evidence(self):
+        with pytest.raises(ScoringEvidenceError, match="logistics") as exc_info:
+            score_logistics(None, None, None, None, [], self._curve())
+        assert exc_info.value.fields == ["weight_kg", "length_cm", "width_cm", "height_cm"]
 
 
 # ============================================================
@@ -469,14 +490,14 @@ class TestScoreProduct:
         assert sb.passed_hard_filter is False
         assert "restricted_product" in sb.rejection_reasons
 
-    def test_no_market_data_still_works(self):
-        sb = score_product(
-            product=_MockProduct(),
-            profit_breakdown=_make_profit(0.25),
-            market_analysis=None,
-            suppliers=[_MockSupplier()],
-        )
-        assert isinstance(sb, ScoreBreakdown)
+    def test_no_market_data_is_explicitly_insufficient(self):
+        with pytest.raises(ScoringEvidenceError, match="competition"):
+            score_product(
+                product=_MockProduct(),
+                profit_breakdown=_make_profit(0.25),
+                market_analysis=None,
+                suppliers=[_MockSupplier()],
+            )
 
     def test_low_estimated_monthly_sales_rejected(self):
         sb = score_product(
