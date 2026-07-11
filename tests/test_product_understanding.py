@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+import traceback
 
 import pytest
 
@@ -11,6 +12,7 @@ from matchers.product_understanding import (
     understand_amazon_product,
 )
 from matchers.vision_analyzer import VisionAnalyzer
+from matchers import vision_analyzer as vision_analyzer_module
 
 
 class FakeAnalyzer:
@@ -113,9 +115,89 @@ def test_invalid_model_json_is_not_silently_coerced():
         understand_amazon_product(_product(), analyzer)
 
 
+@pytest.mark.parametrize("missing_field", ["function", "package_quantity", "uncertainty"])
+def test_every_semantic_field_must_be_explicit_even_when_schema_has_a_default(missing_field):
+    response = _response()
+    response.pop(missing_field)
+
+    with pytest.raises(ProductUnderstandingError) as exc_info:
+        understand_amazon_product(_product(), FakeAnalyzer(response))
+
+    assert exc_info.value.code == "schema_validation"
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [("package_quantity", "4"), ("function", "filters water")],
+)
+def test_schema_validation_is_strict_and_does_not_coerce_types(field, invalid_value):
+    response = _response()
+    response[field] = invalid_value
+
+    with pytest.raises(ProductUnderstandingError) as exc_info:
+        understand_amazon_product(_product(), FakeAnalyzer(response))
+
+    assert exc_info.value.code == "schema_validation"
+
+
+def test_extra_model_field_is_rejected():
+    response = _response()
+    response["unreviewed_claim"] = True
+
+    with pytest.raises(ProductUnderstandingError) as exc_info:
+        understand_amazon_product(_product(), FakeAnalyzer(response))
+
+    assert exc_info.value.code == "schema_validation"
+
+
 def test_product_image_urls_handles_non_mapping_raw_data():
     product = SimpleNamespace(main_image_url="https://img/main.jpg", raw_data=None)
     assert product_image_urls(product) == ["https://img/main.jpg"]
+
+
+def test_product_image_urls_rejects_malformed_http_like_values():
+    product = SimpleNamespace(
+        main_image_url="httpjunk",
+        raw_data={
+            "secondary_images": [
+                "http://",
+                "https:///missing-host.jpg",
+                "ftp://img/file.jpg",
+                "https://img/valid.jpg",
+            ]
+        },
+    )
+    assert product_image_urls(product) == ["https://img/valid.jpg"]
+
+
+def test_brand_cleaning_uses_full_brand_words_and_model_excluded_aliases_case_insensitively():
+    product = _product()
+    product.brand = "Acme Home"
+    response = _response()
+    response.update({
+        "generic_product_name": "ACME countertop water filter",
+        "supply_chain_name_cn": "Acme Home 净水器 ACMECO 滤芯",
+        "likely_supplier_keywords_cn": [
+            "acme home replacement filter",
+            "Acme 滤芯",
+            "ACMECO carbon filter",
+            "活性炭滤芯",
+        ],
+        "excluded_brand_tokens": ["AcmeCo"],
+    })
+
+    result = understand_amazon_product(product, FakeAnalyzer(response))
+
+    assert result.excluded_brand_tokens == ["AcmeCo", "Acme Home"]
+    supplier_copy = " ".join([
+        result.generic_product_name,
+        result.supply_chain_name_cn,
+        *result.likely_supplier_keywords_cn,
+    ]).casefold()
+    assert "acme" not in supplier_copy
+    assert "home" not in supplier_copy
+    assert "acmeco" not in supplier_copy
+    assert result.likely_supplier_keywords_cn == ["活性炭滤芯"]
 
 
 @patch("matchers.vision_analyzer._HAS_OPENAI", True)
@@ -177,3 +259,85 @@ def test_product_cache_key_changes_for_text_images_provider_model_and_prompt(dow
     analyzer._model = "model-a"
     analyzer._provider = "anthropic"
     assert key != analyzer._product_cache_key(payload, [b"one", b"two"])
+
+
+def test_product_cache_key_changes_when_prompt_content_changes_without_version_change(monkeypatch):
+    analyzer = object.__new__(VisionAnalyzer)
+    analyzer._provider = "ppio"
+    analyzer._model = "model-a"
+    payload = {"title": "Filter", "image_urls": []}
+    original_key = analyzer._product_cache_key(payload, [])
+
+    monkeypatch.setattr(
+        vision_analyzer_module,
+        "_PRODUCT_UNDERSTANDING_PROMPT",
+        vision_analyzer_module._PRODUCT_UNDERSTANDING_PROMPT + "\nnew instruction",
+    )
+
+    assert original_key != analyzer._product_cache_key(payload, [])
+
+
+@pytest.mark.parametrize(
+    ("analyzer", "expected_code"),
+    [
+        (FakeAnalyzer(RuntimeError("provider secret sk-test")), "provider_failure"),
+    ],
+)
+def test_safe_error_codes_do_not_leak_exception_details(analyzer, expected_code):
+    def raise_error(_payload):
+        raise analyzer.response
+
+    analyzer.analyze_product = raise_error
+    with pytest.raises(ProductUnderstandingError) as exc_info:
+        understand_amazon_product(_product(), analyzer)
+    assert exc_info.value.code == expected_code
+    assert str(exc_info.value) == expected_code
+    assert "secret" not in str(exc_info.value)
+    rendered = "".join(traceback.format_exception(exc_info.value))
+    assert "sk-test" not in rendered
+
+
+@patch("matchers.vision_analyzer._download_image", side_effect=RuntimeError("signed URL secret"))
+def test_image_download_failure_has_stable_safe_code(_download):
+    analyzer = object.__new__(VisionAnalyzer)
+    analyzer._cache = None
+    analyzer._provider = "ppio"
+    analyzer._model = "model-a"
+
+    with pytest.raises(Exception) as exc_info:
+        analyzer.analyze_product({"image_urls": ["https://img/1.jpg"]})
+
+    assert exc_info.value.code == "image_download_failure"
+    assert str(exc_info.value) == "image_download_failure"
+
+
+def test_json_parse_failure_has_stable_safe_code():
+    analyzer = object.__new__(VisionAnalyzer)
+    analyzer._cache = None
+    analyzer._provider = "ppio"
+    analyzer._model = "model-a"
+    analyzer._client = MagicMock()
+    analyzer._client.chat.completions.create.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="not-json secret"))]
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        analyzer.analyze_product({"image_urls": []})
+
+    assert exc_info.value.code == "json_parse_failure"
+    assert str(exc_info.value) == "json_parse_failure"
+
+
+def test_provider_failure_has_stable_safe_code():
+    analyzer = object.__new__(VisionAnalyzer)
+    analyzer._cache = None
+    analyzer._provider = "ppio"
+    analyzer._model = "model-a"
+    analyzer._client = MagicMock()
+    analyzer._client.chat.completions.create.side_effect = RuntimeError("api key sk-secret")
+
+    with pytest.raises(Exception) as exc_info:
+        analyzer.analyze_product({"image_urls": []})
+
+    assert exc_info.value.code == "provider_failure"
+    assert str(exc_info.value) == "provider_failure"

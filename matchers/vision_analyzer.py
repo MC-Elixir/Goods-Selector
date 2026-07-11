@@ -60,6 +60,14 @@ class ProductAnalysis:
     description_en: str = ""
 
 
+class ProductAnalysisError(RuntimeError):
+    """Safe structured-analysis failure with a stable non-sensitive code."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 # ============================================================
 # Prompt（与后端无关，通用）
 # ============================================================
@@ -175,7 +183,10 @@ class VisionAnalyzer:
     def analyze_product(self, payload: dict) -> dict:
         """Analyze combined Amazon text and up to five images into strict JSON."""
         image_urls = payload.get("image_urls") or []
-        image_bytes = [_download_image(url) for url in image_urls[:5]]
+        try:
+            image_bytes = [_download_image(url) for url in image_urls[:5]]
+        except Exception:
+            raise ProductAnalysisError("image_download_failure") from None
         cache_key = self._product_cache_key(payload, image_bytes)
         if self._cache is not None and cache_key in self._cache:
             logger.debug(f"[vision] product cache hit {cache_key[:16]}")
@@ -198,6 +209,9 @@ class VisionAnalyzer:
         )
         identity = {
             "prompt_version": AMAZON_UNDERSTANDING_PROMPT_VERSION,
+            "prompt_sha256": hashlib.sha256(
+                _PRODUCT_UNDERSTANDING_PROMPT.encode("utf-8")
+            ).hexdigest(),
             "provider": self._provider,
             "model": self._model,
             "text": normalized,
@@ -218,21 +232,29 @@ class VisionAnalyzer:
         if self._provider == "ppio":
             content = [self._openai_image_block(image) for image in images]
             content.append({"type": "text", "text": prompt})
-            response = self._client.chat.completions.create(
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._model,
+                    max_tokens=2048,
+                    messages=[{"role": "user", "content": content}],
+                )
+                response_text = response.choices[0].message.content
+            except Exception:
+                raise ProductAnalysisError("provider_failure") from None
+            return _parse_product_json(response_text)
+
+        content = [self._anthropic_image_block(image) for image in images]
+        content.append({"type": "text", "text": prompt})
+        try:
+            response = self._client.messages.create(
                 model=self._model,
                 max_tokens=2048,
                 messages=[{"role": "user", "content": content}],
             )
-            return _parse_json_object(response.choices[0].message.content)
-
-        content = [self._anthropic_image_block(image) for image in images]
-        content.append({"type": "text", "text": prompt})
-        response = self._client.messages.create(
-            model=self._model,
-            max_tokens=2048,
-            messages=[{"role": "user", "content": content}],
-        )
-        return _parse_json_object(response.content[0].text)
+            response_text = response.content[0].text
+        except Exception:
+            raise ProductAnalysisError("provider_failure") from None
+        return _parse_product_json(response_text)
 
     @staticmethod
     def _openai_image_block(image: bytes) -> dict:
@@ -382,6 +404,13 @@ def _parse_json_object(text: str) -> dict:
     if not isinstance(parsed, dict):
         raise ValueError("model response must be a JSON object")
     return parsed
+
+
+def _parse_product_json(text: str) -> dict:
+    try:
+        return _parse_json_object(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise ProductAnalysisError("json_parse_failure") from None
 
 
 def _download_image(url: str) -> bytes:

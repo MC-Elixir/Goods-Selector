@@ -63,3 +63,54 @@ Result: `505 passed, 5 skipped, 210 warnings in 358.68s` (exit code 0).
 
 - Image downloads remain sequential, matching the existing analyzer's simple synchronous runtime model. This is intentionally not expanded into a concurrency refactor for Task 6.
 - Existing suite warnings were not changed as part of this task.
+
+## Review Fix Follow-up
+
+### RED
+
+Added review regressions for explicit semantic-field presence, strict types, extra fields,
+prompt-content cache identity, layered safe errors, multi-token/alias brand cleaning, and
+parsed URL validation.
+
+Command:
+
+```bash
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_product_understanding.py -v
+```
+
+Result before implementation: `13 failed, 6 passed`. A separate traceback-safety RED
+also failed because a provider secret remained visible through exception chaining.
+
+### GREEN and compatibility
+
+Command:
+
+```bash
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_product_understanding.py tests/test_vision_matcher.py tests/test_matcher_keywords.py -v
+```
+
+Result: `49 passed`.
+
+### Full suite
+
+Command:
+
+```bash
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q --disable-warnings
+```
+
+Result: `518 passed, 5 skipped, 210 warnings in 229.67s` (exit code 0).
+
+### Review-fix self-check
+
+- All semantic model fields must be explicitly present; only ASIN, original title, and
+  provider/model/prompt metadata are runtime-owned and overwritten at the boundary.
+- Final validation uses `model_validate(..., strict=True)` and continues to forbid extras.
+- The structured cache identity now includes the SHA-256 of the actual prompt content.
+- Stable safe codes distinguish `image_download_failure`, `provider_failure`,
+  `json_parse_failure`, and `schema_validation`; suppressed exception chaining prevents
+  raw responses and API keys from appearing in rendered tracebacks.
+- Supplier-facing generic/supply-chain names are cleaned with the full product brand,
+  reasonable brand words, and all model-provided exclusion aliases; contaminated supplier
+  keyword entries are removed while exclusion evidence is retained.
+- Image URLs require an HTTP(S) scheme and non-empty network location after parsing.
