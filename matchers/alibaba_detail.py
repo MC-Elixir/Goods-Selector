@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, TypedDict
 from html import unescape
 
 from matchers.alibaba_pailitao import SupplierDTO
@@ -38,6 +40,45 @@ _PARSED_DETAIL_KEYS = {
     "raw_text",
 }
 
+_REQUIRED_DETAIL_FIELDS = (
+    "moq", "base_price_cny", "price_tiers", "sku_options", "material", "color",
+    "specification", "product_dimensions_cm", "product_weight_g", "package_details",
+    "origin", "delivery_days", "customization", "custom_logo", "custom_packaging",
+    "sample_available", "supplier_type", "supplier_years", "supplier_location",
+    "transaction_volume", "specification_images", "detail_images", "certifications",
+    "return_dispute_terms", "risk_flags",
+)
+
+_BLOCK_MARKERS = (
+    ("AUTH_REQUIRED", ("请登录", "登录后", "passport.1688", "login.1688", "sign in")),
+    ("CAPTCHA", ("验证码", "滑块", "人机验证", "captcha", "slider verification")),
+    ("RATE_LIMITED", ("访问过于频繁", "请求过于频繁", "稍后再试", "流量控制", "rate limit", "too many requests")),
+)
+
+
+class ProvenanceRecord(TypedDict):
+    status: str
+    source_type: str
+    observed_at: str
+    confidence: float
+    artifact_hash: str
+
+
+class OfferDetailResult(TypedDict, total=False):
+    provenance: dict[str, ProvenanceRecord]
+    observed_at: str
+    artifact_hash: str
+    raw_text: str
+
+
+class BlockedOfferPage(RuntimeError):
+    """A typed signal that the fetched artifact is not an offer page."""
+
+    def __init__(self, error_code: str, diagnostic: str):
+        self.error_code = error_code
+        self.diagnostic = diagnostic
+        super().__init__(f"{error_code}: {diagnostic}")
+
 
 def parse_1688_offer_detail(raw: str | dict[str, Any]) -> dict[str, Any]:
     """Extract sourcing-critical details from a 1688 detail payload or text."""
@@ -46,44 +87,88 @@ def parse_1688_offer_detail(raw: str | dict[str, Any]) -> dict[str, Any]:
     spec = spec_from_text(text)
     price_tiers = _price_tiers(data) or _price_tiers_from_text(text)
     dimensions = spec.dimensions_cm or _parse_dimensions(text)
-    detail = {
-        "moq": _first_int(data, "minOrderQuantity", "minOrder", "moq", "beginAmount") or _moq_from_text(text),
-        "base_price_cny": _first_price(price_tiers) or _first_float(data, "price", "priceCny", "minPrice"),
-        "price_tiers": price_tiers,
-        "delivery_days": _first_int(data, "deliveryDays", "leadTime", "sendGoodsDays") or _delivery_from_text(text),
+    detail: dict[str, Any] = {
+        "moq": _coalesce(_first_int(data, "minOrderQuantity", "minOrder", "moq", "beginAmount"), _moq_from_text(text)),
+        "base_price_cny": _coalesce(_first_price(price_tiers), _first_float(data, "price", "priceCny", "minPrice")),
+        "price_tiers": price_tiers or None,
+        "sku_options": _deep_first_value(data, {"skuMap", "skuOptions", "skuProps"}),
+        "delivery_days": _coalesce(_first_int(data, "deliveryDays", "leadTime", "sendGoodsDays"), _delivery_from_text(text)),
         "product_dimensions_cm": _format_dimensions(dimensions),
-        "product_weight_g": spec.weight_g or _weight_from_text(text),
+        "product_weight_g": _coalesce(spec.weight_g, _weight_from_text(text)),
         "material": spec.material,
         "color": spec.color,
+        "specification": _attribute_value(data, "规格", "型号", "specification", "spec"),
+        "package_details": _attribute_value(data, "包装", "包装方式", "package", "packing"),
+        "origin": _attribute_value(data, "产地", "原产地", "origin"),
+        "customization": _first_present(data, "supportCustom", "customization", "isCustomized"),
+        "custom_logo": _first_present(data, "customLogo", "logoCustomization"),
+        "custom_packaging": _first_present(data, "customPackaging", "packagingCustomization"),
+        "sample_available": _first_present(data, "sampleAvailable", "supportSample"),
+        "supplier_type": _deep_first_value(data, {"companyType", "supplierType", "businessType"}),
+        "supplier_years": _first_int(data, "companyYears", "supplierYears", "yearsInBusiness"),
+        "supplier_location": _deep_first_value(data, {"companyAddress", "supplierLocation", "location"}),
+        "transaction_volume": _deep_first_value(data, {"transactionVolume", "tradeVolume", "transactions"}),
+        "specification_images": _string_list(_deep_first_value(data, {"skuImages", "specificationImages"})),
+        "detail_images": _string_list(_deep_first_value(data, {"detailImageUrls", "detailImages", "imageUrls"})),
+        "certifications": _string_list(_deep_first_value(data, {"certifications", "certificateList", "certificates"})),
+        "return_dispute_terms": _deep_first_value(data, {"returnPolicy", "disputeTerms", "afterSalePolicy"}),
         "risk_flags": _risk_flags(text, spec.risk_flags),
         "raw_text": text,
     }
-    return {key: value for key, value in detail.items() if value not in (None, "", [], {})}
+    return _with_provenance(detail, raw)
 
 
-def parse_1688_offer_detail_html(html: str) -> dict[str, Any]:
+def parse_1688_offer_detail_html(html: str, *, expected_offer_id: str | None = None) -> dict[str, Any]:
     """Extract detail evidence from a 1688 HTML detail page."""
+    _raise_if_blocked(html)
+    if not _looks_like_offer_page(html):
+        raise BlockedOfferPage("INVALID_OFFER_PAGE", "missing offer id and product detail markers")
     text = _html_text(html)
     best: dict[str, Any] = {}
+    observed_offer_ids: set[str] = set()
     for obj in _embedded_json_objects(html):
+        observed_offer_ids.update(_offer_ids(obj))
         detail = parse_1688_offer_detail(obj)
-        if len(detail) > len(best):
+        if _extracted_field_count(detail) > _extracted_field_count(best):
             best = detail
+    if expected_offer_id and observed_offer_ids and str(expected_offer_id) not in observed_offer_ids:
+        raise BlockedOfferPage(
+            "OFFER_ID_MISMATCH",
+            f"expected offer {expected_offer_id}, observed {sorted(observed_offer_ids)}",
+        )
     fallback = parse_1688_offer_detail(text)
     if not best:
-        return fallback
+        return _with_provenance(fallback, html)
     merged = {**fallback, **best}
     merged["risk_flags"] = _risk_flags(text, list(dict.fromkeys([
         *(fallback.get("risk_flags") or []),
         *(best.get("risk_flags") or []),
     ])))
-    return {key: value for key, value in merged.items() if value not in (None, "", [], {})}
+    return _with_provenance(merged, html)
+
+
+def _offer_ids(value: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key.lower().replace("_", "") == "offerid" and child is not None:
+                found.add(str(child))
+            found.update(_offer_ids(child))
+    elif isinstance(value, list):
+        for item in value:
+            found.update(_offer_ids(item))
+    return found
+
+
+def _extracted_field_count(detail: dict[str, Any]) -> int:
+    provenance = detail.get("provenance") or {}
+    return sum(record.get("status") == "extracted" for record in provenance.values())
 
 
 def apply_1688_detail_to_supplier(supplier: SupplierDTO, raw: str | dict[str, Any]) -> SupplierDTO:
     """Fill missing SupplierDTO fields from parsed 1688 detail evidence."""
     if isinstance(raw, dict) and any(key in raw for key in _PARSED_DETAIL_KEYS):
-        detail = {key: value for key, value in raw.items() if value not in (None, "", [], {})}
+        detail = dict(raw)
     else:
         detail = parse_1688_offer_detail(raw)
     if detail.get("moq") is not None:
@@ -109,6 +194,111 @@ def apply_1688_detail_to_supplier(supplier: SupplierDTO, raw: str | dict[str, An
             *detail["risk_flags"],
         ]))
     return supplier
+
+
+def _raise_if_blocked(html: str) -> None:
+    lowered = (html or "").lower()
+    for error_code, markers in _BLOCK_MARKERS:
+        matches = [marker for marker in markers if marker.lower() in lowered]
+        if matches:
+            raise BlockedOfferPage(error_code, f"blocked page marker: {matches[0]}")
+
+
+def _looks_like_offer_page(html: str) -> bool:
+    lowered = (html or "").lower()
+    if re.search(r'["\'](?:offerId|offer_id)["\']\s*:', html or "", re.I):
+        return True
+    if "商品详情" in html:
+        return True
+    marker_groups = (
+        ("起订", "起批", "beginamount", "minorder", "moq"),
+        ("价格", "阶梯价", "pricerange", "¥", "￥"),
+        ("材质", "material", "attributes"),
+        ("规格", "尺寸", "重量", "spec", "dimensions", "weight"),
+        ("包装", "package", "packing"),
+        ("detailimage", "skuimage", "alicdn.com"),
+    )
+    return sum(any(marker.lower() in lowered for marker in group) for group in marker_groups) >= 2
+
+
+def _with_provenance(detail: dict[str, Any], artifact: str | dict[str, Any]) -> dict[str, Any]:
+    canonical = artifact if isinstance(artifact, str) else json.dumps(artifact, ensure_ascii=False, sort_keys=True)
+    artifact_hash = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    observed_at = datetime.now(timezone.utc).isoformat()
+    result = dict(detail)
+    for key in _REQUIRED_DETAIL_FIELDS:
+        value = result.get(key)
+        if value in ("", [], {}):
+            value = None
+        result[key] = value
+    result["observed_at"] = observed_at
+    result["artifact_hash"] = artifact_hash
+    result["provenance"] = {
+        key: {
+            "status": "extracted" if result[key] is not None else "missing",
+            "source_type": "offer_detail",
+            "observed_at": observed_at,
+            "confidence": 0.95 if result[key] is not None else 0.0,
+            "artifact_hash": artifact_hash,
+        }
+        for key in _REQUIRED_DETAIL_FIELDS
+    }
+    return result
+
+
+def _coalesce(*values: Any) -> Any:
+    return next((value for value in values if value is not None), None)
+
+
+def _first_present(parent: dict[str, Any], *keys: str) -> Any:
+    return _deep_first_present(parent, set(keys))
+
+
+def _deep_first_present(value: Any, keys: set[str]) -> Any:
+    if isinstance(value, dict):
+        for key in keys:
+            if key in value and value[key] is not None:
+                return value[key]
+        for child in value.values():
+            found = _deep_first_present(child, keys)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _deep_first_present(item, keys)
+            if found is not None:
+                return found
+    return None
+
+
+def _attribute_value(data: dict[str, Any], *labels: str) -> Any:
+    wanted = {label.lower() for label in labels}
+    for item in _all_dicts(data):
+        name = _first_value(item, "attributeName", "attrName", "name", "key", "propertyName")
+        if name is not None and str(name).lower() in wanted:
+            return _first_value(item, "value", "attributeValue", "attrValue", "propertyValue", "text")
+    return None
+
+
+def _all_dicts(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _all_dicts(child)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _all_dicts(item)
+
+
+def _string_list(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        strings = [str(item) for item in value if isinstance(item, (str, int, float))]
+        return strings or None
+    return None
 
 
 def _detail_text(raw: str | dict[str, Any]) -> str:

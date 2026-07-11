@@ -18,6 +18,7 @@ _CACHE_FILE = _CACHE_DIR / "real_supplier_results.json"
 _DETAIL_CACHE_FILE = _CACHE_DIR / "offer_details.json"
 _CIRCUIT_FILE = _CACHE_DIR / "circuit_breaker.json"
 _MIN_REUSABLE_MATCH_SCORE = 0.40
+DETAIL_CACHE_SCHEMA_VERSION = 2
 
 
 def make_cache_key(product: ProductDTO, keywords: Iterable[str], top_k: int) -> str:
@@ -74,19 +75,27 @@ def load_cached_offer_detail(offer_id: str, ttl_seconds: int) -> dict:
     entry = data.get(str(offer_id))
     if not isinstance(entry, dict):
         return {}
-    created_at = float(entry.get("created_at") or 0)
-    if time.time() - created_at > ttl_seconds:
+    if entry.get("schema_version") != DETAIL_CACHE_SCHEMA_VERSION or entry.get("blocked") is not False:
+        return {}
+    now = time.time()
+    observed_at = float(entry.get("observed_at") or 0)
+    expires_at = float(entry.get("expires_at") or 0)
+    if not observed_at or expires_at <= now or now - observed_at > ttl_seconds:
         return {}
     detail = entry.get("detail")
     return detail if isinstance(detail, dict) else {}
 
 
-def save_cached_offer_detail(offer_id: str, detail: dict) -> None:
+def save_cached_offer_detail(offer_id: str, detail: dict, ttl_seconds: int = 604800) -> None:
     if not offer_id or not detail:
         return
     data = _read_json(_DETAIL_CACHE_FILE, default={})
+    observed_at = time.time()
     data[str(offer_id)] = {
-        "created_at": time.time(),
+        "schema_version": DETAIL_CACHE_SCHEMA_VERSION,
+        "blocked": False,
+        "observed_at": observed_at,
+        "expires_at": observed_at + max(0, ttl_seconds),
         "detail": detail,
     }
     _write_json(_DETAIL_CACHE_FILE, data)

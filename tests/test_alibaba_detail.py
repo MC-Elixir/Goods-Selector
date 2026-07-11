@@ -1,4 +1,7 @@
+import pytest
+
 from matchers.alibaba_detail import (
+    BlockedOfferPage,
     apply_1688_detail_to_supplier,
     parse_1688_offer_detail,
     parse_1688_offer_detail_html,
@@ -121,3 +124,95 @@ def test_parse_1688_offer_detail_html_falls_back_to_visible_text():
     assert detail["product_dimensions_cm"] == "6.0x6.0x18.0cm"
     assert detail["product_weight_g"] == 260.0
     assert "patent_claim" in detail["risk_flags"]
+
+
+@pytest.mark.parametrize(
+    ("html", "code"),
+    [
+        ("<title>登录</title><body>请登录后继续访问 验证码</body>", "AUTH_REQUIRED"),
+        ("<body>滑动滑块完成验证码</body>", "CAPTCHA"),
+        ("<body>访问过于频繁，请稍后再试</body>", "RATE_LIMITED"),
+    ],
+)
+def test_blocked_pages_raise_typed_error_before_parsing(html, code):
+    with pytest.raises(BlockedOfferPage, match=code) as raised:
+        parse_1688_offer_detail_html(html)
+    assert raised.value.error_code == code
+
+
+def test_detail_preserves_real_tiers_and_moq_with_provenance():
+    html = '''<script>{"offerId":"123","priceRangeList":[
+      {"startQuantity":20,"price":12.8},{"startQuantity":100,"price":10.5}],
+      "beginAmount":20,"attributes":[{"name":"材质","value":"304不锈钢"}]}</script>'''
+    result = parse_1688_offer_detail_html(html)
+    assert result["moq"] == 20
+    assert result["price_tiers"] == [
+        {"min_qty": 20, "price_cny": 12.8},
+        {"min_qty": 100, "price_cny": 10.5},
+    ]
+    assert result["material"] == "不锈钢"
+    assert result["provenance"]["moq"]["status"] == "extracted"
+    assert result["provenance"]["moq"]["artifact_hash"].startswith("sha256:")
+
+
+def test_absent_fields_remain_explicitly_missing():
+    result = parse_1688_offer_detail_html("<html><body>普通商品详情</body></html>")
+    required = {
+        "moq", "price_tiers", "sku_options", "material", "specification",
+        "product_dimensions_cm", "product_weight_g", "package_details", "origin",
+        "delivery_days", "customization", "custom_logo", "custom_packaging",
+        "sample_available", "supplier_type", "supplier_years", "supplier_location",
+        "transaction_volume", "specification_images", "detail_images",
+        "certifications", "return_dispute_terms",
+    }
+    assert required <= result.keys()
+    assert result["moq"] is None
+    assert result["price_tiers"] is None
+    assert all(result["provenance"][key]["status"] == "missing" for key in required)
+
+
+def test_generic_non_offer_html_is_rejected_before_evidence_creation():
+    with pytest.raises(BlockedOfferPage, match="INVALID_OFFER_PAGE"):
+        parse_1688_offer_detail_html("<html><body>1688 首页 欢迎访问</body></html>")
+
+
+def test_structured_json_extracts_extended_offer_evidence():
+    html = '''<script>{
+      "offerId":"780485617589", "beginAmount":10,
+      "skuMap":{"黑色/M":"sku-1"}, "attributes":[
+        {"name":"材质","value":"硅胶"},{"name":"规格","value":"M"},
+        {"name":"产地","value":"浙江义乌"},{"name":"包装","value":"彩盒"}],
+      "detailImageUrls":["https://img.example/detail.jpg"],
+      "skuImages":["https://img.example/sku.jpg"],
+      "companyType":"生产厂家", "companyYears":8, "companyAddress":"浙江金华",
+      "transactionVolume":"100万+", "certifications":["CE"],
+      "supportCustom":true, "customLogo":true, "sampleAvailable":false,
+      "returnPolicy":"7天无理由退货"
+    }</script>'''
+    result = parse_1688_offer_detail_html(html)
+    assert result["sku_options"] == {"黑色/M": "sku-1"}
+    assert result["origin"] == "浙江义乌"
+    assert result["package_details"] == "彩盒"
+    assert result["supplier_type"] == "生产厂家"
+    assert result["supplier_years"] == 8
+    assert result["detail_images"] == ["https://img.example/detail.jpg"]
+    assert result["certifications"] == ["CE"]
+    assert result["customization"] is True
+    assert result["sample_available"] is False
+
+
+def test_offer_identity_mismatch_is_rejected():
+    html = '<script>{"offerId":"222","beginAmount":10}</script>'
+    with pytest.raises(BlockedOfferPage, match="OFFER_ID_MISMATCH"):
+        parse_1688_offer_detail_html(html, expected_offer_id="111")
+
+
+def test_best_structured_payload_is_selected_by_extracted_evidence():
+    html = '''
+      <script>{"offerId":"123"}</script>
+      <script>{"offerId":"123","beginAmount":25,
+        "attributes":[{"name":"材质","value":"硅胶"}]}</script>
+    '''
+    result = parse_1688_offer_detail_html(html, expected_offer_id="123")
+    assert result["moq"] == 25
+    assert result["material"] == "硅胶"

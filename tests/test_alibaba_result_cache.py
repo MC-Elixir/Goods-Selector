@@ -151,3 +151,29 @@ def test_offer_detail_cache_respects_ttl(tmp_path, monkeypatch):
     cache.save_cached_offer_detail("780485617589", {"moq": 20})
 
     assert cache.load_cached_offer_detail("780485617589", ttl_seconds=0) == {}
+
+
+def test_offer_detail_cache_records_freshness_schema_and_blocked_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "_DETAIL_CACHE_FILE", tmp_path / "offer_details.json")
+    cache.save_cached_offer_detail("780485617589", {"moq": 20}, ttl_seconds=60)
+
+    entry = cache._read_json(cache._DETAIL_CACHE_FILE, {})["780485617589"]
+    assert entry["schema_version"] == cache.DETAIL_CACHE_SCHEMA_VERSION
+    assert entry["blocked"] is False
+    assert entry["observed_at"] <= entry["expires_at"]
+
+
+def test_offer_detail_cache_rejects_expired_or_wrong_schema_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "_DETAIL_CACHE_FILE", tmp_path / "offer_details.json")
+    now = time.time()
+    cache._write_json(cache._DETAIL_CACHE_FILE, {
+        "expired": {"schema_version": cache.DETAIL_CACHE_SCHEMA_VERSION, "blocked": False,
+                    "observed_at": now - 100, "expires_at": now - 1, "detail": {"moq": 20}},
+        "wrong": {"schema_version": -1, "blocked": False,
+                  "observed_at": now, "expires_at": now + 100, "detail": {"moq": 20}},
+        "blocked": {"schema_version": cache.DETAIL_CACHE_SCHEMA_VERSION, "blocked": True,
+                    "observed_at": now, "expires_at": now + 100, "detail": {"moq": 20}},
+    })
+    assert cache.load_cached_offer_detail("expired", ttl_seconds=3600) == {}
+    assert cache.load_cached_offer_detail("wrong", ttl_seconds=3600) == {}
+    assert cache.load_cached_offer_detail("blocked", ttl_seconds=3600) == {}
