@@ -347,7 +347,8 @@ class Alibaba1688PlaywrightMatcher:
                 if _is_tmd_block(page.url or "", page.title()):
                     raise RuntimeError("1688 TMD 验证码拦截，请刷新 1688 登录态并手动解验证码")
                 html = page.content()
-            return _enrich_supplier_from_detail_html(supplier, html)
+                final_url = page.url or ""
+            return _enrich_supplier_from_detail_html(supplier, html, page_url=final_url)
         except Exception as exc:
             logger.warning(f"[1688-detail] 详情页补采失败 offer={supplier.alibaba_offer_id}: {exc}")
             supplier.raw_data.setdefault("detail_error", str(exc))
@@ -359,8 +360,14 @@ def _card_full_text(card) -> str:
     return "\n".join(t.strip() for t in text_nodes if t.strip()) if text_nodes else ""
 
 
-def _enrich_supplier_from_detail_html(supplier: SupplierDTO, html: str) -> SupplierDTO:
-    detail = parse_1688_offer_detail_html(html)
+def _enrich_supplier_from_detail_html(
+    supplier: SupplierDTO, html: str, *, page_url: str | None = None
+) -> SupplierDTO:
+    detail = parse_1688_offer_detail_html(
+        html,
+        expected_offer_id=supplier.alibaba_offer_id or None,
+        page_url=page_url,
+    )
     return apply_1688_detail_to_supplier(supplier, detail)
 
 

@@ -332,3 +332,44 @@ def test_match_suppliers_detail_enrichment_is_bounded(monkeypatch):
     assert enriched == ["780485617580", "780485617581"]
     assert result[0].raw_data["detail_enrichment"]["source"] == "playwright"
     assert len(saved) == 2
+
+
+def test_invalid_detail_is_neither_applied_nor_cached(monkeypatch):
+    _common_no_network(monkeypatch)
+    supplier = SupplierDTO(
+        alibaba_offer_id="780485617589",
+        supplier_name="Live Factory",
+        title_cn="304不锈钢水杯",
+        offer_url="https://detail.1688.com/offer/780485617589.html",
+        raw_data={"source": "alibaba_pifatuan"},
+    )
+
+    class FakePifatuan:
+        def search(self, keywords, top_k):
+            return [supplier]
+
+    class FakeVerifier:
+        def verify(self, suppliers, product, analysis=None, search_keywords=None):
+            return suppliers
+
+    class InvalidDetailPlaywright:
+        def enrich_supplier_detail(self, candidate):
+            candidate.raw_data["detail_error"] = "OFFER_ID_MISMATCH"
+            return candidate
+
+    monkeypatch.setattr(settings, "alibaba_app_key", "app")
+    monkeypatch.setattr(settings, "alibaba_app_secret", "secret")
+    monkeypatch.setattr(settings, "alibaba_access_token", "token")
+    monkeypatch.setattr(settings, "alibaba_detail_enrich_limit", 1, raising=False)
+    monkeypatch.setattr(matchers, "AlibabaPifatuanSearch", lambda: FakePifatuan())
+    monkeypatch.setattr(matchers, "Alibaba1688Verifier", lambda: FakeVerifier())
+    monkeypatch.setattr(matchers, "Alibaba1688PlaywrightMatcher", lambda *args, **kwargs: InvalidDetailPlaywright())
+    monkeypatch.setattr(matchers, "load_cached_offer_detail", lambda *args, **kwargs: {})
+    saved = []
+    monkeypatch.setattr(matchers, "save_cached_offer_detail", lambda *args, **kwargs: saved.append(args))
+
+    result = matchers.match_suppliers(_product(), top_k=3)
+
+    assert result[0].moq is None
+    assert "detail" not in result[0].raw_data
+    assert saved == []

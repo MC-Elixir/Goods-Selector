@@ -118,28 +118,37 @@ def parse_1688_offer_detail(raw: str | dict[str, Any]) -> dict[str, Any]:
     return _with_provenance(detail, raw)
 
 
-def parse_1688_offer_detail_html(html: str, *, expected_offer_id: str | None = None) -> dict[str, Any]:
+def parse_1688_offer_detail_html(
+    html: str,
+    *,
+    expected_offer_id: str | None = None,
+    page_url: str | None = None,
+) -> dict[str, Any]:
     """Extract detail evidence from a 1688 HTML detail page."""
     _raise_if_blocked(html)
-    if not _looks_like_offer_page(html):
+    if not _looks_like_offer_page(html, page_url=page_url):
         raise BlockedOfferPage("INVALID_OFFER_PAGE", "missing offer id and product detail markers")
     text = _html_text(html)
     best: dict[str, Any] = {}
-    observed_offer_ids: set[str] = set()
+    observed_offer_ids = _offer_ids_from_urls(html)
+    observed_offer_ids.update(_offer_ids_from_urls(page_url or ""))
     for obj in _embedded_json_objects(html):
         observed_offer_ids.update(_offer_ids(obj))
         detail = parse_1688_offer_detail(obj)
         if _extracted_field_count(detail) > _extracted_field_count(best):
             best = detail
-    if expected_offer_id and observed_offer_ids and str(expected_offer_id) not in observed_offer_ids:
-        raise BlockedOfferPage(
-            "OFFER_ID_MISMATCH",
-            f"expected offer {expected_offer_id}, observed {sorted(observed_offer_ids)}",
-        )
+    if expected_offer_id:
+        if not observed_offer_ids:
+            raise BlockedOfferPage("OFFER_ID_UNVERIFIED", f"no identity evidence for offer {expected_offer_id}")
+        if observed_offer_ids != {str(expected_offer_id)}:
+            raise BlockedOfferPage(
+                "OFFER_ID_MISMATCH",
+                f"expected offer {expected_offer_id}, observed {sorted(observed_offer_ids)}",
+            )
     fallback = parse_1688_offer_detail(text)
     if not best:
         return _with_provenance(fallback, html)
-    merged = {**fallback, **best}
+    merged = _merge_detail_evidence(fallback, best)
     merged["risk_flags"] = _risk_flags(text, list(dict.fromkeys([
         *(fallback.get("risk_flags") or []),
         *(best.get("risk_flags") or []),
@@ -158,6 +167,25 @@ def _offer_ids(value: Any) -> set[str]:
         for item in value:
             found.update(_offer_ids(item))
     return found
+
+
+def _offer_ids_from_urls(value: str) -> set[str]:
+    ids = set(re.findall(r"/offer/(\d+)\.html", value or "", re.I))
+    ids.update(re.findall(r"[?&]offerId=(\d+)", value or "", re.I))
+    return ids
+
+
+def _merge_detail_evidence(fallback: dict[str, Any], structured: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(fallback)
+    fallback_provenance = fallback.get("provenance") or {}
+    structured_provenance = structured.get("provenance") or {}
+    provenance = dict(fallback_provenance)
+    for key in _REQUIRED_DETAIL_FIELDS:
+        if structured_provenance.get(key, {}).get("status") == "extracted":
+            merged[key] = structured.get(key)
+            provenance[key] = structured_provenance[key]
+    merged["provenance"] = provenance
+    return merged
 
 
 def _extracted_field_count(detail: dict[str, Any]) -> int:
@@ -204,11 +232,11 @@ def _raise_if_blocked(html: str) -> None:
             raise BlockedOfferPage(error_code, f"blocked page marker: {matches[0]}")
 
 
-def _looks_like_offer_page(html: str) -> bool:
+def _looks_like_offer_page(html: str, *, page_url: str | None = None) -> bool:
     lowered = (html or "").lower()
     if re.search(r'["\'](?:offerId|offer_id)["\']\s*:', html or "", re.I):
         return True
-    if "商品详情" in html:
+    if _offer_ids_from_urls(html or "") or _offer_ids_from_urls(page_url or ""):
         return True
     marker_groups = (
         ("起订", "起批", "beginamount", "minorder", "moq"),

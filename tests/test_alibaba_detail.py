@@ -156,7 +156,7 @@ def test_detail_preserves_real_tiers_and_moq_with_provenance():
 
 
 def test_absent_fields_remain_explicitly_missing():
-    result = parse_1688_offer_detail_html("<html><body>普通商品详情</body></html>")
+    result = parse_1688_offer_detail_html('<script>{"offerId":"123"}</script>')
     required = {
         "moq", "price_tiers", "sku_options", "material", "specification",
         "product_dimensions_cm", "product_weight_g", "package_details", "origin",
@@ -207,6 +207,16 @@ def test_offer_identity_mismatch_is_rejected():
         parse_1688_offer_detail_html(html, expected_offer_id="111")
 
 
+def test_conflicting_identity_sources_are_rejected():
+    html = '<script>{"offerId":"999","beginAmount":10}</script>'
+    with pytest.raises(BlockedOfferPage, match="OFFER_ID_MISMATCH"):
+        parse_1688_offer_detail_html(
+            html,
+            expected_offer_id="123",
+            page_url="https://detail.1688.com/offer/123.html",
+        )
+
+
 def test_best_structured_payload_is_selected_by_extracted_evidence():
     html = '''
       <script>{"offerId":"123"}</script>
@@ -216,3 +226,38 @@ def test_best_structured_payload_is_selected_by_extracted_evidence():
     result = parse_1688_offer_detail_html(html, expected_offer_id="123")
     assert result["moq"] == 25
     assert result["material"] == "硅胶"
+
+
+def test_structured_missing_values_do_not_overwrite_visible_evidence():
+    html = '''<html><body>商品 起订量 30件 材质 硅胶
+      <script>{"offerId":"123","beginAmount":null,
+        "attributes":[{"name":"材质","value":null}]}</script>
+    </body></html>'''
+    result = parse_1688_offer_detail_html(html, expected_offer_id="123")
+    assert result["moq"] == 30
+    assert result["material"] == "硅胶"
+    assert result["provenance"]["moq"]["status"] == "extracted"
+
+
+def test_single_product_detail_heading_does_not_prove_offer_page():
+    with pytest.raises(BlockedOfferPage, match="INVALID_OFFER_PAGE"):
+        parse_1688_offer_detail_html("<html><h1>商品详情</h1><p>系统错误模板</p></html>")
+
+
+def test_expected_offer_requires_explicit_identity_evidence():
+    html = "<html><body>起订量 20件 价格 ￥12 材质 硅胶</body></html>"
+    with pytest.raises(BlockedOfferPage, match="OFFER_ID_UNVERIFIED"):
+        parse_1688_offer_detail_html(html, expected_offer_id="123")
+
+
+def test_final_or_canonical_url_can_verify_offer_identity():
+    html = '<html><link rel="canonical" href="https://detail.1688.com/offer/123.html"><body>商品详情</body></html>'
+    result = parse_1688_offer_detail_html(html, expected_offer_id="123")
+    assert result["moq"] is None
+
+    result = parse_1688_offer_detail_html(
+        "<html><body>商品详情</body></html>",
+        expected_offer_id="123",
+        page_url="https://detail.1688.com/offer/123.html",
+    )
+    assert result["moq"] is None

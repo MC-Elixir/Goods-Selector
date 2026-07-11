@@ -31,6 +31,32 @@ TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_alibaba_detail.py tests/test_al
 
 No second full `pytest tests/` run was started. The inherited full-suite process was reported as PID 61618 in uninterruptible `D` state waiting on host I/O/jbd2. During recovery PID 61618 later disappeared naturally and no `D`-state pytest process remained, but its exit code and pytest summary were not recoverable. Therefore there is no full-suite result for Task 8 and this report does not claim that the full suite passed.
 
+## Review follow-up
+
+A follow-up commit tightened the established production enrichment path:
+
+- `Alibaba1688PlaywrightMatcher.enrich_supplier_detail` now passes both `supplier.alibaba_offer_id` and the final Playwright page URL into parsing before applying evidence.
+- Embedded offer IDs and final/canonical offer URLs are independent identity sources. An expected ID with no identity evidence fails as `OFFER_ID_UNVERIFIED`; any mismatched or conflicting identity evidence fails as `OFFER_ID_MISMATCH`.
+- Structured fields override visible-text evidence only when their field provenance is `extracted`; structured missing values no longer erase extracted fallback evidence.
+- A page now needs an explicit offer identity or at least two distinct product-detail marker groups. A lone `商品详情` heading is rejected.
+- Search-card MOQ remains `None` when absent.
+- Only auth/captcha map to `human_handoff`; invalid/unverified/mismatched pages map to `blocked_invalid`, and rate limiting remains retryable.
+- Matcher-level coverage verifies invalid detail is neither applied nor cached.
+
+Fresh follow-up focused verification:
+
+```text
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_alibaba_detail.py tests/test_alibaba_playwright_detail.py tests/test_alibaba_result_cache.py tests/test_alibaba_diagnostics.py tests/test_matchers_manual_queue.py -v
+52 passed in 0.80s
+```
+
+A fresh full-suite attempt was started because host I/O initially appeared normal. Pytest PID 72890 temporarily entered `Dsl` state at `jbd2_log_wait_commit`; it was not force-killed and later resumed naturally. The command completed with exit code 0:
+
+```text
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q
+551 passed, 5 skipped, 210 warnings in 196.00s (0:03:16)
+```
+
 ## Files
 
 - `matchers/alibaba_detail.py`

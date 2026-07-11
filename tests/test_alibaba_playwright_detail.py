@@ -1,6 +1,6 @@
 import pytest
 
-from matchers._alibaba_playwright_search import enrich_offer_details
+from matchers._alibaba_playwright_search import enrich_offer_details, _parse_offer
 from matchers.alibaba_detail import BlockedOfferPage
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.alibaba_playwright import _enrich_supplier_from_detail_html
@@ -21,7 +21,9 @@ def test_enrich_supplier_from_detail_html_updates_playwright_supplier():
     </body></html>
     """
 
-    enriched = _enrich_supplier_from_detail_html(supplier, html)
+    enriched = _enrich_supplier_from_detail_html(
+        supplier, html, page_url="https://detail.1688.com/offer/123.html"
+    )
 
     assert enriched is supplier
     assert enriched.moq == 40
@@ -31,6 +33,23 @@ def test_enrich_supplier_from_detail_html_updates_playwright_supplier():
     assert enriched.product_weight_g == 420.0
     assert "brand_authorization_required" in enriched.raw_data["risk_flags"]
     assert enriched.raw_data["detail"]["moq"] == 40
+
+
+def test_production_detail_helper_rejects_wrong_offer_before_apply():
+    supplier = SupplierDTO(
+        alibaba_offer_id="123",
+        offer_url="https://detail.1688.com/offer/123.html",
+        supplier_name="Bottle Factory",
+        moq=None,
+        raw_data={"source": "alibaba_playwright"},
+    )
+    html = '<script>{"offerId":"999","beginAmount":10}</script>'
+    with pytest.raises(BlockedOfferPage, match="OFFER_ID_MISMATCH"):
+        _enrich_supplier_from_detail_html(
+            supplier, html, page_url="https://detail.1688.com/offer/999.html"
+        )
+    assert supplier.moq is None
+    assert "detail" not in supplier.raw_data
 
 
 class _FakePage:
@@ -122,6 +141,46 @@ def test_detail_fetch_rejects_a_different_offer_identity():
         ctx, [{"offer_id": "1", "url": "https://detail.1688.com/offer/1.html"}],
         jitter_range=(0, 0), sleep=lambda _: None,
     )[0]
-    assert result["detail_status"] == "human_handoff"
+    assert result["detail_status"] == "blocked_invalid"
     assert result["detail_error_code"] == "OFFER_ID_MISMATCH"
     assert "detail" not in result
+
+
+def test_detail_fetch_without_identity_is_invalid_not_human_handoff():
+    ctx = _FakeContext(_FakePage([
+        None, "<body>起订量 5件 价格 ￥10 材质 硅胶</body>",
+    ]))
+    result = enrich_offer_details(
+        ctx, [{"offer_id": "1", "url": "https://example.invalid/product"}],
+        jitter_range=(0, 0), sleep=lambda _: None,
+    )[0]
+    assert result["detail_status"] == "blocked_invalid"
+    assert result["detail_error_code"] == "OFFER_ID_UNVERIFIED"
+
+
+class _CardElement:
+    def __init__(self, text="", href=None):
+        self._text = text
+        self._href = href
+
+    def inner_text(self):
+        return self._text
+
+    def get_attribute(self, name):
+        return self._href if name == "href" else None
+
+
+class _SearchCard:
+    def query_selector(self, selector):
+        if selector == "a.sm-offer-title":
+            return _CardElement("硅胶水杯", "https://detail.1688.com/offer/12345678.html")
+        if selector == "span.sm-offer-priceNum":
+            return _CardElement("¥12.5")
+        return None
+
+
+def test_search_card_missing_moq_remains_none():
+    offer = _parse_offer(_SearchCard())
+    assert offer is not None
+    assert offer["offer_id"] == "12345678"
+    assert offer["moq"] is None

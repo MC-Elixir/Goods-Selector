@@ -128,7 +128,9 @@ def enrich_offer_details(
                 try:
                     page.goto(url, timeout=60_000, wait_until="domcontentloaded")
                     detail = parse_1688_offer_detail_html(
-                        page.content(), expected_offer_id=str(item.get("offer_id") or "") or None
+                        page.content(),
+                        expected_offer_id=str(item.get("offer_id") or "") or None,
+                        page_url=getattr(page, "url", None),
                     )
                     item["detail"] = detail
                     item["detail_status"] = "extracted"
@@ -138,7 +140,11 @@ def enrich_offer_details(
                         sleep(2 ** attempt)
                         continue
                     item.pop("detail", None)
-                    item["detail_status"] = "human_handoff"
+                    item["detail_status"] = (
+                        "human_handoff"
+                        if exc.error_code in {"AUTH_REQUIRED", "CAPTCHA"}
+                        else "blocked_invalid"
+                    )
                     item["detail_error_code"] = exc.error_code
                     item["detail_diagnostic"] = exc.diagnostic
                     break
@@ -246,7 +252,7 @@ def _parse_offer(item) -> dict[str, Any] | None:
         offer_url = f"https:{offer_url}" if offer_url.startswith("//") else f"https://detail.1688.com{offer_url}"
 
     # 起订量
-    moq = 1
+    moq = None
     for sel in ["span[class*='moq']", "span[class*='minimum']", "span[class*='quantity']"]:
         el = item.query_selector(sel)
         if el:
