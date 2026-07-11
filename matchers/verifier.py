@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 from dataclasses import asdict
@@ -27,6 +28,55 @@ from loguru import logger
 from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.product_spec import compare_specs, spec_from_product, spec_from_supplier
+from pydantic import ValidationError
+from schemas.sourcing import VisionMatchResult
+
+VISION_MATCH_PROMPT_VERSION = "supplier-visual-match-v1"
+
+_VISION_MATCH_PROMPT = """你是供应链商品核验员。综合所有 Amazon 图片、所有 1688 图片以及两侧结构化属性，
+判断是否是可互相采购替代的同一商品。必须逐项、显式判断商品类型、核心功能、结构、材质、包装数量，
+并区分替换件/耗材与完整产品。图片缺失或部分下载失败只能降低证据强度，绝不能默认为匹配。
+严格只输出 JSON，且必须包含这些字段：same_product_type, same_core_function, same_structure,
+same_material, same_package_quantity, major_visual_differences, potential_mismatch, confidence, evidence,
+provider, model, prompt_version。无法判断的结构、材质或包装数量填 null；类型和核心功能必须为布尔值。
+provider、model、prompt_version 的输出会被调用方用真实运行值覆盖。"""
+
+
+class VisionVerificationError(RuntimeError):
+    """Stable, non-sensitive Task B failure."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def _http_images(values) -> list[str]:
+    from urllib.parse import urlparse
+    result = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or value in result:
+            continue
+        result.append(value)
+    return result[:5]
+
+
+def _plain(value):
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value if isinstance(value, dict) else {}
+
+
+class _ConfiguredVisionClient:
+    def __init__(self, verifier):
+        self._verifier = verifier
+        self.provider = verifier._provider
+        self.model = verifier._model
+
+    def verify(self, payload):
+        return self._verifier._vision_provider_call(payload)
 
 # ── 阈值常量 ──────────────────────────────────────────────────
 THRESHOLD_PASS = 0.40
@@ -214,13 +264,188 @@ class LLMVisualVerifier:
 
 注意：颜色差异可以接受（同款不同色），但形状/结构/功能不同则为不匹配。"""
 
-    def __init__(self, api_key: str = None, api_base: str = None, model: str = None):
+    def __init__(
+        self,
+        api_key: str = None,
+        api_base: str = None,
+        model: str = None,
+        provider_client=None,
+        provider: str = "auto",
+    ):
         from config.settings import settings
-        self._api_key = api_key or settings.ppio_api_key
-        self._api_base = api_base or settings.ppio_api_base
-        self._model = model or settings.ppio_model or "qwen/qwen2.5-vl-72b-instruct"
-        if not self._api_key:
-            raise ValueError("PPIO_API_KEY 未配置，无法使用 LLM 视觉验证")
+        resolved = settings.vision_provider if provider == "auto" else provider
+        self._provider = resolved if resolved != "none" else "ppio"
+        if self._provider not in {"ppio", "anthropic"}:
+            raise ValueError("未知视觉验证 provider")
+        if self._provider == "anthropic":
+            self._api_key = api_key or settings.anthropic_api_key
+            self._api_base = api_base
+            self._model = model or settings.anthropic_model
+        else:
+            self._api_key = api_key or settings.ppio_api_key
+            self._api_base = api_base or settings.ppio_api_base
+            self._model = model or settings.ppio_model or "qwen/qwen2.5-vl-72b-instruct"
+        self._provider_client = provider_client or _ConfiguredVisionClient(self)
+        if provider_client is None and not self._api_key:
+            raise ValueError("视觉验证 API key 未配置")
+        try:
+            from matchers.vision_analyzer import _make_cache
+            self._cache = _make_cache("supplier_visual_match")
+        except Exception:
+            self._cache = None
+
+    def verify_pair(self, product, supplier: SupplierDTO) -> VisionMatchResult:
+        """Validate a provider-neutral multi-image comparison, failing closed."""
+        raw_product = getattr(product, "raw_data", None)
+        raw_product = raw_product if isinstance(raw_product, dict) else {}
+        raw_supplier = supplier.raw_data if isinstance(supplier.raw_data, dict) else {}
+        detail = raw_supplier.get("detail")
+        detail = detail if isinstance(detail, dict) else raw_supplier.get("detail_enrichment")
+        detail = detail if isinstance(detail, dict) else raw_supplier
+        amazon_images = _http_images([
+            getattr(product, "main_image_url", None),
+            *(raw_product.get("secondary_images") or []),
+        ])
+        supplier_images = _http_images([
+            supplier.offer_image_url,
+            *(detail.get("detail_images") or []),
+            *(detail.get("sku_images") or []),
+            *(detail.get("specification_images") or []),
+        ])
+        if not amazon_images or not supplier_images:
+            raise VisionVerificationError("image_evidence_unavailable")
+
+        understanding = (
+            getattr(product, "understanding", None)
+            or raw_product.get("understanding")
+            or raw_product.get("product_understanding")
+            or {}
+        )
+        amazon_attributes = _plain(understanding)
+        supplier_attributes = {
+            key: value for key, value in detail.items()
+            if key not in {"detail_images", "sku_images", "specification_images"}
+        }
+        payload = {
+            "prompt": _VISION_MATCH_PROMPT,
+            "prompt_version": VISION_MATCH_PROMPT_VERSION,
+            "amazon_images": amazon_images,
+            "supplier_images": supplier_images,
+            "amazon_attributes": amazon_attributes,
+            "supplier_attributes": supplier_attributes,
+        }
+        try:
+            response = self._provider_client.verify(payload)
+        except VisionVerificationError:
+            raise
+        except Exception:
+            raise VisionVerificationError("provider_failure") from None
+        if not isinstance(response, dict):
+            raise VisionVerificationError("schema_validation")
+        actual_provider = str(getattr(self._provider_client, "provider", self._provider))
+        actual_model = str(getattr(self._provider_client, "model", self._model))
+        trusted = dict(response)
+        trusted.update({
+            "provider": actual_provider,
+            "model": actual_model,
+            "prompt_version": VISION_MATCH_PROMPT_VERSION,
+        })
+        try:
+            return VisionMatchResult.model_validate(trusted, strict=True)
+        except (ValidationError, ValueError, TypeError):
+            raise VisionVerificationError("schema_validation") from None
+
+    def _vision_provider_call(self, payload: dict) -> dict:
+        """Download all usable evidence, cache it, then call the configured backend."""
+        import httpx
+        image_groups: dict[str, list[bytes]] = {"amazon": [], "supplier": []}
+        failures: dict[str, int] = {"amazon": 0, "supplier": 0}
+        with httpx.Client(timeout=30, follow_redirects=True) as client:
+            for side, key in (("amazon", "amazon_images"), ("supplier", "supplier_images")):
+                for url in payload[key]:
+                    encoded = self._download_image(client, url)
+                    if encoded is None:
+                        failures[side] += 1
+                    else:
+                        image_groups[side].append(base64.b64decode(encoded))
+        if not image_groups["amazon"] or not image_groups["supplier"]:
+            raise VisionVerificationError("image_evidence_unavailable")
+
+        cache_key = self._vision_cache_key(payload, image_groups)
+        if self._cache is not None and cache_key in self._cache:
+            return self._cache[cache_key]
+        result = self._call_task_b(payload, image_groups, failures)
+        if self._cache is not None:
+            from config.settings import settings
+            self._cache.set(cache_key, result, expire=settings.cache_ttl_seconds)
+        return result
+
+    def _vision_cache_key(self, payload: dict, images: dict[str, list[bytes]]) -> str:
+        identity = {
+            "prompt_version": VISION_MATCH_PROMPT_VERSION,
+            "prompt_sha256": hashlib.sha256(_VISION_MATCH_PROMPT.encode()).hexdigest(),
+            "provider": self._provider,
+            "model": self._model,
+            "amazon_attributes": payload.get("amazon_attributes") or {},
+            "supplier_attributes": payload.get("supplier_attributes") or {},
+            "amazon_image_hashes": [hashlib.sha256(x).hexdigest() for x in images["amazon"]],
+            "supplier_image_hashes": [hashlib.sha256(x).hexdigest() for x in images["supplier"]],
+        }
+        normalized = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return "svm_" + hashlib.sha256(normalized.encode()).hexdigest()
+
+    def _call_task_b(self, payload, images, failures) -> dict:
+        prompt = _VISION_MATCH_PROMPT + "\n结构化证据：" + json.dumps({
+            "amazon_attributes": payload["amazon_attributes"],
+            "supplier_attributes": payload["supplier_attributes"],
+            "image_evidence": {
+                "amazon_available": len(images["amazon"]),
+                "amazon_failed": failures["amazon"],
+                "supplier_available": len(images["supplier"]),
+                "supplier_failed": failures["supplier"],
+            },
+        }, ensure_ascii=False, sort_keys=True, default=str)
+        try:
+            if self._provider == "ppio":
+                import openai
+                client = openai.OpenAI(api_key=self._api_key, base_url=self._api_base)
+                content = []
+                for side in ("amazon", "supplier"):
+                    content.append({"type": "text", "text": f"{side} 图片："})
+                    content.extend({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(image).decode()}"},
+                    } for image in images[side])
+                content.append({"type": "text", "text": prompt})
+                response = client.chat.completions.create(
+                    model=self._model, max_tokens=1536,
+                    messages=[{"role": "user", "content": content}],
+                )
+                text = response.choices[0].message.content
+            else:
+                import anthropic
+                client = anthropic.Anthropic(api_key=self._api_key)
+                content = []
+                for side in ("amazon", "supplier"):
+                    content.append({"type": "text", "text": f"{side} 图片："})
+                    content.extend({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(image).decode()},
+                    } for image in images[side])
+                content.append({"type": "text", "text": prompt})
+                response = client.messages.create(
+                    model=self._model, max_tokens=1536,
+                    messages=[{"role": "user", "content": content}],
+                )
+                text = response.content[0].text
+            parsed = json.loads(text.strip())
+            if not isinstance(parsed, dict):
+                raise ValueError
+            return parsed
+        except (VisionVerificationError,):
+            raise
+        except Exception:
+            raise VisionVerificationError("provider_failure") from None
 
     def verify(
         self,

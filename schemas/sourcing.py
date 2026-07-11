@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 T = TypeVar("T")
 
@@ -77,6 +77,40 @@ class AmazonProductUnderstanding(BaseModel):
     model_provider: str
     model_name: str
     prompt_version: str
+
+
+class VisionMatchResult(BaseModel):
+    """Strict, provider-attributed evidence for an Amazon/1688 visual match."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    same_product_type: bool
+    same_core_function: bool
+    same_structure: bool | None
+    same_material: bool | None
+    same_package_quantity: bool | None
+    major_visual_differences: list[str]
+    potential_mismatch: list[str]
+    confidence: float = Field(ge=0, le=1)
+    evidence: list[str] = Field(min_length=1)
+    provider: str
+    model: str
+    prompt_version: str
+
+    @computed_field
+    @property
+    def is_match(self) -> bool:
+        """Hard semantic contradictions always win over confidence."""
+        return (
+            self.same_product_type
+            and self.same_core_function
+            and self.same_package_quantity is not False
+        )
+
+    @computed_field
+    @property
+    def classification_confidence(self) -> float:
+        """Task 9 compatibility: confidence describes classification, not similarity."""
+        return self.confidence
 
 
 QueryType = Literal[
