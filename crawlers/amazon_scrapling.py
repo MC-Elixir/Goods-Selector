@@ -30,6 +30,7 @@ from loguru import logger
 from crawlers._amazon_cache import bsr_key, delete as cache_delete, detail_key, get_html, set_html
 from crawlers._amazon_cookies import cookie_path, load_cookies, save_cookies
 from crawlers._amazon_extractors import (
+    extract_amazon_detail,
     extract_brand,
     extract_bsr,
     extract_dimensions,
@@ -289,25 +290,15 @@ class AmazonScraplingScraper:
             cache_delete(cache_k)
             raise RuntimeError("验证码页面")
 
-        weight_kg, length_cm, width_cm, height_cm = extract_dimensions(sp)
-
-        return ProductDTO(
+        product = ProductDTO(
             asin=asin,
             marketplace=marketplace,
-            title=extract_title(sp, fallback=asin),
+            title=asin,
             category=category,
-            brand=extract_brand(sp),
-            price=extract_price(sp),
-            bsr_rank=extract_bsr(sp),
-            rating=extract_rating(sp),
-            review_count=extract_reviews(sp),
-            weight_kg=weight_kg,
-            length_cm=length_cm,
-            width_cm=width_cm,
-            height_cm=height_cm,
-            main_image_url=extract_image(sp),
             listing_url=url,
         )
+        from crawlers.amazon_search import apply_detail_evidence
+        return apply_detail_evidence(product, extract_amazon_detail(sp, source_ref=url))
 
     # --------------------------------------------------------
     def _save_cookies_from_session(self, session) -> None:

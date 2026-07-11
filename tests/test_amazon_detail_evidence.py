@@ -1,6 +1,9 @@
 from crawlers._amazon_extractors import extract_amazon_detail
 from crawlers.amazon_bsr import ProductDTO
 from crawlers.amazon_search import apply_detail_evidence
+from crawlers.amazon_playwright import AmazonPlaywrightScraper
+from crawlers.amazon_scrapling import AmazonScraplingScraper
+from scrapling.parser import Adaptor
 
 
 class FakePage:
@@ -81,6 +84,13 @@ def test_detail_timestamps_are_timezone_aware():
     assert detail["title"].expires_at.utcoffset() is not None
 
 
+def test_a_plus_empty_container_is_detected_by_adapter_presence():
+    detail = extract_amazon_detail(
+        FakePage(attrs={("#aplus", "id"): "aplus"}), source_ref="artifact:aplus"
+    )
+    assert detail["a_plus"].value is True
+
+
 def test_legacy_dto_only_copies_extracted_values_and_retains_full_evidence():
     fields = extract_amazon_detail(
         FakePage(
@@ -96,3 +106,80 @@ def test_legacy_dto_only_copies_extracted_values_and_retains_full_evidence():
     assert product.price == 99.0
     assert product.length_cm == 25.4
     assert product.raw_data["field_evidence"]["price"]["status"] == "missing"
+
+
+DETAIL_HTML = """
+<html><span id="productTitle">Adapter Product</span>
+<div id="corePrice_feature_div"><span class="a-offscreen">$18.50</span></div>
+<table class="prodDetTable"><tr><th>Brand Name</th><td>Acme</td></tr>
+<tr><th>Product Dimensions</th><td>10 x 8 x 4 inches</td></tr></table></html>
+"""
+
+
+def test_scrapling_product_path_attaches_complete_evidence_without_refetch(monkeypatch):
+    class Session:
+        def __init__(self):
+            self.calls = 0
+
+        def fetch(self, *args, **kwargs):
+            self.calls += 1
+            return Adaptor(DETAIL_HTML)
+
+    session = Session()
+    scraper = AmazonScraplingScraper(use_cache=False)
+    monkeypatch.setattr("crawlers.amazon_scrapling.set_html", lambda *args: None)
+    product = scraper._scrape_product(
+        session, "https://www.amazon.com", "B000TEST00", "US", "Home"
+    )
+
+    assert session.calls == 1
+    assert product.price == 18.5
+    assert product.raw_data["field_evidence"]["coupon"]["status"] == "missing"
+    assert product.raw_data["field_evidence"]["title"]["source_ref"] == product.listing_url
+
+
+def test_playwright_product_path_attaches_complete_evidence(monkeypatch):
+    class Element:
+        def __init__(self, text="", attrs=None):
+            self._text = text
+            self._attrs = attrs or {}
+
+        def inner_text(self):
+            return self._text
+
+        def get_attribute(self, name):
+            return self._attrs.get(name)
+
+    class Page:
+        def __init__(self):
+            self.goto_calls = 0
+            self.elements = {
+                "#productTitle": Element("Adapter Product"),
+                "#corePrice_feature_div .a-offscreen": Element("$18.50"),
+            }
+
+        def goto(self, *args, **kwargs):
+            self.goto_calls += 1
+
+        def wait_for_timeout(self, *args):
+            return None
+
+        def query_selector(self, selector):
+            if "Brand Name" in selector:
+                return Element("Acme")
+            if "Product Dimensions" in selector:
+                return Element("10 x 8 x 4 inches")
+            return self.elements.get(selector)
+
+        def query_selector_all(self, selector):
+            return []
+
+    page = Page()
+    product = AmazonPlaywrightScraper()._scrape_product(
+        page, "https://www.amazon.com", "B000TEST00", "US", "Home"
+    )
+
+    assert page.goto_calls == 1
+    assert product.brand == "Acme"
+    assert product.raw_data["field_evidence"]["availability"]["status"] == "missing"
+    assert product.raw_data["field_evidence"]["title"]["source_ref"] == product.listing_url

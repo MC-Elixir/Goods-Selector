@@ -23,6 +23,7 @@ import time
 from loguru import logger
 
 from crawlers._amazon_extractors import (
+    extract_amazon_detail,
     extract_brand,
     extract_bsr,
     extract_dimensions,
@@ -212,22 +213,12 @@ class AmazonPlaywrightScraper:
             raise RuntimeError("验证码页面")
         page.wait_for_timeout(random.randint(800, 1500))
 
-        weight_kg, length_cm, width_cm, height_cm = extract_dimensions(pp)
-
-        return ProductDTO(
+        product = ProductDTO(
             asin=asin,
             marketplace=marketplace,
-            title=extract_title(pp, fallback=asin),
+            title=asin,
             category=category,
-            brand=extract_brand(pp),
-            price=extract_price(pp),
-            bsr_rank=extract_bsr(pp),
-            rating=extract_rating(pp),
-            review_count=extract_reviews(pp),
-            weight_kg=weight_kg,
-            length_cm=length_cm,
-            width_cm=width_cm,
-            height_cm=height_cm,
-            main_image_url=extract_image(pp),
             listing_url=url,
         )
+        from crawlers.amazon_search import apply_detail_evidence
+        return apply_detail_evidence(product, extract_amazon_detail(pp, source_ref=url))

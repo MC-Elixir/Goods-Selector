@@ -118,6 +118,8 @@ class MarketDataError(RuntimeError):
             return exc
         if isinstance(exc, httpx.TimeoutException):
             return cls("TIMEOUT", "SellerSprite request timed out")
+        if isinstance(exc, (ValueError, TypeError, json.JSONDecodeError)):
+            return cls("MISSING_REQUIRED_DATA", "SellerSprite response was not valid JSON")
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
             if status in (401, 403):
@@ -462,8 +464,10 @@ class MaijiajinglingClient:
         normalized = f"{code} {message}".lower()
         if any(token in normalized for token in ("invalid key", "invalid secret", "unauthorized", "forbidden")):
             raise MarketDataError("AUTH_REQUIRED", "SellerSprite credentials were rejected")
+        if "rate" in normalized and ("limit" in normalized or "429" in normalized):
+            raise MarketDataError("RATE_LIMITED", "SellerSprite rate limit reached")
         if code and code != "OK":
-            raise MarketDataError("UPSTREAM_ERROR", f"SellerSprite API returned code {code}")
+            raise MarketDataError("MISSING_REQUIRED_DATA", f"SellerSprite API returned code {code}")
         if "data" not in body:
             raise MarketDataError("MISSING_REQUIRED_DATA", "SellerSprite response omitted data")
         received_at = datetime.now(timezone.utc)
@@ -489,6 +493,13 @@ class MaijiajinglingClient:
         normalized = f"{body.get('code', '')} {body.get('message', '')}".lower()
         if any(token in normalized for token in ("invalid key", "invalid secret", "unauthorized", "forbidden")):
             raise MarketDataError("AUTH_REQUIRED", "SellerSprite credentials were rejected")
+        if "rate" in normalized and ("limit" in normalized or "429" in normalized):
+            raise MarketDataError("RATE_LIMITED", "SellerSprite rate limit reached")
+        code = str(body.get("code") or "")
+        if code and code != "OK":
+            raise MarketDataError("MISSING_REQUIRED_DATA", f"SellerSprite API returned code {code}")
+        if endpoint != "/v1/visits" and "data" not in body:
+            raise MarketDataError("MISSING_REQUIRED_DATA", "SellerSprite response omitted data")
         self._response_diagnostics.append({
             "endpoint": endpoint,
             "response_timestamp": datetime.now(timezone.utc).isoformat(),
@@ -515,7 +526,9 @@ class MaijiajinglingClient:
                 diagnostic="SellerSprite API key is not configured",
             )
         try:
-            data = self.analyze_market(asin, marketplace=marketplace, keyword=keyword)
+            data = self.analyze_market(
+                asin, marketplace=marketplace, keyword=keyword, strict=True
+            )
         except Exception as exc:
             error = MarketDataError.from_exception(exc)
             return MarketEvidenceResult(
@@ -548,6 +561,7 @@ class MaijiajinglingClient:
         asin: str,
         marketplace: str = "US",
         keyword: Optional[str] = None,
+        strict: bool = False,
     ) -> MarketAnalysisDTO:
         """编排多个 API 产出市场分析结果。
 
@@ -584,6 +598,8 @@ class MaijiajinglingClient:
                 dto.is_amazon_choice = detail.is_amazon_choice
                 dto.raw_data["asin_detail"] = detail.raw
         except Exception as e:
+            if strict and isinstance(e, MarketDataError):
+                raise
             dto.raw_data["asin_detail_error"] = str(e)
             logger.debug(f"ASIN 详情失败 asin={asin}: {e}")
 
@@ -600,6 +616,8 @@ class MaijiajinglingClient:
                         "items": pred.items,
                     }
             except Exception as e:
+                if strict and isinstance(e, MarketDataError):
+                    raise
                 logger.debug(f"BSR 预测失败 asin={asin}: {e}")
 
         # ---- 3. 竞品分析 ----
@@ -676,6 +694,8 @@ class MaijiajinglingClient:
                     dto.est_monthly_sales = dto.est_monthly_sales or monthly_units
                     dto.est_daily_sales = dto.est_daily_sales or max(round(monthly_units / 30), 1)
         except Exception as e:
+            if strict and isinstance(e, MarketDataError):
+                raise
             logger.debug(f"竞品查询失败 asin={asin}: {e}")
             dto.raw_data["competitor_lookup_error"] = str(e)
 
@@ -697,6 +717,8 @@ class MaijiajinglingClient:
                 dto.opportunity_score = metrics.get("opportunity_score")
                 dto.seasonality = metrics.get("seasonality") or {}
             except Exception as e:
+                if strict and isinstance(e, MarketDataError):
+                    raise
                 logger.debug(f"关键词选品失败 asin={asin} keyword={keyword_candidate!r}: {e}")
                 try:
                     trend_data = self.keyword_research_trends(
@@ -711,6 +733,8 @@ class MaijiajinglingClient:
                     dto.purchase_rate = metrics.get("purchase_rate")
                     dto.seasonality = metrics.get("seasonality") or {}
                 except Exception as trend_exc:
+                    if strict and isinstance(trend_exc, MarketDataError):
+                        raise
                     logger.debug(
                         f"关键词趋势失败 asin={asin} keyword={keyword_candidate!r}: {trend_exc}"
                     )

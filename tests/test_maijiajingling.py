@@ -333,3 +333,81 @@ def test_request_diagnostics_are_hashed_and_do_not_store_api_key():
     assert __import__("datetime").datetime.fromisoformat(
         diagnostic["response_timestamp"]
     ).utcoffset() is not None
+
+
+def test_request_non_ok_business_response_is_missing_required_data():
+    client = MaijiajinglingClient(api_key="test", base_url="https://api.sellersprite.com")
+    client._client = _RecordingHttpClient({"code": "ERROR", "message": "bad payload"})
+
+    try:
+        client._request("GET", "/v1/test")
+    except MarketDataError as error:
+        assert error.error_code == "MISSING_REQUIRED_DATA"
+    else:
+        raise AssertionError("non-OK response must fail")
+
+
+def test_real_market_chain_auth_failure_is_failed_not_partial():
+    import httpx
+
+    class UnauthorizedHttp:
+        def get(self, path, **kwargs):
+            request = httpx.Request("GET", f"https://api.sellersprite.com{path}")
+            response = httpx.Response(401, request=request)
+            raise httpx.HTTPStatusError("unauthorized", request=request, response=response)
+
+    client = MaijiajinglingClient(api_key="invalid")
+    client._client = UnauthorizedHttp()
+    result = client.analyze_market_evidence("B000TEST", keyword="water filter")
+
+    assert result.status == "failed"
+    assert result.error_code == "AUTH_REQUIRED"
+    assert result.data is None
+
+
+def test_real_market_chain_malformed_json_is_missing_required_data():
+    class MalformedResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            raise ValueError("not json")
+
+    class MalformedHttp:
+        def get(self, path, **kwargs):
+            return MalformedResponse()
+
+    client = MaijiajinglingClient(api_key="test")
+    client._client = MalformedHttp()
+    result = client.analyze_market_evidence("B000TEST", keyword="water filter")
+
+    assert result.status == "failed"
+    assert result.error_code == "MISSING_REQUIRED_DATA"
+
+
+def test_real_market_chain_rate_limit_is_failed():
+    import httpx
+
+    class RateLimitedHttp:
+        def get(self, path, **kwargs):
+            request = httpx.Request("GET", f"https://api.sellersprite.com{path}")
+            response = httpx.Response(429, request=request)
+            raise httpx.HTTPStatusError("limited", request=request, response=response)
+
+    client = MaijiajinglingClient(api_key="test")
+    client._client = RateLimitedHttp()
+    result = client.analyze_market_evidence("B000TEST")
+    assert (result.status, result.error_code) == ("failed", "RATE_LIMITED")
+
+
+def test_real_market_chain_timeout_is_failed():
+    import httpx
+
+    class TimeoutHttp:
+        def get(self, path, **kwargs):
+            raise httpx.TimeoutException("late")
+
+    client = MaijiajinglingClient(api_key="test")
+    client._client = TimeoutHttp()
+    result = client.analyze_market_evidence("B000TEST")
+    assert (result.status, result.error_code) == ("failed", "TIMEOUT")

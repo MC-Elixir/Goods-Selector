@@ -268,7 +268,7 @@ def _parse_dimensions_from_text(text: str) -> Optional[tuple[float, float, float
     a, b, c = float(m.group(1)), float(m.group(2)), float(m.group(3))
     unit = m.group(4).lower()
     factor = 2.54 if unit.startswith("in") else 1.0
-    return sorted([a * factor, b * factor, c * factor], reverse=True)
+    return tuple(sorted([a * factor, b * factor, c * factor], reverse=True))
 
 
 # ============================================================
@@ -368,6 +368,15 @@ def _extract_secondary_images(page: PageLike) -> list[str]:
     return urls
 
 
+def _has_a_plus(page: PageLike) -> Optional[bool]:
+    if _first_text(page, ("#aplus", "#aplus_feature_div")):
+        return True
+    for selector in ("#aplus", "#aplus_feature_div"):
+        if page.attr(selector, "id"):
+            return True
+    return None
+
+
 def extract_amazon_detail(page: PageLike, source_ref: str) -> dict[str, FieldEvidence]:
     """Extract a complete Amazon-US detail evidence envelope."""
     weight_kg, length_cm, width_cm, height_cm = extract_dimensions(page)
@@ -397,7 +406,7 @@ def extract_amazon_detail(page: PageLike, source_ref: str) -> dict[str, FieldEvi
         "secondary_images": _field(_extract_secondary_images(page), "secondary_images", source_ref),
         "bullet_points": _field([v.strip() for v in page.text_all("#feature-bullets li") if v and v.strip()], "bullet_selectors", source_ref),
         "description": _field(_first_text(page, ("#productDescription", "#bookDescription_feature_div")), "description_selector", source_ref),
-        "a_plus": _field(True if _first_text(page, ("#aplus", "#aplus_feature_div")) else None, "a_plus_selector", source_ref),
+        "a_plus": _field(_has_a_plus(page), "a_plus_selector_or_presence", source_ref),
         "first_available_date": _field(page.table_row("Date First Available"), "available_date_table", source_ref),
     }
 
