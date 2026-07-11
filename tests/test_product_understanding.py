@@ -200,6 +200,23 @@ def test_brand_cleaning_uses_full_brand_words_and_model_excluded_aliases_case_in
     assert result.likely_supplier_keywords_cn == ["活性炭滤芯"]
 
 
+def test_short_latin_brand_tokens_do_not_damage_words_that_merely_contain_them():
+    product = _product()
+    product.brand = "US Home GE"
+    response = _response()
+    response.update({
+        "generic_product_name": "industrial household geometry filter",
+        "supply_chain_name_cn": "US Home GE filter supplier",
+        "likely_supplier_keywords_cn": ["industrial filter", "US filter"],
+    })
+
+    result = understand_amazon_product(product, FakeAnalyzer(response))
+
+    assert result.generic_product_name == "industrial household geometry filter"
+    assert result.supply_chain_name_cn == "filter supplier"
+    assert result.likely_supplier_keywords_cn == ["industrial filter"]
+
+
 @patch("matchers.vision_analyzer._HAS_OPENAI", True)
 @patch("matchers.vision_analyzer._openai")
 @patch("matchers.vision_analyzer._download_image")

@@ -35,6 +35,29 @@ Implemented and verified.
 
 - The full suite warnings are pre-existing deprecation warnings unrelated to
   Task 7.
-- The planner imports Task 6's private `_brand_tokens` helper. This is the
-  narrowest reuse with no circular dependency; promoting it to a new shared
-  module would broaden this task's change surface.
+- Brand safety is centralized in a dependency-light module imported by Tasks 6
+  and 7, so the refactor introduces no circular dependency.
+
+## Review Follow-up
+
+- Moved stable brand tokenization, matching, and removal into the public
+  `matchers.brand_safety` module shared by Tasks 6 and 7.
+- Latin and numeric brand/model tokens now require independent ASCII
+  alphanumeric boundaries. This removes standalone `US`, `Home`, `GE`, and
+  `A-100` case-insensitively without damaging `industrial`, `household`, or
+  `geometry`. Tokens containing CJK continue to use substring matching.
+- Rewrite iteration 1 now accepts only initial queries. Iteration 2 accepts
+  only a rewrite whose referenced parent is an initial query present in the
+  supplied plan. Skipped and repeated iterations return no rewrite, preserving
+  the `initial -> rewrite1 -> rewrite2` chain.
+- Query text collision handling now uses a deterministic loop and checks the
+  final fingerprint before append, including when brand cleaning removes all
+  type-specific qualifiers.
+
+### Follow-up TDD Evidence
+
+- RED: four tests reproduced ordinary-word corruption, single-pass collision,
+  skipped iteration 2, and Task 6 boundary corruption (`4 failed, 25 passed`).
+- Focused query planner + product understanding: `29 passed`.
+- Query planner + product understanding + vision compatibility: `54 passed`.
+- Full suite: `528 passed, 5 skipped, 210 warnings` in 209.21s.

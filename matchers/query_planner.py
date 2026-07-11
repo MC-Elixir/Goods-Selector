@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from matchers.product_understanding import _brand_tokens
+from matchers.brand_safety import brand_tokens, remove_brand_terms
 from schemas.sourcing import AmazonProductUnderstanding, QueryPlan
 
 
@@ -40,9 +40,7 @@ _TYPE_QUALIFIERS = {
 
 
 def _clean(text: str, excluded: list[str]) -> str:
-    value = text
-    for token in sorted(_brand_tokens("", excluded), key=len, reverse=True):
-        value = re.sub(re.escape(token), " ", value, flags=re.IGNORECASE)
+    value = remove_brand_terms(text, brand_tokens("", excluded))
     value = re.sub(r"仿(?:牌|款)?|同款|高仿|复刻", " ", value, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", value).strip(" ,，-_/|")[:120]
 
@@ -106,11 +104,16 @@ def generate_query_plan(u: AmazonProductUnderstanding) -> list[QueryPlan]:
         if len(text) < 2:
             text = _TYPE_QUALIFIERS[query_type]
         fingerprint = _fingerprint(text)
-        if fingerprint in seen:
+        counter = 1
+        base_text = text
+        while fingerprint in seen:
+            suffix = f" 查询{counter}"
             text = _clean(
-                f"{text} {_TYPE_QUALIFIERS[query_type]}", u.excluded_brand_tokens
+                f"{base_text[:120 - len(suffix)]}{suffix}",
+                u.excluded_brand_tokens,
             )
             fingerprint = _fingerprint(text)
+            counter += 1
         seen.add(fingerprint)
         result.append(QueryPlan(
             query_id=_query_id(u.asin, query_type, text),
@@ -135,11 +138,18 @@ def rewrite_low_relevance_queries(
         return []
     existing_fingerprints = {_fingerprint(query.text) for query in queries}
     existing_ids = {query.query_id for query in queries}
+    by_id = {query.query_id: query for query in queries}
     output: list[QueryPlan] = []
     for query in queries:
         rate = hit_rates.get(query.query_id)
         if rate is None or rate >= 0.2:
             continue
+        if iteration == 1 and query.retry_of is not None:
+            continue
+        if iteration == 2:
+            parent = by_id.get(query.retry_of or "")
+            if parent is None or parent.retry_of is not None:
+                continue
         suffix = "精准厂家" if iteration == 1 else "源头工厂"
         text = _clean(
             f"{u.supply_chain_name_cn} {u.generic_product_name} "

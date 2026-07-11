@@ -56,6 +56,23 @@ def test_queries_remove_full_brand_words_model_and_excluded_aliases():
     assert "同款" not in joined
 
 
+def test_short_latin_brand_tokens_only_match_at_alphanumeric_boundaries():
+    understanding = _understanding(
+        generic_product_name="industrial household geometry filter",
+        supply_chain_name_cn="US Home GE filter supplier",
+        excluded_brand_tokens=["US", "Home", "GE"],
+    )
+
+    joined = " ".join(q.text for q in generate_query_plan(understanding)).casefold()
+
+    assert "industrial" in joined
+    assert "household" in joined
+    assert "geometry" in joined
+    assert " us " not in f" {joined} "
+    assert " home " not in f" {joined} "
+    assert " ge " not in f" {joined} "
+
+
 def test_missing_optional_fields_still_produce_meaningful_unique_queries():
     understanding = _understanding(
         category=None,
@@ -85,6 +102,27 @@ def test_query_generation_is_deterministic_and_ids_are_unique():
     assert len({q.query_id for q in first}) == 12
 
 
+def test_collision_disambiguation_repeats_until_every_fingerprint_is_unique():
+    qualifiers = [
+        "通用产品", "供应链", "功能款", "材质款", "结构件", "应用场景",
+        "规格款", "包装批发", "替换耗材", "产品描述", "生产厂家", "1688类目",
+        "工业品", "整机", "替换件", "耗材",
+    ]
+    understanding = _understanding(
+        generic_product_name="产品",
+        supply_chain_name_cn="产品",
+        category=None,
+        function=[], material=[], components=[], dimensions_visible=[], use_case=[],
+        likely_supplier_keywords_cn=[], package_quantity=None,
+        replaceable_part_or_full_product="unknown",
+        excluded_brand_tokens=qualifiers,
+    )
+
+    queries = generate_query_plan(understanding)
+
+    assert len({q.text.casefold() for q in queries}) == 12
+
+
 def test_low_relevance_rewrites_are_bounded_lineaged_and_non_repeating():
     understanding = _understanding()
     initial = generate_query_plan(understanding)
@@ -107,6 +145,31 @@ def test_low_relevance_rewrites_are_bounded_lineaged_and_non_repeating():
     }
     assert rewrite_low_relevance_queries(
         understanding, [*initial, *first, *second], {second[0].query_id: 0.0}, iteration=3
+    ) == []
+
+
+def test_rewrite_rejects_skipped_and_repeated_iterations():
+    understanding = _understanding()
+    initial = generate_query_plan(understanding)
+    low = initial[0]
+
+    assert rewrite_low_relevance_queries(
+        understanding, initial, {low.query_id: 0.0}, iteration=2
+    ) == []
+    first = rewrite_low_relevance_queries(
+        understanding, initial, {low.query_id: 0.0}, iteration=1
+    )
+    assert rewrite_low_relevance_queries(
+        understanding, [*initial, *first], {first[0].query_id: 0.0}, iteration=1
+    ) == []
+    second = rewrite_low_relevance_queries(
+        understanding, [*initial, *first], {first[0].query_id: 0.0}, iteration=2
+    )
+    assert rewrite_low_relevance_queries(
+        understanding,
+        [*initial, *first, *second],
+        {first[0].query_id: 0.0},
+        iteration=2,
     ) == []
 
 

@@ -1,11 +1,11 @@
 """Structured, fail-closed understanding of an Amazon product."""
 from __future__ import annotations
 
-import re
 from urllib.parse import urlparse
 
 from pydantic import ValidationError
 
+from matchers.brand_safety import brand_tokens, contains_brand_term, remove_brand_terms
 from matchers.vision_analyzer import ProductAnalysisError
 from schemas.sourcing import AmazonProductUnderstanding
 
@@ -44,26 +44,8 @@ def product_image_urls(product) -> list[str]:
     )[:5]
 
 
-def _brand_tokens(brand: str, excluded: list[str]) -> list[str]:
-    values = [*excluded, brand]
-    tokens: list[str] = []
-    for value in values:
-        clean = value.strip()
-        if clean:
-            tokens.append(clean)
-            tokens.extend(part for part in re.split(r"[^\w]+", clean) if len(part) >= 2)
-    return list(dict.fromkeys(token.casefold() for token in tokens))
-
-
-def _contains_token(text: str, tokens: list[str]) -> bool:
-    folded = text.casefold()
-    return any(token in folded for token in tokens)
-
-
 def _clean_supplier_name(text: str, tokens: list[str]) -> str:
-    cleaned = text
-    for token in sorted(tokens, key=len, reverse=True):
-        cleaned = re.sub(re.escape(token), " ", cleaned, flags=re.IGNORECASE)
+    cleaned = remove_brand_terms(text, tokens)
     return " ".join(cleaned.split()).strip(" -_,/|")
 
 
@@ -98,7 +80,7 @@ def understand_amazon_product(product, analyzer) -> AmazonProductUnderstanding:
 
     brand = (getattr(product, "brand", None) or "").strip()
     excluded = list(dict.fromkeys([*result.excluded_brand_tokens, *([brand] if brand else [])]))
-    tokens = _brand_tokens(brand, result.excluded_brand_tokens)
+    tokens = brand_tokens(brand, result.excluded_brand_tokens)
     return result.model_copy(update={
         "excluded_brand_tokens": excluded,
         "generic_product_name": _clean_supplier_name(result.generic_product_name, tokens),
@@ -106,6 +88,6 @@ def understand_amazon_product(product, analyzer) -> AmazonProductUnderstanding:
         "likely_supplier_keywords_cn": [
             keyword
             for keyword in result.likely_supplier_keywords_cn
-            if not _contains_token(keyword, tokens)
+            if not contains_brand_term(keyword, tokens)
         ],
     })
