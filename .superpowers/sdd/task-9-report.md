@@ -77,7 +77,40 @@ TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_agent_runtime.py::test_runtime_
 ## Remaining Concern
 
 The enriched supplier detail contract does not yet define a normalized brand
-compatibility enum. Task 9 therefore recognizes `brand_compatibility` values containing
-`only`, `专用`, `原装`, or `exclusive`, as well as excluded Amazon brand tokens. A future
-detail schema should replace these compatibility aliases with a validated enum without
-weakening the hard-negative rule.
+compatibility enum. Task 9 therefore requires an explicit `only`, `专用`, `原装`, or
+`exclusive` marker together with a boundary-matched excluded Amazon brand token. A
+future detail schema should replace these compatibility aliases with a validated enum
+without weakening the hard-negative rule.
+
+## Important Review Fixes
+
+Follow-up commit after review addressed five evidence-boundary issues:
+
+- Price evidence now reuses `normalize_positive_number()` and
+  `normalize_price_tier()` from `analyzers.profit_model`. The explicit evidence order is
+  top-level base price, detail base price, top-level tiers, then detail tiers. A tier is
+  valid only when both quantity and price are finite and positive, and malformed tier
+  containers cannot hide a valid detail base price.
+- Function matching no longer accepts reverse substrings. A structured function is a
+  pass only when the complete normalized expected phrase occurs in the observation;
+  ASCII phrases require alphanumeric token boundaries. A missing structured function
+  may use the title only for positive confirmation, while a title miss remains missing.
+- Brand-specific rejection requires both an explicit exclusive marker and a bounded
+  excluded-brand match through public `brand_safety` helpers. Plain brand mentions and
+  internal substrings such as `Acme` in `Acmeology` do not hard reject. Separate
+  `exclusive` metadata is also supported.
+- Product types are normalized into component-side and full-side groups. Synonyms in
+  the same group pass, only cross-group evidence hard rejects, and unknown or malformed
+  labels remain missing.
+- Existing visual-negative, non-finite, and hard-precedence behavior remains covered by
+  regression tests.
+
+Review-fix verification:
+
+```text
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_match_evidence.py tests/test_product_spec.py tests/test_verifier_spec_match.py tests/test_profit_model.py tests/test_scoring.py -q
+176 passed in 0.86s
+
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q
+591 passed, 5 skipped in 216.14s
+```

@@ -2,15 +2,22 @@
 from __future__ import annotations
 
 import math
+import re
 from statistics import mean
 from typing import Any
 
+from analyzers.profit_model import normalize_positive_number, normalize_price_tier
+from matchers.brand_safety import brand_tokens, contains_brand_term
 from matchers.product_spec import ProductSpec, compare_specs, spec_from_supplier, spec_from_text
 from schemas.sourcing import AmazonProductUnderstanding, MatchEvidence
 
 
 CRITICAL_EVIDENCE = ("function", "package_quantity", "product_type", "price", "moq")
 HARD_SPEC_CONFLICTS = {"capacity", "dimensions", "material", "pack_count"}
+PRODUCT_TYPE_GROUPS = {
+    "component_side": {"replacement", "consumable", "accessory", "component", "part", "配件", "替换件", "零件", "耗材"},
+    "full_side": {"full_product", "machine", "device", "整机", "机器", "设备"},
+}
 
 
 def _finite_number(value: Any, *, positive: bool = False) -> float | None:
@@ -35,27 +42,40 @@ def _equal(left: Any, right: Any) -> float | None:
     return 1.0 if _normalized(left) == _normalized(right) else 0.0
 
 
-def _function_match(required: list[str], observed: Any) -> float | None:
+def _phrase_present(expected: str, observed: str) -> bool:
+    if expected.isascii():
+        return re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(expected)}(?![A-Za-z0-9])",
+            observed,
+            flags=re.IGNORECASE,
+        ) is not None
+    return expected in observed
+
+
+def _function_match(required: list[str], observed: Any, title: Any = None) -> float | None:
     wanted = [_normalized(item) for item in required if _normalized(item)]
-    actual = _normalized(observed) if isinstance(observed, str) else ""
+    has_structured_evidence = isinstance(observed, str) and bool(observed.strip())
+    evidence = observed if has_structured_evidence else title
+    actual = _normalized(evidence) if isinstance(evidence, str) else ""
     if not wanted or not actual:
         return None
-    return float(any(term in actual or actual in term for term in wanted))
+    matched = any(_phrase_present(term, actual) for term in wanted)
+    if matched:
+        return 1.0
+    return 0.0 if has_structured_evidence else None
 
 
 def _price_present(supplier: Any, detail: dict[str, Any]) -> bool:
-    if _finite_number(getattr(supplier, "base_price_cny", None), positive=True) is not None:
+    if normalize_positive_number(getattr(supplier, "base_price_cny", None)) is not None:
         return True
-    tiers = getattr(supplier, "price_tiers", None) or detail.get("price_tiers")
-    if not isinstance(tiers, list):
-        return False
-    for tier in tiers:
-        if isinstance(tier, dict) and any(
-            _finite_number(tier.get(key), positive=True) is not None
-            for key in ("price", "price_cny", "unit_price", "unit_price_cny")
-        ):
+    if normalize_positive_number(detail.get("base_price_cny")) is not None:
+        return True
+    for tiers in (getattr(supplier, "price_tiers", None), detail.get("price_tiers")):
+        if not isinstance(tiers, list):
+            continue
+        if any(normalize_price_tier(tier) is not None for tier in tiers):
             return True
-    return _finite_number(detail.get("base_price_cny"), positive=True) is not None
+    return False
 
 
 def _moq_present(supplier: Any, detail: dict[str, Any]) -> bool:
@@ -98,10 +118,39 @@ def _brand_exclusive(u: AmazonProductUnderstanding, detail: dict[str, Any]) -> b
     compatibility = _normalized(detail.get("brand_compatibility"))
     if not compatibility or compatibility in {"universal", "generic", "通用"}:
         return False
-    exclusive_markers = (" only", "only ", "专用", "原装", "exclusive")
-    if any(marker in compatibility for marker in exclusive_markers):
-        return True
-    return any(_normalized(token) in compatibility for token in u.excluded_brand_tokens if token)
+    exclusive_value = detail.get("exclusive")
+    exclusive_text = _normalized(exclusive_value) if isinstance(exclusive_value, str) else ""
+    explicitly_exclusive = (
+        re.search(r"(?<![A-Za-z0-9])(?:only|exclusive)(?![A-Za-z0-9])", compatibility) is not None
+        or any(marker in compatibility for marker in ("专用", "原装"))
+        or exclusive_value is True
+        or re.search(r"(?<![A-Za-z0-9])(?:only|exclusive)(?![A-Za-z0-9])", exclusive_text) is not None
+        or any(marker in exclusive_text for marker in ("专用", "原装"))
+    )
+    if not explicitly_exclusive:
+        return False
+    return contains_brand_term(
+        compatibility,
+        brand_tokens("", u.excluded_brand_tokens),
+    )
+
+
+def _product_type_group(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = _normalized(value)
+    for group, aliases in PRODUCT_TYPE_GROUPS.items():
+        if normalized in aliases:
+            return group
+    return None
+
+
+def _product_type_match(target: Any, observed: Any) -> float | None:
+    target_group = _product_type_group(target)
+    observed_group = _product_type_group(observed)
+    if target_group is None or observed_group is None:
+        return None
+    return float(target_group == observed_group)
 
 
 def _visual_evidence(
@@ -139,9 +188,13 @@ def build_match_evidence(
 
     target_type = understanding.replaceable_part_or_full_product
     supplier_type = detail.get("product_type")
-    type_match = None if target_type == "unknown" else _equal(target_type, supplier_type)
+    type_match = _product_type_match(target_type, supplier_type)
     pack_match = _equal(understanding.package_quantity, detail.get("package_quantity"))
-    function_match = _function_match(understanding.function, detail.get("function"))
+    function_match = _function_match(
+        understanding.function,
+        detail.get("function"),
+        getattr(supplier, "title_cn", None),
+    )
 
     spec = compare_specs(_target_spec(understanding), _supplier_spec(supplier, detail))
     hard_spec_conflicts = sorted(set(spec.conflicts) & HARD_SPEC_CONFLICTS)
