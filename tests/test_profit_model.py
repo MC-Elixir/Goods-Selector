@@ -137,6 +137,27 @@ def test_purchase_cost_accepts_extracted_tier_schema():
     )
 
 
+@pytest.mark.parametrize("invalid", ["nan", float("nan"), "inf", float("inf"), "-inf", float("-inf")])
+@pytest.mark.parametrize("field", ["min_qty", "price_cny"])
+def test_purchase_cost_rejects_nonfinite_tier_values(field, invalid):
+    params = profit_model.load_profit_params()
+    tier = {"min_qty": 10, "price_cny": 20}
+    tier[field] = invalid
+    supplier = _MockSupplier(base_price_cny=None, price_tiers=[tier])
+
+    with pytest.raises(InsufficientCostEvidence, match="purchase_price"):
+        calc_purchase_cost(supplier, 200, params)
+
+
+@pytest.mark.parametrize("invalid", ["nan", float("nan"), "inf", float("inf"), "-inf", float("-inf")])
+def test_purchase_cost_rejects_nonfinite_base_price(invalid):
+    params = profit_model.load_profit_params()
+    supplier = _MockSupplier(base_price_cny=invalid, price_tiers=[])
+
+    with pytest.raises(InsufficientCostEvidence, match="purchase_price"):
+        calc_purchase_cost(supplier, 200, params)
+
+
 # ============================================================
 # calc_shipping_cost
 # ============================================================

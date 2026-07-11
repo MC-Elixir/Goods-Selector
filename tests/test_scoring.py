@@ -287,6 +287,28 @@ class TestScoreSupply:
 
         assert exc_info.value.fields == ["purchase_price", "moq"]
 
+    @pytest.mark.parametrize("invalid", ["nan", float("nan"), "inf", float("inf"), "-inf", float("-inf")])
+    @pytest.mark.parametrize("field", ["min_qty", "price_cny"])
+    def test_nonfinite_tier_values_are_missing_purchase_price(self, field, invalid):
+        supplier = _MockSupplier(base_price_cny=None)
+        tier = {"min_qty": 10, "price_cny": 20}
+        tier[field] = invalid
+        supplier.price_tiers = [tier]
+
+        with pytest.raises(ScoringEvidenceError) as exc_info:
+            score_supply([supplier], self._curve())
+
+        assert exc_info.value.fields == ["purchase_price"]
+
+    @pytest.mark.parametrize("invalid", ["nan", float("nan"), "inf", float("inf"), "-inf", float("-inf")])
+    def test_nonfinite_base_price_is_missing_purchase_price(self, invalid):
+        supplier = _MockSupplier(base_price_cny=invalid)
+
+        with pytest.raises(ScoringEvidenceError) as exc_info:
+            score_supply([supplier], self._curve())
+
+        assert exc_info.value.fields == ["purchase_price"]
+
 
 # ============================================================
 # score_logistics

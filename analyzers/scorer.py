@@ -23,7 +23,7 @@ from typing import Optional
 import yaml
 from loguru import logger
 
-from analyzers.profit_model import normalize_price_tier
+from analyzers.profit_model import normalize_positive_number, normalize_price_tier
 
 from config.settings import CONFIG_DIR
 
@@ -283,8 +283,8 @@ def score_supply(suppliers: list, curve: dict) -> float:
     suppliers_with_price = []
     suppliers_with_moq = []
     for supplier in real_suppliers:
-        price = _supplier_number(supplier, "base_price_cny")
-        if price is None or price <= 0:
+        price = normalize_positive_number(_supplier_number(supplier, "base_price_cny"))
+        if price is None:
             tiers = getattr(supplier, "price_tiers", None) or []
             price = next(
                 (
@@ -294,12 +294,12 @@ def score_supply(suppliers: list, curve: dict) -> float:
                 ),
                 None,
             )
-        moq = _supplier_number(supplier, "moq")
-        if price is not None and price > 0:
+        moq = normalize_positive_number(_supplier_number(supplier, "moq"))
+        if price is not None:
             suppliers_with_price.append(supplier)
-        if moq is not None and moq > 0:
+        if moq is not None:
             suppliers_with_moq.append(supplier)
-        if price is not None and price > 0 and moq is not None and moq > 0:
+        if price is not None and moq is not None:
             evidenced.append(supplier)
     if not evidenced:
         if suppliers_with_price and suppliers_with_moq:
@@ -342,7 +342,7 @@ def score_supply(suppliers: list, curve: dict) -> float:
         delivery_score = 0.5  # 无数据时中性
 
     # 初始资金（首单成本 ≤ 5 万 CNY）
-    prices = [getattr(s, "base_price_cny", None) for s in suppliers]
+    prices = [normalize_positive_number(_supplier_number(s, "base_price_cny")) for s in suppliers]
     prices = [p for p in prices if p is not None]
     capital_max = c.get("initial_capital_max_cny", 50000)
     if moq_min is not None and prices:

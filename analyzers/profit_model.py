@@ -95,17 +95,22 @@ def reload_profit_params() -> None:
 # 各项成本计算（纯函数，方便单测）
 # ============================================================
 
+def normalize_positive_number(value: object) -> Optional[float]:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(normalized) or normalized <= 0:
+        return None
+    return normalized
+
+
 def normalize_price_tier(tier: object) -> Optional[tuple[float, float]]:
     if not isinstance(tier, dict):
         return None
-    qty = tier.get("min_qty", tier.get("qty"))
-    price = tier.get("price_cny", tier.get("price"))
-    try:
-        qty_value = float(qty)
-        price_value = float(price)
-    except (TypeError, ValueError):
-        return None
-    if qty_value < 0 or price_value <= 0:
+    qty_value = normalize_positive_number(tier.get("min_qty", tier.get("qty")))
+    price_value = normalize_positive_number(tier.get("price_cny", tier.get("price")))
+    if qty_value is None or price_value is None:
         return None
     return qty_value, price_value
 
@@ -142,11 +147,8 @@ def calc_purchase_cost(supplier, batch_qty: int, params: dict) -> float:
     if price_cny is None:
         price_cny = getattr(supplier, "base_price_cny", None)
 
-    try:
-        price_cny = float(price_cny)
-    except (TypeError, ValueError):
-        price_cny = None
-    if price_cny is None or price_cny <= 0:
+    price_cny = normalize_positive_number(price_cny)
+    if price_cny is None:
         raise InsufficientCostEvidence(["purchase_price"])
 
     return float(price_cny) * cny_to_usd

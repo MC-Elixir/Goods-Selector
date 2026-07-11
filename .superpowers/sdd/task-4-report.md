@@ -90,3 +90,33 @@ TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/
 ```
 
 No new concerns were found. The five skips and warning categories remain the existing ones described above.
+
+## Finite-number evidence gate
+
+The final Important review finding was fixed in a separate TDD cycle after `a34a317`.
+
+### RED
+
+String and float forms of `nan`, `inf`, and `-inf` were tested independently in tier quantity, tier price, and fallback `base_price_cny`, through both profit and supply scoring paths.
+
+```text
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_profit_model.py -k nonfinite tests/test_scoring.py -k nonfinite -q
+20 failed, 16 passed, 89 deselected in 0.24s
+```
+
+The observed failures included non-finite purchase costs, non-finite values accepted as supply price evidence, and a string-Infinity `TypeError` in downstream capital scoring.
+
+### GREEN and verification
+
+```text
+same targeted command
+36 passed, 89 deselected in 0.16s
+
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_profit_model.py tests/test_scoring.py tests/test_pipeline_review_fallback.py tests/test_exporter_spec_match.py -q
+132 passed in 0.91s
+
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q
+483 passed, 5 skipped, 209 warnings in 204.98s
+```
+
+The shared `normalize_positive_number` now requires finite values greater than zero. Tier normalization, purchase-cost fallback, and supply scoring reuse it; supply capital scoring also consumes normalized numeric prices. No new concerns were found.
