@@ -34,9 +34,9 @@ from schemas.sourcing import VisionMatchResult
 VISION_MATCH_PROMPT_VERSION = "supplier-visual-match-v1"
 
 _VISION_MATCH_PROMPT = """你是供应链商品核验员。综合所有 Amazon 图片、所有 1688 图片以及两侧结构化属性，
-判断是否是可互相采购替代的同一商品。必须逐项、显式判断商品类型、核心功能、结构、材质、包装数量，
+判断是否是可互相采购替代的同一商品。必须逐项、显式判断商品类型、核心功能、替换件/配件/整机关系、结构、材质、包装数量，
 并区分替换件/耗材与完整产品。图片缺失或部分下载失败只能降低证据强度，绝不能默认为匹配。
-严格只输出 JSON，且必须包含这些字段：same_product_type, same_core_function, same_structure,
+严格只输出 JSON，且必须包含这些字段：same_product_type, same_core_function, same_accessory_full_product_relation, same_structure,
 same_material, same_package_quantity, major_visual_differences, potential_mismatch, confidence, evidence,
 provider, model, prompt_version。无法判断的结构、材质或包装数量填 null；类型和核心功能必须为布尔值。
 provider、model、prompt_version 的输出会被调用方用真实运行值覆盖。"""
@@ -358,53 +358,66 @@ class LLMVisualVerifier:
     def _vision_provider_call(self, payload: dict) -> dict:
         """Download all usable evidence, cache it, then call the configured backend."""
         import httpx
-        image_groups: dict[str, list[bytes]] = {"amazon": [], "supplier": []}
+        image_groups: dict[str, list[tuple[bytes, str]]] = {"amazon": [], "supplier": []}
         failures: dict[str, int] = {"amazon": 0, "supplier": 0}
+        slots: dict[str, list[dict]] = {"amazon": [], "supplier": []}
         with httpx.Client(timeout=30, follow_redirects=True) as client:
             for side, key in (("amazon", "amazon_images"), ("supplier", "supplier_images")):
-                for url in payload[key]:
-                    encoded = self._download_image(client, url)
-                    if encoded is None:
+                for slot, url in enumerate(payload[key]):
+                    url_hash = hashlib.sha256(url.encode()).hexdigest()
+                    downloaded = self._download_task_image(client, url)
+                    if downloaded is None:
                         failures[side] += 1
+                        slots[side].append({"slot": slot, "status": "failed", "url_sha256": url_hash})
                     else:
-                        image_groups[side].append(base64.b64decode(encoded))
+                        data, media_type = downloaded
+                        image_groups[side].append((data, media_type))
+                        slots[side].append({
+                            "slot": slot,
+                            "status": "ok",
+                            "url_sha256": url_hash,
+                            "content_sha256": hashlib.sha256(data).hexdigest(),
+                            "media_type": media_type,
+                        })
         if not image_groups["amazon"] or not image_groups["supplier"]:
             raise VisionVerificationError("image_evidence_unavailable")
 
-        cache_key = self._vision_cache_key(payload, image_groups)
+        final_prompt = self._task_b_prompt(payload, failures)
+        cache_key = self._vision_cache_key(payload, image_groups, slots, final_prompt)
         if self._cache is not None and cache_key in self._cache:
             return self._cache[cache_key]
-        result = self._call_task_b(payload, image_groups, failures)
+        result = self._call_task_b(image_groups, final_prompt)
         if self._cache is not None:
             from config.settings import settings
             self._cache.set(cache_key, result, expire=settings.cache_ttl_seconds)
         return result
 
-    def _vision_cache_key(self, payload: dict, images: dict[str, list[bytes]]) -> str:
+    def _vision_cache_key(self, payload, images, slots, final_prompt) -> str:
         identity = {
             "prompt_version": VISION_MATCH_PROMPT_VERSION,
-            "prompt_sha256": hashlib.sha256(_VISION_MATCH_PROMPT.encode()).hexdigest(),
+            "prompt_sha256": hashlib.sha256(final_prompt.encode()).hexdigest(),
             "provider": self._provider,
             "model": self._model,
             "amazon_attributes": payload.get("amazon_attributes") or {},
             "supplier_attributes": payload.get("supplier_attributes") or {},
-            "amazon_image_hashes": [hashlib.sha256(x).hexdigest() for x in images["amazon"]],
-            "supplier_image_hashes": [hashlib.sha256(x).hexdigest() for x in images["supplier"]],
+            "image_slots": slots,
         }
         normalized = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         return "svm_" + hashlib.sha256(normalized.encode()).hexdigest()
 
-    def _call_task_b(self, payload, images, failures) -> dict:
-        prompt = _VISION_MATCH_PROMPT + "\n结构化证据：" + json.dumps({
+    def _task_b_prompt(self, payload, failures) -> str:
+        return _VISION_MATCH_PROMPT + "\n结构化证据：" + json.dumps({
             "amazon_attributes": payload["amazon_attributes"],
             "supplier_attributes": payload["supplier_attributes"],
             "image_evidence": {
-                "amazon_available": len(images["amazon"]),
+                "amazon_available": len(payload["amazon_images"]) - failures["amazon"],
                 "amazon_failed": failures["amazon"],
-                "supplier_available": len(images["supplier"]),
+                "supplier_available": len(payload["supplier_images"]) - failures["supplier"],
                 "supplier_failed": failures["supplier"],
             },
         }, ensure_ascii=False, sort_keys=True, default=str)
+
+    def _call_task_b(self, images, prompt) -> dict:
         try:
             if self._provider == "ppio":
                 import openai
@@ -412,10 +425,8 @@ class LLMVisualVerifier:
                 content = []
                 for side in ("amazon", "supplier"):
                     content.append({"type": "text", "text": f"{side} 图片："})
-                    content.extend({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(image).decode()}"},
-                    } for image in images[side])
+                    content.extend(self._openai_task_image_block(image, media_type)
+                                   for image, media_type in images[side])
                 content.append({"type": "text", "text": prompt})
                 response = client.chat.completions.create(
                     model=self._model, max_tokens=1536,
@@ -428,10 +439,8 @@ class LLMVisualVerifier:
                 content = []
                 for side in ("amazon", "supplier"):
                     content.append({"type": "text", "text": f"{side} 图片："})
-                    content.extend({
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(image).decode()},
-                    } for image in images[side])
+                    content.extend(self._anthropic_task_image_block(image, media_type)
+                                   for image, media_type in images[side])
                 content.append({"type": "text", "text": prompt})
                 response = client.messages.create(
                     model=self._model, max_tokens=1536,
@@ -446,6 +455,51 @@ class LLMVisualVerifier:
             raise
         except Exception:
             raise VisionVerificationError("provider_failure") from None
+
+    @staticmethod
+    def _openai_task_image_block(image: bytes, media_type: str) -> dict:
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{base64.b64encode(image).decode()}"},
+        }
+
+    @staticmethod
+    def _anthropic_task_image_block(image: bytes, media_type: str) -> dict:
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": base64.b64encode(image).decode()},
+        }
+
+    def _download_task_image(self, client, url: str) -> tuple[bytes, str] | None:
+        """Download and validate a supported raster image without trusting its suffix."""
+        try:
+            response = client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
+                "Referer": "https://www.amazon.com/",
+            })
+            response.raise_for_status()
+            data = response.content
+            media_type = self._task_image_media_type(data)
+            if media_type is None:
+                return None
+            declared = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if declared and (not declared.startswith("image/") or declared not in {media_type, "image/jpg"}):
+                return None
+            return data, media_type
+        except Exception:
+            return None
+
+    @staticmethod
+    def _task_image_media_type(data: bytes) -> str | None:
+        if data.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            return "image/webp"
+        if data.startswith((b"GIF87a", b"GIF89a")):
+            return "image/gif"
+        return None
 
     def verify(
         self,

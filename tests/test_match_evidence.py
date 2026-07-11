@@ -6,7 +6,7 @@ import pytest
 
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.match_evidence import build_match_evidence
-from schemas.sourcing import AmazonProductUnderstanding
+from schemas.sourcing import AmazonProductUnderstanding, VisionMatchResult
 
 
 def _understanding(**updates):
@@ -231,6 +231,28 @@ def test_visual_false_is_hard_negative_and_classification_confidence_is_not_simi
     assert result.visual_confidence == 0.99
     assert "visual_mismatch" in result.mismatch_reasons
     assert result.image_similarity is None
+
+
+def test_visual_accessory_full_product_false_maps_to_hard_type_mismatch():
+    visual = VisionMatchResult(
+        same_product_type=True,
+        same_core_function=True,
+        same_accessory_full_product_relation=False,
+        same_structure=True,
+        same_material=True,
+        same_package_quantity=True,
+        major_visual_differences=["替换件与整机"],
+        potential_mismatch=["产品关系冲突"],
+        confidence=0.99,
+        evidence=["Amazon 是替换件，1688 是整机"],
+        provider="fake",
+        model="fake",
+        prompt_version="supplier-visual-match-v1",
+    ).model_dump()
+    result = build_match_evidence(_understanding(), _supplier(), visual=visual)
+    assert result.decision == "reject"
+    assert result.accessory_vs_full_product_match == 0.0
+    assert "accessory_full_product_conflict" in result.mismatch_reasons
 
 
 def test_complete_positive_evidence_passes_minimum_threshold():

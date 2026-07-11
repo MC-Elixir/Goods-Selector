@@ -32,3 +32,11 @@ All Task 10 tests use an injected fake provider. No live model or image-network 
 ## Concerns
 
 No blocking concerns. Existing deprecation warnings are unrelated to Task 10.
+
+## Review Fixes
+
+- Cache keys now hash the exact final prompt sent to the model, including partial-download counts, and include ordered identity for every requested image slot. Successful slots carry content hashes and media type; failed slots carry stable URL hashes and failure status.
+- Added required `same_accessory_full_product_relation`; explicit false is a hard negative and Task 9 maps it to `accessory_full_product_conflict` through `model_dump()`.
+- Task B image downloads now validate JPEG, PNG, WebP, and GIF magic and preserve the detected media type in both PPIO and Anthropic payloads. Unsupported or non-image responses count as failed evidence.
+- Review focused suite: 101 passed.
+- Review full suite: 605 passed, 5 skipped, 210 warnings in 329.20 seconds.

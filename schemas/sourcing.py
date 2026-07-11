@@ -85,6 +85,7 @@ class VisionMatchResult(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     same_product_type: bool
     same_core_function: bool
+    same_accessory_full_product_relation: bool | None
     same_structure: bool | None
     same_material: bool | None
     same_package_quantity: bool | None
@@ -103,6 +104,7 @@ class VisionMatchResult(BaseModel):
         return (
             self.same_product_type
             and self.same_core_function
+            and self.same_accessory_full_product_relation is not False
             and self.same_package_quantity is not False
         )
 

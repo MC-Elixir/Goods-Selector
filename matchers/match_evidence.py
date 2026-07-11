@@ -195,6 +195,9 @@ def build_match_evidence(
         detail.get("function"),
         getattr(supplier, "title_cn", None),
     )
+    visual_relation = visual.get("same_accessory_full_product_relation") if isinstance(visual, dict) else None
+    if visual_relation is False:
+        type_match = 0.0
 
     spec = compare_specs(_target_spec(understanding), _supplier_spec(supplier, detail))
     hard_spec_conflicts = sorted(set(spec.conflicts) & HARD_SPEC_CONFLICTS)
