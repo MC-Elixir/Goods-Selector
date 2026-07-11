@@ -204,3 +204,42 @@ def test_export_markdown_includes_supplier_candidate_scores(tmp_path):
     assert "供应商质量分" in text
     assert "alibaba_pifatuan" in text
     assert "| 0.820 | 0.840 | 0.760 |" in text
+
+
+def test_insufficient_review_reasons_and_status_reach_all_exports(tmp_path):
+    record = SimpleNamespace(
+        product=SimpleNamespace(
+            asin="B0INSUFFICIENT",
+            title="Needs Evidence",
+            brand="Generic",
+            category="Home & Kitchen",
+            price=29.99,
+            bsr_rank=1000,
+            rating=4.5,
+            review_count=100,
+            marketplace="US",
+        ),
+        profit=None,
+        score=None,
+        market=None,
+        suppliers=[],
+        rejection_reasons=["missing_purchase_price", "missing_moq"],
+    )
+
+    json_path = export_json([record], output_path=tmp_path / "review.json")
+    payload = json.loads(json_path.read_text(encoding="utf-8"))[0]
+    assert payload["review_status"] == "insufficient_evidence"
+    assert payload["rejection_reasons"] == ["missing_purchase_price", "missing_moq"]
+
+    excel_path = export_excel([record], output_path=tmp_path / "review.xlsx")
+    import openpyxl
+    sheet = openpyxl.load_workbook(excel_path).active
+    headers = [cell.value for cell in sheet[1]]
+    row = [cell.value for cell in sheet[2]]
+    assert row[headers.index("审核状态")] == "insufficient_evidence"
+    assert row[headers.index("拒绝原因")] == "missing_purchase_price, missing_moq"
+
+    markdown_path = export_markdown([record], output_dir=tmp_path / "markdown")[0]
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "insufficient_evidence" in markdown
+    assert "missing_purchase_price, missing_moq" in markdown

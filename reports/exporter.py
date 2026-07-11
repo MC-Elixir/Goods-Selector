@@ -32,6 +32,24 @@ def _display_score(value) -> str:
     return "-" if value is None else f"{value:.3f}"
 
 
+def _record_rejection_reasons(record) -> list[str]:
+    reasons = getattr(record, "rejection_reasons", None)
+    if reasons:
+        return list(reasons)
+    score = getattr(record, "score", None)
+    return list(getattr(score, "rejection_reasons", None) or [])
+
+
+def _record_review_status(record) -> str:
+    reasons = _record_rejection_reasons(record)
+    score = getattr(record, "score", None)
+    if score is None and reasons:
+        return "insufficient_evidence"
+    if score is not None and getattr(score, "passed_hard_filter", False):
+        return "passed"
+    return "rejected"
+
+
 # ============================================================
 # Excel
 # ============================================================
@@ -62,7 +80,7 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
         "采购成本($)", "头程($)", "FBA费($)", "佣金($)", "广告费($)", "退货损耗($)",
         "供应商数", "Top1供应商", "Top1货源链接", "Top1采购价(CNY)", "Top1 MOQ",
         "Top1来源", "Top1视觉相似", "Top1匹配分", "Top1候选分", "Top1供应商质量分", "Top1业务条件分",
-        "通过筛选", "拒绝原因",
+        "通过筛选", "审核状态", "拒绝原因",
     ]
 
     header_fill = PatternFill("solid", fgColor="1F4E79")
@@ -136,7 +154,8 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
             _raw_score(top_sup, "supplier_quality_score"),
             _raw_score(top_sup, "supplier_business_score"),
             "✓" if passed else "✗",
-            ", ".join(sc.rejection_reasons) if sc else "",
+            _record_review_status(rec),
+            ", ".join(_record_rejection_reasons(rec)),
         ]
 
         for col, val in enumerate(row_data, 1):
@@ -151,7 +170,7 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
                   10, 8, 8, 8, 8, 10,
                   8, 25, 40, 12, 8,
                   12, 10, 10, 10, 12, 12,
-                  8, 25]
+                  8, 24, 25]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -248,10 +267,11 @@ def export_markdown(candidates: list, output_dir: Optional[Path] = None) -> list
         img_url = getattr(p, "main_image_url", None)
         image_section = f"![{asin}]({img_url})" if img_url else ""
 
-        rejection_section = ""
-        if sc and sc.rejection_reasons:
+        rejection_section = f"> 审核状态：{_record_review_status(rec)}"
+        rejection_reasons = _record_rejection_reasons(rec)
+        if rejection_reasons:
             rejection_section = (
-                f"> ⚠️ 未通过硬性筛选：{', '.join(sc.rejection_reasons)}"
+                f"> 审核状态：{_record_review_status(rec)}\n> ⚠️ 未通过硬性筛选：{', '.join(rejection_reasons)}"
             )
 
         # 货源表格
@@ -336,6 +356,8 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
         raw = raw if isinstance(raw, dict) else {}
 
         return {
+            "review_status": _record_review_status(rec),
+            "rejection_reasons": _record_rejection_reasons(rec),
             "product": {
                 k: getattr(p, k, None)
                 for k in ("asin", "marketplace", "title", "brand", "category",

@@ -261,6 +261,32 @@ class TestScoreSupply:
         with pytest.raises(ScoringEvidenceError, match="supply"):
             score_supply([supplier], self._curve())
 
+    @pytest.mark.parametrize(
+        "price_tiers",
+        [
+            [{"min_qty": "broken", "price_cny": 20}],
+            [{"min_qty": 10, "price_cny": 0}],
+            [{"qty": 10, "price": -1}],
+        ],
+    )
+    def test_malformed_or_nonpositive_tiers_are_not_price_evidence(self, price_tiers):
+        supplier = _MockSupplier(base_price_cny=None)
+        supplier.price_tiers = price_tiers
+
+        with pytest.raises(ScoringEvidenceError) as exc_info:
+            score_supply([supplier], self._curve())
+
+        assert exc_info.value.fields == ["purchase_price"]
+
+    def test_price_and_moq_must_exist_on_the_same_supplier(self):
+        price_only = _MockSupplier(moq=None, base_price_cny=20)
+        moq_only = _MockSupplier(moq=20, base_price_cny=None)
+
+        with pytest.raises(ScoringEvidenceError) as exc_info:
+            score_supply([price_only, moq_only], self._curve())
+
+        assert exc_info.value.fields == ["purchase_price", "moq"]
+
 
 # ============================================================
 # score_logistics

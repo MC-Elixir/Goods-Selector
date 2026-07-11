@@ -54,3 +54,39 @@ The five skips are existing Amazon Scrapling cases. The warnings are existing de
 ## Concerns
 
 No blocking concerns. The recovery can prove the final behavior and regression state, but cannot independently prove the interrupted agent's original RED because that terminal evidence was not preserved.
+
+## Important review fixes
+
+Two Important review findings were addressed in a separate strict TDD cycle after commit `3b3dbf0`.
+
+### RED
+
+Tests were added first for malformed/nonpositive price tiers, price and MOQ split across different suppliers, stable pipeline rejection reason mapping, and insufficient-evidence status/reasons in Excel, Markdown, and JSON.
+
+```text
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_scoring.py::TestScoreSupply::test_malformed_or_nonpositive_tiers_are_not_price_evidence tests/test_scoring.py::TestScoreSupply::test_price_and_moq_must_exist_on_the_same_supplier tests/test_pipeline_review_fallback.py::test_typed_evidence_errors_map_to_explicit_rejection_reasons tests/test_exporter_spec_match.py::test_insufficient_review_reasons_and_status_reach_all_exports -v
+5 failed, 1 passed in 0.82s
+```
+
+The failures showed that malformed tiers could count as price evidence, incomplete evidence produced `price_and_moq`, and JSON lacked `review_status` (with the same record-level reason loss affecting Excel and Markdown).
+
+### GREEN
+
+```text
+same targeted command
+6 passed in 0.82s
+```
+
+The minimal implementation exposes and reuses one tier normalizer from `profit_model`, requires positive price and MOQ on the same real supplier, emits specific missing fields, and centralizes exporter record status/reason resolution while preserving score-backed legacy records.
+
+### Review-fix verification
+
+```text
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_profit_model.py tests/test_scoring.py tests/test_pipeline_review_fallback.py tests/test_exporter_spec_match.py -v
+96 passed in 1.03s
+
+TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/
+447 passed, 5 skipped, 209 warnings in 203.45s
+```
+
+No new concerns were found. The five skips and warning categories remain the existing ones described above.

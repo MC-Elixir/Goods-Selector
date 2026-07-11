@@ -40,6 +40,9 @@ def test_typed_evidence_errors_map_to_explicit_rejection_reasons():
     assert _evidence_rejection_reasons(
         ScoringEvidenceError("supply", ["moq"])
     ) == ["missing_moq"]
+    assert _evidence_rejection_reasons(
+        ScoringEvidenceError("supply", ["purchase_price", "moq"])
+    ) == ["missing_purchase_price", "missing_moq"]
 
 
 def test_review_fallback_includes_explicitly_insufficient_records_without_snapshots():

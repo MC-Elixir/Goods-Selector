@@ -23,6 +23,8 @@ from typing import Optional
 import yaml
 from loguru import logger
 
+from analyzers.profit_model import normalize_price_tier
+
 from config.settings import CONFIG_DIR
 
 _BRAND_BLACKLIST = {
@@ -278,27 +280,37 @@ def score_supply(suppliers: list, curve: dict) -> float:
         raise ScoringEvidenceError("supply", ["real_supplier"])
 
     evidenced = []
+    suppliers_with_price = []
+    suppliers_with_moq = []
     for supplier in real_suppliers:
         price = _supplier_number(supplier, "base_price_cny")
-        if price is None:
+        if price is None or price <= 0:
             tiers = getattr(supplier, "price_tiers", None) or []
             price = next(
                 (
-                    _first_number(t.get("price_cny"), t.get("price"))
-                    for t in tiers if isinstance(t, dict)
-                    if _first_number(t.get("price_cny"), t.get("price")) is not None
+                    normalized[1]
+                    for tier in tiers
+                    if (normalized := normalize_price_tier(tier)) is not None
                 ),
                 None,
             )
-        if price is not None and price > 0 and _supplier_number(supplier, "moq") is not None:
+        moq = _supplier_number(supplier, "moq")
+        if price is not None and price > 0:
+            suppliers_with_price.append(supplier)
+        if moq is not None and moq > 0:
+            suppliers_with_moq.append(supplier)
+        if price is not None and price > 0 and moq is not None and moq > 0:
             evidenced.append(supplier)
     if not evidenced:
-        fields = []
-        if not any(_supplier_number(s, "base_price_cny") is not None or getattr(s, "price_tiers", None) for s in real_suppliers):
-            fields.append("purchase_price")
-        if not any(_supplier_number(s, "moq") is not None for s in real_suppliers):
-            fields.append("moq")
-        raise ScoringEvidenceError("supply", fields or ["price_and_moq"])
+        if suppliers_with_price and suppliers_with_moq:
+            fields = ["purchase_price", "moq"]
+        else:
+            fields = []
+            if not suppliers_with_price:
+                fields.append("purchase_price")
+            if not suppliers_with_moq:
+                fields.append("moq")
+        raise ScoringEvidenceError("supply", fields)
 
     suppliers = evidenced
 

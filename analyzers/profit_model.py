@@ -95,7 +95,7 @@ def reload_profit_params() -> None:
 # 各项成本计算（纯函数，方便单测）
 # ============================================================
 
-def _normalize_price_tier(tier: object) -> Optional[tuple[float, float]]:
+def normalize_price_tier(tier: object) -> Optional[tuple[float, float]]:
     if not isinstance(tier, dict):
         return None
     qty = tier.get("min_qty", tier.get("qty"))
@@ -126,7 +126,7 @@ def calc_purchase_cost(supplier, batch_qty: int, params: dict) -> float:
     price_tiers = [
         normalized
         for tier in (getattr(supplier, "price_tiers", None) or [])
-        if (normalized := _normalize_price_tier(tier)) is not None
+        if (normalized := normalize_price_tier(tier)) is not None
     ]
     price_cny: Optional[float] = None
 
