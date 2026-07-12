@@ -70,4 +70,5 @@ Base: 37372f9
 - Task 9: complete (commits b2252af..4df7f57, review approved; full 591 passed, 5 skipped; focused count wording minor) — Structured MatchEvidence and minimum evidence threshold
 - Task 10: complete (commits 4df7f57..c766584, review clean; full 605 passed, 5 skipped) — Schema-validated dual-image verification
 - Task 11: complete (commits c766584..edc9017, final review approved; focused 81 passed; full 669 passed, 5 skipped) — Bounded sourcing slice and evidence exports
-- Task 12: in progress — Benchmark evaluator with honest denominators
+- Task 12: complete (commits 8fd369c..d739514, review approved; focused 9 passed; empty predictions preserve null metrics) — Benchmark evaluator with honest denominators
+- Task 13: in progress — Compatibility, full verification, and real no-mock E2E
