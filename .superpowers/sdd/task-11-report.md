@@ -100,4 +100,4 @@ Focused verification: `48 passed, 1 warning`.
   CJK queries allow only exact-run, prefix, or suffix matches, preventing internal-substring and
   cross-run false positives.
 - Focused Task 11 plus query/search/Playwright verification: `81 passed`.
-- No prior full-suite process remained; final-HEAD full remains environment pending.
+- Final-HEAD full verification: `669 passed, 5 skipped, 210 warnings in 250.86s`.
