@@ -398,3 +398,17 @@ def test_default_relevance_recognizes_real_playwright_image_producer_shape_only_
     )
     assert _default_relevance(query, image_hit)
     assert not _default_relevance(query, keyword_hit)
+
+
+@pytest.mark.parametrize("query,title,expected", [
+    ("净水器 替换滤芯", "净水器替换滤芯四只装", True),
+    ("净水器 替换滤芯", "净水器配件", False),
+    ("水器", "净水器配件", False),
+    ("净水器", "净水器配件", True),
+    ("滤芯", "净水器滤芯", True),
+    ("水器", "净水器", True),
+    ("净水器", "净水 器配件", False),
+    ("净水器", "净水-器配件", False),
+])
+def test_default_cjk_relevance_preserves_runs_and_edges(query, title, expected):
+    assert _default_relevance(SimpleNamespace(text=query), SupplierDTO("cjk", title_cn=title)) is expected

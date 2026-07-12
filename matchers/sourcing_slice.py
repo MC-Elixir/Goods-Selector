@@ -72,13 +72,21 @@ def _default_relevance(query: Any, supplier: Any) -> bool:
     if not query_terms or not title_terms:
         return False
     title_ascii = {term for term in title_terms if term.isascii()}
-    title_cjk = "".join(term for term in title_terms if not term.isascii())
+    title_cjk_runs = [term for term in title_terms if not term.isascii()]
+    query_cjk = [term for term in query_terms if not term.isascii()]
+    if len(query_terms) == 1 and query_cjk:
+        term = query_cjk[0]
+        return any(run == term or run.startswith(term) or run.endswith(term) for run in title_cjk_runs)
+    if len(query_cjk) >= 2 and len(query_cjk) == len(query_terms):
+        phrase = "".join(query_cjk)
+        return any(phrase in run for run in title_cjk_runs)
     matches = [
-        term in title_ascii if term.isascii() else term in title_cjk
+        term in title_ascii if term.isascii() else any(
+            run == term or run.startswith(term) or run.endswith(term)
+            for run in title_cjk_runs
+        )
         for term in query_terms
     ]
-    if len(query_terms) == 1:
-        return matches[0]
     required = max(2, math.ceil(len(query_terms) * 0.75))
     return sum(matches) >= required
 

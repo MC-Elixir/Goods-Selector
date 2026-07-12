@@ -91,3 +91,13 @@ Focused verification: `48 passed, 1 warning`.
   do not pass this rule.
 - Focused Task 11 plus Alibaba Playwright/diagnostic verification: `64 passed`.
 - Prior full PID `74404` ended before this commit; final-HEAD full remains environment pending.
+
+## CJK Run Boundary Relevance
+
+- CJK title matching now preserves original runs separated by whitespace, punctuation, or
+  ASCII instead of concatenating them.
+- Multi-term CJK queries require the ordered adjacent phrase within one title run. Single-term
+  CJK queries allow only exact-run, prefix, or suffix matches, preventing internal-substring and
+  cross-run false positives.
+- Focused Task 11 plus query/search/Playwright verification: `81 passed`.
+- No prior full-suite process remained; final-HEAD full remains environment pending.
