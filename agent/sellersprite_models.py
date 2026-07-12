@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
-import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+
+from agent.sellersprite_policy import normalize_sellersprite_error_code
 
 
 _REQUIRED_LOCATOR_NAMES = (
@@ -21,8 +22,8 @@ _REQUIRED_LOCATOR_NAMES = (
     "results_ready",
     "export",
 )
-_COORDINATE_LOCATOR_RE = re.compile(
-    r"^\s*\(?\s*\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?\s*\)?\s*$"
+_SUPPORTED_LOCATOR_PREFIXES = frozenset(
+    {"css", "text", "role", "id", "name", "iframe", "shadow"}
 )
 
 
@@ -35,10 +36,17 @@ class SellerSpriteContext:
 
     @classmethod
     def create(cls, asin: str, sourcing_run_id: str | None = None) -> "SellerSpriteContext":
+        if sourcing_run_id is None:
+            normalized_run_id = str(uuid.uuid4())
+        else:
+            try:
+                normalized_run_id = str(uuid.UUID(str(sourcing_run_id)))
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError("sourcing_run_id must be a UUID") from exc
         return cls(
             asin=asin.strip().upper(),
-            sourcing_run_id=sourcing_run_id or str(uuid4()),
-            call_id=str(uuid4()),
+            sourcing_run_id=normalized_run_id,
+            call_id=str(uuid.uuid4()),
             observed_at=datetime.now(UTC).isoformat(),
         )
 
@@ -52,7 +60,11 @@ class SellerSpriteResult:
 
     @classmethod
     def needs_human(cls, context: SellerSpriteContext, error_code: str) -> "SellerSpriteResult":
-        return cls(status="NEEDS_HUMAN", context=context, error_code=error_code)
+        return cls(
+            status="NEEDS_HUMAN",
+            context=context,
+            error_code=normalize_sellersprite_error_code(error_code),
+        )
 
 
 @dataclass(frozen=True)
@@ -79,10 +91,14 @@ class SellerSpriteLocatorProfile:
         locators: dict[str, str] = {}
         for name in _REQUIRED_LOCATOR_NAMES:
             value = payload.get(name)
-            if not isinstance(value, str) or not value.strip():
+            if not isinstance(value, str):
                 raise ValueError(f"locator '{name}' is required")
-            locator = value.strip()
-            if _COORDINATE_LOCATOR_RE.fullmatch(locator):
-                raise ValueError(f"locator '{name}' must not use screen coordinates")
-            locators[name] = locator
+            prefix, separator, payload_value = value.partition("=")
+            if (
+                not separator
+                or prefix not in _SUPPORTED_LOCATOR_PREFIXES
+                or not payload_value.strip()
+            ):
+                raise ValueError(f"locator '{name}' must use a supported locator syntax")
+            locators[name] = value
         return cls(**locators)

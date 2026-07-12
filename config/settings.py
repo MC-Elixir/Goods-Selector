@@ -113,10 +113,10 @@ class Settings(BaseSettings):
     sellersprite_browser_locator_profile_path: str = ""
     sellersprite_browser_download_dir: str = ""
     sellersprite_browser_host_download_dir: str = ""
-    sellersprite_browser_page_timeout_seconds: int = 45
-    sellersprite_browser_export_timeout_seconds: int = 120
-    sellersprite_browser_min_interval_seconds: int = 5
-    sellersprite_browser_max_retries: int = 1
+    sellersprite_browser_page_timeout_seconds: int = Field(default=45, ge=1, le=120)
+    sellersprite_browser_export_timeout_seconds: int = Field(default=120, ge=1, le=300)
+    sellersprite_browser_min_interval_seconds: int = Field(default=5, ge=1, le=60)
+    sellersprite_browser_max_retries: int = Field(default=1, ge=0, le=1)
 
     # ---------- 行为开关 ----------
     enable_api_cache: bool = True
