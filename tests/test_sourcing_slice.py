@@ -7,8 +7,13 @@ from sqlalchemy import create_engine, text
 from db.migrate import run_migrations
 from matchers.alibaba_detail import BlockedOfferPage
 from matchers.alibaba_pailitao import SupplierDTO
-from matchers.sourcing_slice import SourcingSliceDependencies, run_sourcing_slice
+from matchers.sourcing_slice import SourcingSliceDependencies as _SourcingSliceDependencies, _default_relevance, run_sourcing_slice
 from schemas.sourcing import AmazonProductUnderstanding, VisionMatchResult
+
+
+def SourcingSliceDependencies(**kwargs):
+    kwargs.setdefault("assess_relevance", lambda _query, _supplier: True)
+    return _SourcingSliceDependencies(**kwargs)
 
 
 def _product():
@@ -330,3 +335,41 @@ def test_all_irrelevant_real_hits_trigger_second_iteration():
     assert result.iterations == 2
     assert result.query_attempts[0]["hit_rate"] == 0
     assert result.query_attempts[0]["error_code"] == "LOW_RELEVANCE"
+
+
+def test_default_relevance_without_signal_is_conservative_and_skips_detail():
+    enriched = []
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda q: [SupplierDTO("real")],
+        load_detail=lambda s: enriched.append(s), verify_visual=_visual,
+        market_evidence=lambda p: {}, assess_relevance=_default_relevance,
+    ), "default-no-signal")
+    assert result.iterations == 2
+    assert result.query_attempts[0]["hit_rate"] == 0
+    assert result.query_attempts[0]["error_code"] == "LOW_RELEVANCE"
+    assert enriched == []
+
+
+@pytest.mark.parametrize("supplier", [
+    SupplierDTO("text", text_similarity=0.8),
+    SupplierDTO("bool", raw_data={"search_relevance": True}),
+    SupplierDTO("score", raw_data={"search_relevance": 0.9}),
+    SupplierDTO("image", image_similarity=0.9, raw_data={"source": "image_search"}),
+])
+def test_default_relevance_accepts_explicit_high_quality_signal(supplier):
+    query = SimpleNamespace(text="净水器替换滤芯")
+    assert _default_relevance(query, supplier) is True
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), float("inf"), "bad", 0.1])
+def test_default_relevance_rejects_malformed_or_low_scores(value):
+    query = SimpleNamespace(text="净水器替换滤芯")
+    supplier = SupplierDTO("bad", text_similarity=value)
+    assert _default_relevance(query, supplier) is False
+
+
+def test_default_relevance_title_requires_meaningful_phrase_not_short_substring():
+    query = SimpleNamespace(text="净水器 替换滤芯")
+    assert _default_relevance(query, SupplierDTO("yes", title_cn="家用净水器替换滤芯批发"))
+    assert not _default_relevance(query, SupplierDTO("no", title_cn="空气滤芯"))
+    assert not _default_relevance(SimpleNamespace(text="水"), SupplierDTO("short", title_cn="净水器"))

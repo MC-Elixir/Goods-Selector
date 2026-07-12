@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -20,6 +21,60 @@ STABLE_SEARCH_ERROR_CODES = {
     "INVALID_INPUT", "MISSING_REQUIRED_DATA", "INTERNAL",
 }
 NON_RETRYABLE_CODES = {"AUTH_REQUIRED", "CAPTCHA", "INVALID_INPUT", "MISSING_REQUIRED_DATA", "INTERNAL"}
+TEXT_RELEVANCE_THRESHOLD = 0.5
+IMAGE_RELEVANCE_THRESHOLD = 0.8
+
+
+def _finite_score(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return score if math.isfinite(score) else None
+
+
+def _normalized_terms(value: Any) -> list[str]:
+    text_value = str(value or "").casefold()
+    return [term for term in re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", text_value) if len(term) >= 2]
+
+
+def _bigrams(terms: list[str]) -> set[str]:
+    return {
+        term[index:index + 2]
+        for term in terms if not term.isascii()
+        for index in range(len(term) - 1)
+    }
+
+
+def _default_relevance(query: Any, supplier: Any) -> bool:
+    """Conservative relevance decision from explicit or meaningful textual evidence."""
+    raw = getattr(supplier, "raw_data", None)
+    raw = raw if isinstance(raw, dict) else {}
+    explicit = raw.get("search_relevance")
+    if type(explicit) is bool:
+        return explicit
+    if explicit is not None:
+        score = _finite_score(explicit)
+        return score is not None and score >= TEXT_RELEVANCE_THRESHOLD
+    text_score = _finite_score(getattr(supplier, "text_similarity", None))
+    if text_score is not None:
+        return text_score >= TEXT_RELEVANCE_THRESHOLD
+    image_score = _finite_score(getattr(supplier, "image_similarity", None))
+    source = str(raw.get("source", "")).casefold()
+    if image_score is not None and source in {"image_search", "pailitao", "alibaba_pailitao"}:
+        return image_score >= IMAGE_RELEVANCE_THRESHOLD
+    query_terms = _normalized_terms(getattr(query, "text", ""))
+    title_terms = _normalized_terms(getattr(supplier, "title_cn", ""))
+    if not query_terms or not title_terms:
+        return False
+    query_ascii = {term for term in query_terms if term.isascii()}
+    title_ascii = {term for term in title_terms if term.isascii()}
+    if query_ascii & title_ascii:
+        return True
+    shared = _bigrams(query_terms) & _bigrams(title_terms)
+    return len(shared) >= 2
 
 
 @dataclass
@@ -260,7 +315,7 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
                     continue
                 real_by_id.setdefault(supplier.alibaba_offer_id, supplier)
             real_hits = list(real_by_id.values())
-            assessor = deps.assess_relevance or (lambda _q, _s: True)
+            assessor = deps.assess_relevance or _default_relevance
             relevant_hits = [supplier for supplier in real_hits if assessor(query, supplier)]
             usable = [supplier for supplier in relevant_hits if supplier.alibaba_offer_id not in seen]
             seen.update(supplier.alibaba_offer_id for supplier in usable)

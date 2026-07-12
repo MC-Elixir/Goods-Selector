@@ -69,3 +69,14 @@ Final committed-HEAD verification (`216d9f664a99a3f278265d310e31d2b6e4dd2cb4`):
   may proceed to detail/match, and hit rates below 0.2 trigger bounded rewrite.
 
 Focused verification: `48 passed, 1 warning`.
+
+## Conservative Default Relevance
+
+- Added `_default_relevance(query, supplier)` with explicit raw boolean/finite score,
+  finite text similarity, high-confidence image-search-only similarity, and conservative
+  normalized title/query phrase evidence.
+- Missing, malformed, NaN, infinite, low, single-character, and ordinary substring signals
+  are rejected. Injected assessors remain supported unchanged.
+- Focused Task 11 and related query/match/search verification: `96 passed`.
+- The prior full-suite PID `68160` exited before this final commit; its final summary was not
+  available to this worker. Final-HEAD full verification remains environment pending.
