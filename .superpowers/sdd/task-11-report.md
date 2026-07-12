@@ -53,3 +53,7 @@ pipeline and CLI defaults are unchanged.
   AUTH_REQUIRED, CAPTCHA, and RATE_LIMITED; non-retryable failures terminate the slice.
 
 Review verification: focused regression `64 passed`; full suite `639 passed, 5 skipped`.
+
+Final committed-HEAD verification (`216d9f664a99a3f278265d310e31d2b6e4dd2cb4`):
+`TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q -s` exited `0` with
+`639 passed, 5 skipped, 210 warnings in 242.00s`.
