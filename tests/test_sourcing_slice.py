@@ -9,6 +9,7 @@ from db.migrate import run_migrations
 from matchers.alibaba_detail import BlockedOfferPage
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.sourcing_slice import SourcingSliceDependencies as _SourcingSliceDependencies, _default_relevance, run_sourcing_slice
+from matchers.verifier import VisionVerificationError
 from schemas.sourcing import AmazonProductUnderstanding, VisionMatchResult
 
 
@@ -140,23 +141,55 @@ def test_visual_failure_is_bounded_audited_and_persisted_as_review(tmp_path):
     def visual(*_args):
         nonlocal calls
         calls += 1
-        raise RuntimeError("provider schema failure")
+        raise VisionVerificationError("schema_validation")
     result = run_sourcing_slice(_product(), SourcingSliceDependencies(
         understand=_understanding, search=lambda _q: [SupplierDTO("good")], load_detail=_detail,
         verify_visual=visual, market_evidence=lambda _p: _complete_market(), engine=engine,
     ), "visual-failure")
-    assert calls == 2
+    assert calls == 1
     assert result.accepted_matches == []
     assert result.recommendation.status.value == "needs_manual_review"
-    assert result.visual_failures[0]["attempt_count"] == 2
-    assert result.visual_failures[0]["reason"] == "supplier_visual_internal"
+    assert result.visual_failures[0]["attempt_count"] == 1
+    assert result.visual_failures[0]["error_code"] == "SCHEMA_VALIDATION"
+    assert result.visual_failures[0]["reason"] == "supplier_visual_schema_validation"
     with engine.connect() as conn:
         match = conn.execute(text("select decision,evidence_json from match_evidence limit 1")).mappings().one()
         rec = conn.execute(text("select status,evidence_json from sourcing_recommendations limit 1")).mappings().one()
     assert match["decision"] == "manual_review"
     assert "visual" in json.loads(match["evidence_json"])["missing_evidence"]
     assert rec["status"] == "needs_manual_review"
-    assert "supplier_visual_internal" in json.loads(rec["evidence_json"])["rejection_reasons"]
+    assert "supplier_visual_schema_validation" in json.loads(rec["evidence_json"])["rejection_reasons"]
+
+
+def test_visual_provider_failure_retries_once_then_succeeds():
+    calls = 0
+    def visual(product, supplier):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise VisionVerificationError("provider_failure")
+        return _visual(product, supplier)
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda _q: [SupplierDTO("good")], load_detail=_detail,
+        verify_visual=visual, market_evidence=lambda _p: _complete_market(),
+    ), "visual-provider-retry")
+    assert calls == 2
+    assert result.visual_failures == []
+    assert result.recommendation.status.value == "recommend"
+
+
+def test_visual_image_evidence_failure_is_not_retried():
+    calls = 0
+    def visual(*_args):
+        nonlocal calls
+        calls += 1
+        raise VisionVerificationError("image_evidence_unavailable")
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda _q: [SupplierDTO("good")], load_detail=_detail,
+        verify_visual=visual, market_evidence=lambda _p: _complete_market(),
+    ), "visual-image-missing")
+    assert calls == 1
+    assert result.visual_failures[0]["error_code"] == "IMAGE_EVIDENCE_UNAVAILABLE"
 
 
 def test_retries_low_relevance_deduplicates_and_recommends_complete_match():

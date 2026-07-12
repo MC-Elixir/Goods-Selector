@@ -20,10 +20,12 @@ TERMINAL_BLOCK_CODES = {"AUTH_REQUIRED", "CAPTCHA"}
 STABLE_SEARCH_ERROR_CODES = {
     "AUTH_REQUIRED", "CAPTCHA", "RATE_LIMITED", "TIMEOUT", "NO_RESULTS", "LOW_RELEVANCE",
     "INVALID_INPUT", "MISSING_REQUIRED_DATA", "INTERNAL",
+    "PROVIDER_FAILURE", "SCHEMA_VALIDATION", "IMAGE_EVIDENCE_UNAVAILABLE",
 }
 NON_RETRYABLE_CODES = {"AUTH_REQUIRED", "CAPTCHA", "INVALID_INPUT", "MISSING_REQUIRED_DATA", "INTERNAL"}
 TEXT_RELEVANCE_THRESHOLD = 0.5
 IMAGE_RELEVANCE_THRESHOLD = 0.8
+RETRYABLE_VISUAL_CODES = {"PROVIDER_FAILURE"}
 
 
 def _finite_score(value: Any) -> float | None:
@@ -138,7 +140,7 @@ def _positive(value: Any) -> bool:
 
 
 def _error_code(exc: Exception) -> str:
-    code = str(getattr(exc, "error_code", "") or "").upper()
+    code = str(getattr(exc, "error_code", "") or getattr(exc, "code", "") or "").upper()
     if code in STABLE_SEARCH_ERROR_CODES:
         return code
     if isinstance(exc, TimeoutError):
@@ -392,6 +394,8 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
                         break
                     except Exception as exc:
                         visual_exc = exc
+                        if _error_code(exc) not in RETRYABLE_VISUAL_CODES:
+                            break
                 if visual is None:
                     code = _error_code(visual_exc or RuntimeError("missing visual result"))
                     failure = {
