@@ -270,3 +270,63 @@ def test_mock_identity_never_reaches_persisted_query_artifact(tmp_path):
     with engine.connect() as conn:
         encoded = json.dumps([dict(row) for row in conn.execute(text("select * from query_attempts")).mappings()], ensure_ascii=False)
     assert "SECRET" not in encoded
+
+
+def test_detail_timeout_retries_once_then_succeeds():
+    calls = 0
+    def detail(s):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise BlockedOfferPage("TIMEOUT", "slow")
+        return _detail(s)
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda q: [SupplierDTO("good")], load_detail=detail,
+        verify_visual=_visual, market_evidence=lambda p: _complete_market(),
+    ), "detail-retry")
+    assert calls == 2
+    assert result.recommendation.status.value == "recommend"
+
+
+@pytest.mark.parametrize("code", ["TIMEOUT", "RATE_LIMITED"])
+def test_detail_transient_exhaustion_is_audited_and_actionable(code):
+    calls = 0
+    def detail(_s):
+        nonlocal calls
+        calls += 1
+        raise BlockedOfferPage(code, "blocked")
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda q: [SupplierDTO("good")], load_detail=detail,
+        verify_visual=_visual, market_evidence=lambda p: {},
+    ), f"detail-{code}")
+    assert calls == 2
+    assert result.detail_failures[0]["attempt_count"] == 2
+    assert result.detail_failures[0]["offer_ref"] == "offer:good"
+    reason = f"supplier_detail_{code.casefold()}"
+    assert reason in result.recommendation.rejection_reasons
+    assert f"retry_{reason}" in result.recommendation.manual_verification_tasks
+
+
+def test_relevance_rate_uses_unique_real_hits_and_only_relevant_hits_are_enriched():
+    hits = [SupplierDTO(str(i)) for i in range(5)]
+    enriched = []
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda q: [*hits, hits[0]],
+        load_detail=lambda s: enriched.append(s), verify_visual=_visual,
+        market_evidence=lambda p: {}, assess_relevance=lambda q, s: s.alibaba_offer_id == "0",
+    ), "relevance")
+    first = result.query_attempts[0]
+    assert first["result_count"] == 5
+    assert first["relevant_count"] == 1
+    assert first["hit_rate"] == pytest.approx(0.2)
+    assert {s.alibaba_offer_id for s in enriched} == {"0"}
+
+
+def test_all_irrelevant_real_hits_trigger_second_iteration():
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda q: [SupplierDTO("real")], load_detail=lambda s: s,
+        verify_visual=_visual, market_evidence=lambda p: {}, assess_relevance=lambda q, s: False,
+    ), "irrelevant")
+    assert result.iterations == 2
+    assert result.query_attempts[0]["hit_rate"] == 0
+    assert result.query_attempts[0]["error_code"] == "LOW_RELEVANCE"

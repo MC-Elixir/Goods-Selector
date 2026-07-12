@@ -30,6 +30,7 @@ class SourcingSliceDependencies:
     verify_visual: Callable
     market_evidence: Callable
     engine: Any | None = None
+    assess_relevance: Callable | None = None
 
 
 @dataclass
@@ -43,6 +44,7 @@ class SourcingSliceResult:
     accepted_matches: list[MatchEvidence] = field(default_factory=list)
     rejected_matches: list[MatchEvidence] = field(default_factory=list)
     review_matches: list[MatchEvidence] = field(default_factory=list)
+    detail_failures: list[dict] = field(default_factory=list)
     recommendation: RecommendationEvidence | None = None
 
 
@@ -141,6 +143,8 @@ def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any]
         rejection.extend(match.mismatch_reasons)
     if mock_excluded:
         rejection.append("mock_supplier_excluded")
+    for failure in result.detail_failures:
+        rejection.append(failure["reason"])
     return RecommendationEvidence(
         asin=product.asin,
         supplier_offer_id=best.supplier_ref.removeprefix("offer:") if best else None,
@@ -157,7 +161,14 @@ def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any]
         confidence=best.overall_confidence if best else 0.0,
         recommendation_reasons=["minimum_supplier_evidence_passed", "decision_evidence_complete"] if status is RecommendationStatus.RECOMMEND else [],
         rejection_reasons=rejection,
-        manual_verification_tasks=[f"verify_{name}" for name in missing],
+        manual_verification_tasks=[
+            *[f"verify_{name}" for name in missing],
+            *[f"retry_{failure['reason']}" for failure in result.detail_failures],
+            *[
+                f"retry_{failure['reason']}:{failure['offer_ref']}:attempts={failure['attempt_count']}"
+                for failure in result.detail_failures
+            ],
+        ],
     )
 
 
@@ -242,30 +253,50 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
                     return result
                 hit_rates[query.query_id] = 0.0
                 continue
-            usable = []
+            real_by_id = {}
             for supplier in hits:
                 if not allow_mock and _is_mock(supplier):
                     mock_excluded = True
                     continue
-                if supplier.alibaba_offer_id not in seen:
-                    seen.add(supplier.alibaba_offer_id)
-                    usable.append(supplier)
-            hit_rate = len(usable) / max(1, len(usable))
+                real_by_id.setdefault(supplier.alibaba_offer_id, supplier)
+            real_hits = list(real_by_id.values())
+            assessor = deps.assess_relevance or (lambda _q, _s: True)
+            relevant_hits = [supplier for supplier in real_hits if assessor(query, supplier)]
+            usable = [supplier for supplier in relevant_hits if supplier.alibaba_offer_id not in seen]
+            seen.update(supplier.alibaba_offer_id for supplier in usable)
+            hit_rate = len(relevant_hits) / max(1, len(real_hits))
             hit_rates[query.query_id] = hit_rate
-            error = "NO_RESULTS" if not usable else None
-            attempt = _attempt(query, hits=usable, relevant_count=len(usable), error_code=error)
+            error = "NO_RESULTS" if not real_hits else ("LOW_RELEVANCE" if hit_rate < 0.2 else None)
+            attempt = _attempt(query, hits=real_hits, relevant_count=len(relevant_hits), error_code=error)
             attempt["mock_filtered_count"] = len(hits) - len([s for s in hits if not _is_mock(s)]) if not allow_mock else 0
             result.query_attempts.append(attempt)
             for supplier in usable:
-                try:
-                    enriched = deps.load_detail(supplier)
-                except Exception as exc:
+                enriched = None
+                last_exc = None
+                attempt_count = 0
+                for attempt_count in range(1, 3):
+                    try:
+                        enriched = deps.load_detail(supplier)
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        code = _error_code(exc)
+                        if code not in {"TIMEOUT", "RATE_LIMITED"}:
+                            break
+                if enriched is None:
+                    exc = last_exc or RuntimeError("missing detail result")
                     code = _error_code(exc)
                     if code in NON_RETRYABLE_CODES:
-                        result.recommendation = _blocked_recommendation(product, "detail", exc)
-                        if deps.engine is not None:
-                            _persist(result, deps.engine)
-                        return result
+                        if code in TERMINAL_BLOCK_CODES:
+                            result.recommendation = _blocked_recommendation(product, "detail", exc)
+                            if deps.engine is not None:
+                                _persist(result, deps.engine)
+                            return result
+                    result.detail_failures.append({
+                        "offer_ref": f"offer:{supplier.alibaba_offer_id}",
+                        "error_code": code, "attempt_count": attempt_count,
+                        "reason": f"supplier_detail_{code.casefold()}",
+                    })
                     continue
                 if not allow_mock and _is_mock(enriched):
                     mock_excluded = True

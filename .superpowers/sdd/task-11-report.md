@@ -57,3 +57,15 @@ Review verification: focused regression `64 passed`; full suite `639 passed, 5 s
 Final committed-HEAD verification (`216d9f664a99a3f278265d310e31d2b6e4dd2cb4`):
 `TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q -s` exited `0` with
 `639 passed, 5 skipped, 210 warnings in 242.00s`.
+
+## Final Important Review Fixes
+
+- Supplier detail TIMEOUT and RATE_LIMITED now have a controller-owned two-attempt budget.
+  Exhaustion is retained in `detail_failures` and recommendation evidence with stable reason,
+  real offer reference, attempt count, and an actionable retry task. Non-retryable failures are
+  likewise audited; AUTH/CAPTCHA still hand off immediately.
+- Search hit rate is now `relevant unique real offers / unique real offers`; cross-query dedupe
+  happens only after relevance accounting. An injectable relevance assessor controls which hits
+  may proceed to detail/match, and hit rates below 0.2 trigger bounded rewrite.
+
+Focused verification: `48 passed, 1 warning`.
