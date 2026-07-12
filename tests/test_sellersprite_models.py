@@ -60,6 +60,33 @@ def test_context_rejects_non_uuid_sourcing_run_id():
         SellerSpriteContext.create("B00Q7OAN50", "run-id\napi_key=not-for-logs")
 
 
+def test_direct_context_constructor_normalizes_asin_and_uuid_ids():
+    context = SellerSpriteContext(
+        asin=" b00q7oan50 ",
+        sourcing_run_id="{C0FFEE00-0000-4000-8000-000000000001}",
+        call_id="{C0FFEE00-0000-4000-8000-000000000002}",
+        observed_at="2026-07-12T00:00:00+00:00",
+    )
+
+    assert context.asin == "B00Q7OAN50"
+    assert context.sourcing_run_id == "c0ffee00-0000-4000-8000-000000000001"
+    assert context.call_id == "c0ffee00-0000-4000-8000-000000000002"
+
+
+@pytest.mark.parametrize("field_name", ["sourcing_run_id", "call_id"])
+def test_direct_context_constructor_rejects_invalid_uuid_ids(field_name):
+    values = {
+        "asin": "B00Q7OAN50",
+        "sourcing_run_id": "c0ffee00-0000-4000-8000-000000000001",
+        "call_id": "c0ffee00-0000-4000-8000-000000000002",
+        "observed_at": "2026-07-12T00:00:00+00:00",
+    }
+    values[field_name] = "invalid\napi_key=not-for-logs"
+
+    with pytest.raises(ValueError, match=field_name):
+        SellerSpriteContext(**values)
+
+
 def test_needs_human_result_preserves_context_and_error_code():
     context = SellerSpriteContext.create("B00Q7OAN50")
 
@@ -69,6 +96,25 @@ def test_needs_human_result_preserves_context_and_error_code():
     assert result.context is context
     assert result.data == {}
     assert result.error_code == "CAPTCHA"
+
+
+def test_direct_result_constructor_normalizes_untrusted_error_code():
+    result = SellerSpriteResult(
+        status="success",
+        context=SellerSpriteContext.create("B00Q7OAN50"),
+        error_code="CAPTCHA\napi_key=not-for-logs",
+    )
+
+    assert result.status == "SUCCESS"
+    assert result.error_code == "INTERNAL"
+
+
+def test_direct_result_constructor_rejects_unsafe_status():
+    with pytest.raises(ValueError, match="status"):
+        SellerSpriteResult(
+            status="success\napi_key=not-for-logs",
+            context=SellerSpriteContext.create("B00Q7OAN50"),
+        )
 
 
 @pytest.mark.parametrize(

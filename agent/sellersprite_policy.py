@@ -21,9 +21,12 @@ SAFE_SELLERSPRITE_ERROR_CODES = frozenset(
         "INTERNAL",
     }
 )
+SAFE_SELLERSPRITE_RESULT_STATUSES = SAFE_SELLERSPRITE_ERROR_CODES | frozenset({"SUCCESS"})
 
 
 def validate_sellersprite_asin(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("ASIN must be exactly 10 uppercase letters or digits")
     asin = (value or "").strip().upper()
     if not ASIN_RE.fullmatch(asin):
         raise ValueError("ASIN must be exactly 10 uppercase letters or digits")
@@ -36,4 +39,13 @@ def normalize_sellersprite_error_code(value: object) -> str:
     normalized = value.upper()
     if normalized not in SAFE_SELLERSPRITE_ERROR_CODES:
         return "INTERNAL"
+    return normalized
+
+
+def validate_sellersprite_result_status(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("status must be a documented SellerSprite status")
+    normalized = value.upper()
+    if normalized not in SAFE_SELLERSPRITE_RESULT_STATUSES:
+        raise ValueError("status must be a documented SellerSprite status")
     return normalized

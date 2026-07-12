@@ -8,7 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from agent.sellersprite_policy import normalize_sellersprite_error_code
+from agent.sellersprite_policy import (
+    normalize_sellersprite_error_code,
+    validate_sellersprite_asin,
+    validate_sellersprite_result_status,
+)
 
 
 _REQUIRED_LOCATOR_NAMES = (
@@ -27,6 +31,13 @@ _SUPPORTED_LOCATOR_PREFIXES = frozenset(
 )
 
 
+def _canonical_uuid(value: object, field_name: str) -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a UUID") from exc
+
+
 @dataclass(frozen=True)
 class SellerSpriteContext:
     asin: str
@@ -34,18 +45,20 @@ class SellerSpriteContext:
     call_id: str
     observed_at: str
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "asin", validate_sellersprite_asin(self.asin))
+        object.__setattr__(
+            self,
+            "sourcing_run_id",
+            _canonical_uuid(self.sourcing_run_id, "sourcing_run_id"),
+        )
+        object.__setattr__(self, "call_id", _canonical_uuid(self.call_id, "call_id"))
+
     @classmethod
     def create(cls, asin: str, sourcing_run_id: str | None = None) -> "SellerSpriteContext":
-        if sourcing_run_id is None:
-            normalized_run_id = str(uuid.uuid4())
-        else:
-            try:
-                normalized_run_id = str(uuid.UUID(str(sourcing_run_id)))
-            except (AttributeError, TypeError, ValueError) as exc:
-                raise ValueError("sourcing_run_id must be a UUID") from exc
         return cls(
-            asin=asin.strip().upper(),
-            sourcing_run_id=normalized_run_id,
+            asin=asin,
+            sourcing_run_id=sourcing_run_id if sourcing_run_id is not None else str(uuid.uuid4()),
             call_id=str(uuid.uuid4()),
             observed_at=datetime.now(UTC).isoformat(),
         )
@@ -58,12 +71,21 @@ class SellerSpriteResult:
     data: dict[str, Any] = field(default_factory=dict)
     error_code: str | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", validate_sellersprite_result_status(self.status))
+        if self.error_code is not None:
+            object.__setattr__(
+                self,
+                "error_code",
+                normalize_sellersprite_error_code(self.error_code),
+            )
+
     @classmethod
     def needs_human(cls, context: SellerSpriteContext, error_code: str) -> "SellerSpriteResult":
         return cls(
             status="NEEDS_HUMAN",
             context=context,
-            error_code=normalize_sellersprite_error_code(error_code),
+            error_code=error_code,
         )
 
 
