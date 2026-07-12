@@ -48,6 +48,7 @@ def test_json_preserves_legacy_order_and_appends_evidence(tmp_path):
     assert payload["review_status"] == "insufficient_evidence"
     assert payload["run_ref"] == "evidence-run"
     assert payload["recommendation_status"] == "needs_manual_review"
+    assert payload["rejection_reasons"] == ["legacy_insufficient", "missing_logistics_basis"]
 
 
 def test_excel_preserves_legacy_headers_then_appends_evidence(tmp_path):
@@ -72,3 +73,20 @@ def test_markdown_appends_evidence_without_losing_insufficient_status(tmp_path):
     assert "evidence-run" in text
     assert "needs_manual_review" in text
     assert "verify_logistics_basis" in text
+
+
+def test_mock_search_identity_does_not_leak_to_any_export(tmp_path):
+    record = _record()
+    record.sourcing_slice.query_attempts = [{
+        "result_count": 0, "relevant_count": 0, "result_refs": [], "mock_filtered_count": 1,
+        "error_code": "NO_RESULTS", "hit_rate": 0.0,
+    }]
+    record.sourcing_slice.suppliers = []
+    json_text = export_json([record], tmp_path / "safe.json").read_text(encoding="utf-8")
+    excel = export_excel([record], tmp_path / "safe.xlsx")
+    excel_text = " ".join(str(c.value) for row in openpyxl.load_workbook(excel).active for c in row)
+    markdown = export_markdown([record], tmp_path / "md")[0].read_text(encoding="utf-8")
+    for content in (json_text, excel_text, markdown):
+        assert "SECRET-MOCK" not in content
+        assert "SECRET TITLE" not in content
+        assert "https://mock/SECRET" not in content

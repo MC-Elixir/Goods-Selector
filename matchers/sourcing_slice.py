@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -16,7 +17,9 @@ from schemas.sourcing import MatchEvidence, RecommendationEvidence, Recommendati
 TERMINAL_BLOCK_CODES = {"AUTH_REQUIRED", "CAPTCHA"}
 STABLE_SEARCH_ERROR_CODES = {
     "AUTH_REQUIRED", "CAPTCHA", "RATE_LIMITED", "TIMEOUT", "NO_RESULTS", "LOW_RELEVANCE",
+    "INVALID_INPUT", "MISSING_REQUIRED_DATA", "INTERNAL",
 }
+NON_RETRYABLE_CODES = {"AUTH_REQUIRED", "CAPTCHA", "INVALID_INPUT", "MISSING_REQUIRED_DATA", "INTERNAL"}
 
 
 @dataclass
@@ -39,6 +42,7 @@ class SourcingSliceResult:
     evaluated_matches: list[MatchEvidence] = field(default_factory=list)
     accepted_matches: list[MatchEvidence] = field(default_factory=list)
     rejected_matches: list[MatchEvidence] = field(default_factory=list)
+    review_matches: list[MatchEvidence] = field(default_factory=list)
     recommendation: RecommendationEvidence | None = None
 
 
@@ -54,14 +58,23 @@ def _positive(value: Any) -> bool:
     if isinstance(value, bool):
         return False
     try:
-        return float(value) > 0
+        number = float(value)
+        return math.isfinite(number) and number > 0
     except (TypeError, ValueError, OverflowError):
         return False
 
 
 def _error_code(exc: Exception) -> str:
     code = str(getattr(exc, "error_code", "") or "").upper()
-    return code if code in STABLE_SEARCH_ERROR_CODES else "TIMEOUT"
+    if code in STABLE_SEARCH_ERROR_CODES:
+        return code
+    if isinstance(exc, TimeoutError):
+        return "TIMEOUT"
+    if isinstance(exc, ValueError):
+        return "INVALID_INPUT"
+    if isinstance(exc, (KeyError, AttributeError)):
+        return "MISSING_REQUIRED_DATA"
+    return "INTERNAL"
 
 
 def _blocked_recommendation(product: Any, stage: str, exc: Exception) -> RecommendationEvidence:
@@ -93,25 +106,39 @@ def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any]
     supplier = next((s for s in result.suppliers if best and f"offer:{s.alibaba_offer_id}" == best.supplier_ref), None)
     detail = getattr(supplier, "raw_data", {}).get("detail", {}) if supplier else {}
     missing: list[str] = []
+    logistics = market.get("logistics_basis")
+    profit = market.get("profit_basis")
+    logistics_valid = isinstance(logistics, dict) and bool(logistics.get("refs")) and all(
+        _positive(logistics.get(key)) for key in ("weight_kg", "length_cm", "width_cm", "height_cm")
+    )
+    profit_valid = isinstance(profit, dict) and bool(profit.get("refs")) and all(
+        _positive(profit.get(key)) for key in ("selling_price", "landed_cost", "profit_margin")
+    )
     checks = {
         "demand_refs": bool(market.get("demand_refs")),
         "competition_refs": bool(market.get("competition_refs")),
         "purchase_cost_ref": bool(market.get("purchase_cost_ref")),
-        "logistics_basis": all(key in set(market.get("logistics_basis", [])) for key in ("weight", "length", "width", "height")),
-        "profit_basis": bool(market.get("profit_basis")),
+        "logistics_basis": logistics_valid,
+        "profit_basis": profit_valid,
         "real_price": bool(supplier) and (_positive(getattr(supplier, "base_price_cny", None)) or _positive(detail.get("base_price_cny"))),
         "real_moq": bool(supplier) and (_positive(getattr(supplier, "moq", None)) or _positive(detail.get("moq"))),
     }
     if best:
         missing = [name for name, present in checks.items() if not present]
         status = RecommendationStatus.RECOMMEND if not missing else RecommendationStatus.NEEDS_MANUAL_REVIEW
+    elif result.review_matches:
+        status = RecommendationStatus.NEEDS_MANUAL_REVIEW
+        evidence_missing = sorted({name for match in result.review_matches for name in match.missing_evidence})
+        missing.extend(evidence_missing)
     elif result.rejected_matches:
         status = RecommendationStatus.REJECT
     else:
         status = RecommendationStatus.INSUFFICIENT_DATA
     rejection = [f"missing_{name}" for name in missing]
-    if not best:
+    if not best and not result.review_matches and not result.rejected_matches:
         rejection.append("no_supplier_passed_minimum_evidence")
+    for match in result.rejected_matches:
+        rejection.extend(match.mismatch_reasons)
     if mock_excluded:
         rejection.append("mock_supplier_excluded")
     return RecommendationEvidence(
@@ -125,8 +152,8 @@ def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any]
         confirmed_specs=best.passed_reasons if best else [],
         unconfirmed_specs=best.missing_evidence if best else [],
         purchase_cost_ref=market.get("purchase_cost_ref") if best else None,
-        logistics_basis=market.get("logistics_basis", []),
-        profit_basis=market.get("profit_basis", []), risks=market.get("risks", []),
+        logistics_basis=logistics or {},
+        profit_basis=profit or {}, risks=market.get("risks", []),
         confidence=best.overall_confidence if best else 0.0,
         recommendation_reasons=["minimum_supplier_evidence_passed", "decision_evidence_complete"] if status is RecommendationStatus.RECOMMEND else [],
         rejection_reasons=rejection,
@@ -137,6 +164,10 @@ def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any]
 def _persist(result: SourcingSliceResult, engine: Any) -> None:
     asin = result.understanding.asin
     with engine.begin() as conn:
+        scope = {"run_ref": result.run_ref, "asin": asin}
+        conn.execute(text("DELETE FROM query_attempts WHERE run_ref=:run_ref AND asin=:asin"), scope)
+        conn.execute(text("DELETE FROM match_evidence WHERE run_ref=:run_ref AND asin=:asin"), scope)
+        conn.execute(text("DELETE FROM sourcing_recommendations WHERE run_ref=:run_ref AND asin=:asin"), scope)
         for attempt in result.query_attempts:
             query = attempt["query"]
             completed = attempt["error_code"] in (None, "NO_RESULTS", "LOW_RELEVANCE")
@@ -175,10 +206,6 @@ def _persist(result: SourcingSliceResult, engine: Any) -> None:
             })
         recommendation = result.recommendation
         if recommendation:
-            conn.execute(
-                text("DELETE FROM sourcing_recommendations WHERE run_ref=:run_ref AND asin=:asin"),
-                {"run_ref": result.run_ref, "asin": asin},
-            )
             payload = recommendation.model_dump(mode="json")
             conn.execute(text("""INSERT INTO sourcing_recommendations
                 (run_ref, asin, offer_id, status, evidence_json)
@@ -208,7 +235,7 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
             except Exception as exc:
                 code = _error_code(exc)
                 result.query_attempts.append(_attempt(query, error_code=code))
-                if code in TERMINAL_BLOCK_CODES:
+                if code in NON_RETRYABLE_CODES:
                     result.recommendation = _blocked_recommendation(product, "search", exc)
                     if deps.engine is not None:
                         _persist(result, deps.engine)
@@ -223,16 +250,18 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
                 if supplier.alibaba_offer_id not in seen:
                     seen.add(supplier.alibaba_offer_id)
                     usable.append(supplier)
-            hit_rate = len(usable) / max(1, len(hits))
+            hit_rate = len(usable) / max(1, len(usable))
             hit_rates[query.query_id] = hit_rate
-            error = "NO_RESULTS" if not hits else ("LOW_RELEVANCE" if not usable else None)
-            result.query_attempts.append(_attempt(query, hits=hits, relevant_count=len(usable), error_code=error))
+            error = "NO_RESULTS" if not usable else None
+            attempt = _attempt(query, hits=usable, relevant_count=len(usable), error_code=error)
+            attempt["mock_filtered_count"] = len(hits) - len([s for s in hits if not _is_mock(s)]) if not allow_mock else 0
+            result.query_attempts.append(attempt)
             for supplier in usable:
                 try:
                     enriched = deps.load_detail(supplier)
                 except Exception as exc:
                     code = _error_code(exc)
-                    if code in TERMINAL_BLOCK_CODES:
+                    if code in NON_RETRYABLE_CODES:
                         result.recommendation = _blocked_recommendation(product, "detail", exc)
                         if deps.engine is not None:
                             _persist(result, deps.engine)
@@ -250,6 +279,8 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
                     result.accepted_matches.append(match)
                 elif match.decision == "reject":
                     result.rejected_matches.append(match)
+                else:
+                    result.review_matches.append(match)
         if result.accepted_matches:
             break
         queries = rewrite_low_relevance_queries(understanding, queries, hit_rates, iteration)

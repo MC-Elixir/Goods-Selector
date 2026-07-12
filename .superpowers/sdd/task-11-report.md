@@ -36,3 +36,20 @@ pipeline and CLI defaults are unchanged.
 - The coordinator is intentionally not wired into the legacy pipeline default. Callers must
   supply the fake/real dependencies and may inject a SQLAlchemy engine for Task 2 persistence.
 - Existing deprecation warnings remain outside Task 11 scope.
+
+## Review Fixes (2026-07-12)
+
+- Formal no-mock attempts now compute counts, hit rates, and refs only after filtering;
+  persisted/exported audit data contains only an aggregate `mock_filtered_count`.
+- Recommendation gating now requires structured, referenced, finite positive logistics and
+  profit values. Legacy list-shaped basis remains schema-readable but cannot recommend.
+- Retry/manual-review matches are retained in `review_matches`; missing and hard-conflict
+  reasons flow into recommendation reasons and manual verification tasks.
+- Persistence atomically replaces the exact `(run_ref, asin)` snapshot across all three Task 2
+  tables and preserves other ASIN scopes.
+- Legacy and evidence rejection reasons are merged in the specified JSON `rejection_reasons`
+  field and the corresponding Excel/Markdown legacy presentation.
+- Error mapping distinguishes TIMEOUT, INVALID_INPUT, MISSING_REQUIRED_DATA, INTERNAL,
+  AUTH_REQUIRED, CAPTCHA, and RATE_LIMITED; non-retryable failures terminate the slice.
+
+Review verification: focused regression `64 passed`; full suite `639 passed, 5 skipped`.

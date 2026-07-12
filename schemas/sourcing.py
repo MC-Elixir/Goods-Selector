@@ -193,8 +193,8 @@ class RecommendationEvidence(BaseModel):
     confirmed_specs: list[str] = Field(default_factory=list)
     unconfirmed_specs: list[str] = Field(default_factory=list)
     purchase_cost_ref: str | None = None
-    logistics_basis: list[str] = Field(default_factory=list)
-    profit_basis: list[str] = Field(default_factory=list)
+    logistics_basis: dict[str, Any] | list[str] = Field(default_factory=dict)
+    profit_basis: dict[str, Any] | list[str] = Field(default_factory=dict)
     risks: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
     recommendation_reasons: list[str] = Field(default_factory=list)

@@ -34,10 +34,12 @@ def _display_score(value) -> str:
 
 def _record_rejection_reasons(record) -> list[str]:
     reasons = getattr(record, "rejection_reasons", None)
-    if reasons:
-        return list(reasons)
-    score = getattr(record, "score", None)
-    return list(getattr(score, "rejection_reasons", None) or [])
+    if not reasons:
+        score = getattr(record, "score", None)
+        reasons = getattr(score, "rejection_reasons", None) or []
+    recommendation = getattr(getattr(record, "sourcing_slice", None), "recommendation", None)
+    evidence_reasons = getattr(recommendation, "rejection_reasons", None) or []
+    return list(dict.fromkeys([*reasons, *evidence_reasons]))
 
 
 def _record_review_status(record) -> str:
