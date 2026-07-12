@@ -109,6 +109,14 @@ class Settings(BaseSettings):
             "SELLERSPRITE_MAX_PRODUCTS_PER_RUN",
         ),
     )
+    sellersprite_browser_enabled: bool = False
+    sellersprite_browser_locator_profile_path: str = ""
+    sellersprite_browser_download_dir: str = ""
+    sellersprite_browser_host_download_dir: str = ""
+    sellersprite_browser_page_timeout_seconds: int = 45
+    sellersprite_browser_export_timeout_seconds: int = 120
+    sellersprite_browser_min_interval_seconds: int = 5
+    sellersprite_browser_max_retries: int = 1
 
     # ---------- 行为开关 ----------
     enable_api_cache: bool = True
@@ -154,6 +162,12 @@ class Settings(BaseSettings):
     @property
     def export_dir(self) -> Path:
         p = DATA_DIR / "exports"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def sellersprite_import_dir(self) -> Path:
+        p = DATA_DIR / "imports" / "sellersprite"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
