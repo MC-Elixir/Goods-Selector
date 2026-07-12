@@ -4,7 +4,16 @@ import pytest
 from pydantic import ValidationError
 
 from agent.provenance import critical_evidence_gaps, evidence
-from schemas.sourcing import EvidenceStatus, MatchEvidence, RecommendationStatus
+from schemas.sourcing import EvidenceStatus, FieldEvidence, MatchEvidence, RecommendationStatus
+
+
+def test_missing_field_evidence_confidence_remains_unknown():
+    item = FieldEvidence(
+        value=None,
+        status=EvidenceStatus.MISSING,
+        source_provider="1688",
+    )
+    assert item.confidence is None
 
 
 def test_missing_evidence_cannot_carry_a_value():
@@ -74,6 +83,20 @@ def test_stale_critical_evidence_is_a_gap():
         )
     }
     assert critical_evidence_gaps(fields, {"price"}) == ["price:stale"]
+
+
+def test_critical_evidence_without_confidence_is_a_gap():
+    fields = {
+        "price": evidence(
+            value=12.5,
+            status=EvidenceStatus.EXTRACTED,
+            source_provider="1688",
+            source_type="offer_detail",
+            source_ref="artifact:offer-123",
+            observed_at=datetime.now(timezone.utc),
+        )
+    }
+    assert critical_evidence_gaps(fields, {"price"}) == ["price:untrusted"]
 
 
 def test_negative_visual_classification_cannot_be_a_match():

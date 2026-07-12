@@ -254,6 +254,7 @@ def test_final_or_canonical_url_can_verify_offer_identity():
     html = '<html><link rel="canonical" href="https://detail.1688.com/offer/123.html"><body>商品详情</body></html>'
     result = parse_1688_offer_detail_html(html, expected_offer_id="123")
     assert result["moq"] is None
+    assert result["provenance"]["moq"]["confidence"] is None
 
     result = parse_1688_offer_detail_html(
         "<html><body>商品详情</body></html>",

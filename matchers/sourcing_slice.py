@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from sqlalchemy import text
 
+from agent.provenance import trusted_evidence_value
 from matchers.alibaba_detail import BlockedOfferPage
 from matchers.match_evidence import build_match_evidence
 from matchers.query_planner import generate_query_plan, rewrite_low_relevance_queries
@@ -114,6 +115,7 @@ class SourcingSliceResult:
     rejected_matches: list[MatchEvidence] = field(default_factory=list)
     review_matches: list[MatchEvidence] = field(default_factory=list)
     detail_failures: list[dict] = field(default_factory=list)
+    visual_failures: list[dict] = field(default_factory=list)
     recommendation: RecommendationEvidence | None = None
 
 
@@ -159,26 +161,29 @@ def _blocked_recommendation(product: Any, stage: str, exc: Exception) -> Recomme
     )
 
 
-def _attempt(query: Any, *, hits: list[Any] | None = None, relevant_count: int = 0,
-             error_code: str | None = None) -> dict:
-    result_count = len(hits or [])
-    rate = relevant_count / max(1, result_count)
+def _attempt(query: Any, *, hits: list[Any] | None = None, relevant_count: int | None = None,
+             error_code: str | None = None, completed: bool = True) -> dict:
+    result_count = len(hits or []) if completed else None
+    rate = (relevant_count / max(1, result_count)) if completed and relevant_count is not None else None
     return {
         "query": query.model_dump(mode="json"), "result_count": result_count,
         "relevant_count": relevant_count, "hit_rate": rate,
-        "result_refs": [f"offer:{item.alibaba_offer_id}" for item in (hits or [])],
-        "error_code": error_code or ("NO_RESULTS" if not result_count else None),
+        "result_refs": [f"offer:{item.alibaba_offer_id}" for item in (hits or [])] if completed else [],
+        "error_code": error_code or ("NO_RESULTS" if completed and not result_count else None),
+        "status": "completed" if completed else "failed",
     }
 
 
 def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any], *,
                mock_excluded: bool) -> RecommendationEvidence:
     best = max(result.accepted_matches, key=lambda item: item.overall_confidence, default=None)
-    supplier = next((s for s in result.suppliers if best and f"offer:{s.alibaba_offer_id}" == best.supplier_ref), None)
-    detail = getattr(supplier, "raw_data", {}).get("detail", {}) if supplier else {}
     missing: list[str] = []
-    logistics = market.get("logistics_basis")
-    profit = market.get("profit_basis")
+    demand_refs = trusted_evidence_value(market.get("demand_refs"))
+    competition_refs = trusted_evidence_value(market.get("competition_refs"))
+    purchase_cost_ref = trusted_evidence_value(market.get("purchase_cost_ref"))
+    amazon_completeness = trusted_evidence_value(market.get("amazon_completeness"))
+    logistics = trusted_evidence_value(market.get("logistics_basis"))
+    profit = trusted_evidence_value(market.get("profit_basis"))
     logistics_valid = isinstance(logistics, dict) and bool(logistics.get("refs")) and all(
         _positive(logistics.get(key)) for key in ("weight_kg", "length_cm", "width_cm", "height_cm")
     )
@@ -186,13 +191,14 @@ def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any]
         _positive(profit.get(key)) for key in ("selling_price", "landed_cost", "profit_margin")
     )
     checks = {
-        "demand_refs": bool(market.get("demand_refs")),
-        "competition_refs": bool(market.get("competition_refs")),
-        "purchase_cost_ref": bool(market.get("purchase_cost_ref")),
+        "amazon_completeness": _positive(amazon_completeness),
+        "demand_refs": bool(demand_refs),
+        "competition_refs": bool(competition_refs),
+        "purchase_cost_ref": bool(purchase_cost_ref),
         "logistics_basis": logistics_valid,
         "profit_basis": profit_valid,
-        "real_price": bool(supplier) and (_positive(getattr(supplier, "base_price_cny", None)) or _positive(detail.get("base_price_cny"))),
-        "real_moq": bool(supplier) and (_positive(getattr(supplier, "moq", None)) or _positive(detail.get("moq"))),
+        "real_price": bool(best) and "price" in best.passed_reasons,
+        "real_moq": bool(best) and "moq" in best.passed_reasons,
     }
     if best:
         missing = [name for name, present in checks.items() if not present]
@@ -214,17 +220,19 @@ def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any]
         rejection.append("mock_supplier_excluded")
     for failure in result.detail_failures:
         rejection.append(failure["reason"])
+    for failure in result.visual_failures:
+        rejection.append(failure["reason"])
     return RecommendationEvidence(
         asin=product.asin,
         supplier_offer_id=best.supplier_ref.removeprefix("offer:") if best else None,
         status=status, discovery_reason="Amazon US source candidate passed initial discovery",
-        amazon_completeness=market.get("amazon_completeness", 0.0),
-        demand_evidence_refs=market.get("demand_refs", []),
-        competition_evidence_refs=market.get("competition_refs", []),
+        amazon_completeness=amazon_completeness if _positive(amazon_completeness) else 0.0,
+        demand_evidence_refs=demand_refs or [],
+        competition_evidence_refs=competition_refs or [],
         supplier_match_ref=best.supplier_ref if best else None,
         confirmed_specs=best.passed_reasons if best else [],
         unconfirmed_specs=best.missing_evidence if best else [],
-        purchase_cost_ref=market.get("purchase_cost_ref") if best else None,
+        purchase_cost_ref=purchase_cost_ref if best else None,
         logistics_basis=logistics or {},
         profit_basis=profit or {}, risks=market.get("risks", []),
         confidence=best.overall_confidence if best else 0.0,
@@ -233,9 +241,14 @@ def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any]
         manual_verification_tasks=[
             *[f"verify_{name}" for name in missing],
             *[f"retry_{failure['reason']}" for failure in result.detail_failures],
+            *[f"retry_{failure['reason']}" for failure in result.visual_failures],
             *[
                 f"retry_{failure['reason']}:{failure['offer_ref']}:attempts={failure['attempt_count']}"
                 for failure in result.detail_failures
+            ],
+            *[
+                f"retry_{failure['reason']}:{failure['offer_ref']}:attempts={failure['attempt_count']}"
+                for failure in result.visual_failures
             ],
         ],
     )
@@ -250,7 +263,7 @@ def _persist(result: SourcingSliceResult, engine: Any) -> None:
         conn.execute(text("DELETE FROM sourcing_recommendations WHERE run_ref=:run_ref AND asin=:asin"), scope)
         for attempt in result.query_attempts:
             query = attempt["query"]
-            completed = attempt["error_code"] in (None, "NO_RESULTS", "LOW_RELEVANCE")
+            completed = attempt["status"] == "completed"
             conn.execute(text("""INSERT INTO query_attempts (
                 run_ref, asin, query_id, query_type, query_text, reason,
                 excluded_brand_tokens_json, backend, result_count, relevant_count,
@@ -266,7 +279,7 @@ def _persist(result: SourcingSliceResult, engine: Any) -> None:
                 "reason": query["reason"], "tokens": json.dumps(query["excluded_brand_tokens"]),
                 "result_count": attempt["result_count"] if completed else None,
                 "relevant_count": attempt["relevant_count"] if completed else None,
-                "retry_of": query.get("retry_of"), "status": "completed" if completed else "failed",
+                "retry_of": query.get("retry_of"), "status": attempt["status"],
                 "artifact_ref": json.dumps({"result_refs": attempt["result_refs"], "hit_rate": attempt["hit_rate"], "error_code": attempt["error_code"]}),
             })
         if getattr(engine, "fail_persistence_after", None) == "query_attempts":
@@ -314,7 +327,7 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
                 hits = list(deps.search(query) or [])
             except Exception as exc:
                 code = _error_code(exc)
-                result.query_attempts.append(_attempt(query, error_code=code))
+                result.query_attempts.append(_attempt(query, error_code=code, completed=False))
                 if code in NON_RETRYABLE_CODES:
                     result.recommendation = _blocked_recommendation(product, "search", exc)
                     if deps.engine is not None:
@@ -370,7 +383,27 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
                 if not allow_mock and _is_mock(enriched):
                     mock_excluded = True
                     continue
-                visual = deps.verify_visual(product, enriched)
+                visual = None
+                visual_exc = None
+                visual_attempt_count = 0
+                for visual_attempt_count in range(1, 3):
+                    try:
+                        visual = deps.verify_visual(product, enriched)
+                        break
+                    except Exception as exc:
+                        visual_exc = exc
+                if visual is None:
+                    code = _error_code(visual_exc or RuntimeError("missing visual result"))
+                    failure = {
+                        "offer_ref": f"offer:{enriched.alibaba_offer_id}",
+                        "error_code": code, "attempt_count": visual_attempt_count,
+                        "reason": f"supplier_visual_{code.casefold()}",
+                    }
+                    result.visual_failures.append(failure)
+                    match = build_match_evidence(understanding, enriched, {})
+                    result.evaluated_matches.append(match)
+                    result.review_matches.append(match)
+                    continue
                 visual_payload = visual.model_dump(mode="json") if hasattr(visual, "model_dump") else visual
                 match = build_match_evidence(understanding, enriched, visual_payload)
                 result.evaluated_matches.append(match)

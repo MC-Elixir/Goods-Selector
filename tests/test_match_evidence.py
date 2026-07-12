@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 
 import pytest
 
@@ -46,7 +47,24 @@ def _supplier(detail=None, **updates):
         }},
     }
     values.update(updates)
-    return SupplierDTO(**values)
+    supplier = SupplierDTO(**values)
+    detail_data = supplier.raw_data["detail"]
+    observed = datetime.now(timezone.utc).isoformat()
+    evidence_values = {
+        **detail_data,
+        "base_price_cny": detail_data.get("base_price_cny", supplier.base_price_cny),
+        "price_tiers": detail_data.get("price_tiers", supplier.price_tiers),
+        "moq": detail_data.get("moq", supplier.moq),
+    }
+    detail_data["provenance"] = {
+        key: {"status": "extracted", "source_type": "offer_detail", "source_ref": "artifact:offer-123",
+              "observed_at": observed, "confidence": 0.95}
+        for key, value in evidence_values.items() if value is not None and key != "provenance"
+    }
+    for key in ("base_price_cny", "price_tiers", "moq"):
+        if evidence_values[key] is not None:
+            detail_data.setdefault(key, evidence_values[key])
+    return supplier
 
 
 def test_replacement_filter_does_not_match_full_machine():
@@ -109,6 +127,10 @@ def test_missing_commercial_evidence_cannot_keep(field, updates):
 def test_detail_base_price_is_used_even_when_price_tiers_are_malformed():
     supplier = _supplier(base_price_cny=None, price_tiers={"broken": True})
     supplier.raw_data["detail"]["base_price_cny"] = 13.5
+    supplier.raw_data["detail"]["provenance"]["base_price_cny"] = {
+        "status": "extracted", "source_type": "offer_detail", "source_ref": "artifact:offer-123",
+        "observed_at": datetime.now(timezone.utc).isoformat(), "confidence": 0.95,
+    }
     result = build_match_evidence(_understanding(), supplier)
     assert "price" in result.passed_reasons
     assert "price" not in result.missing_evidence
@@ -181,7 +203,7 @@ def test_expected_function_phrase_can_match_longer_observed_text():
     assert result.function_match == 1.0
 
 
-def test_title_is_conservative_function_fallback_when_structured_function_is_missing():
+def test_title_alone_is_not_decision_grade_function_evidence():
     result = build_match_evidence(
         _understanding(function=["filter water"]),
         _supplier(
@@ -189,7 +211,9 @@ def test_title_is_conservative_function_fallback_when_structured_function_is_mis
             title_cn="replacement cartridge to filter water for drinking",
         ),
     )
-    assert result.function_match == 1.0
+    assert result.function_match is None
+    assert "function" in result.missing_evidence
+    assert result.decision != "keep"
 
 
 def test_same_product_type_group_uses_semantics_not_literal_label():

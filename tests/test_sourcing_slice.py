@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -43,17 +44,21 @@ def _visual(_product, _supplier):
 
 
 def _complete_market():
+    observed = datetime.now(timezone.utc).isoformat()
+    def ev(value):
+        return {"value": value, "status": "extracted", "source_type": "market_api",
+                "source_ref": "artifact:market", "observed_at": observed, "confidence": 0.9}
     return {
-        "amazon_completeness": 1.0, "demand_refs": ["market:demand"],
-        "competition_refs": ["market:competition"], "purchase_cost_ref": "offer:price",
-        "logistics_basis": {
+        "amazon_completeness": ev(1.0), "demand_refs": ev(["market:demand"]),
+        "competition_refs": ev(["market:competition"]), "purchase_cost_ref": ev("offer:price"),
+        "logistics_basis": ev({
             "weight_kg": 1.2, "length_cm": 20, "width_cm": 10, "height_cm": 8,
             "refs": ["amazon:weight", "amazon:dimensions"],
-        },
-        "profit_basis": {
+        }),
+        "profit_basis": ev({
             "selling_price": 29.99, "landed_cost": 12.0, "profit_margin": 0.3,
             "refs": ["profit:snapshot"],
-        }, "risks": [],
+        }), "risks": [],
     }
 
 
@@ -63,8 +68,95 @@ def _detail(supplier):
         "wrong": {"product_type": "replacement", "package_quantity": 4, "function": "过滤空气", "base_price_cny": 8, "moq": 20},
         "single": {"product_type": "replacement", "package_quantity": 1, "function": "过滤饮用水", "base_price_cny": 5, "moq": 20},
     }
-    supplier.raw_data["detail"] = details[supplier.alibaba_offer_id]
+    detail = details[supplier.alibaba_offer_id]
+    observed = datetime.now(timezone.utc).isoformat()
+    detail["provenance"] = {
+        key: {"status": "extracted", "source_type": "offer_detail", "source_ref": "artifact:offer",
+              "observed_at": observed, "confidence": 0.95}
+        for key in ("product_type", "package_quantity", "function", "base_price_cny", "moq")
+    }
+    supplier.raw_data["detail"] = detail
     return supplier
+
+
+@pytest.mark.parametrize("status", ["missing", "stale", "inferred", "conflicting", "mock"])
+def test_untrusted_critical_supplier_evidence_never_keeps_match(status):
+    supplier = _detail(SupplierDTO("good"))
+    supplier.raw_data["detail"]["provenance"]["function"]["status"] = status
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda _q: [supplier], load_detail=lambda s: s,
+        verify_visual=_visual, market_evidence=lambda _p: _complete_market(),
+    ), f"bad-function-{status}")
+    assert result.accepted_matches == []
+    assert result.recommendation.status.value != "recommend"
+    assert "function" in result.review_matches[0].missing_evidence
+
+
+def test_stale_market_reference_does_not_authorize_recommendation():
+    market = _complete_market()
+    market["demand_refs"]["observed_at"] = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda _q: [SupplierDTO("good")], load_detail=_detail,
+        verify_visual=_visual, market_evidence=lambda _p: market,
+    ), "stale-demand")
+    assert result.recommendation.status.value == "needs_manual_review"
+    assert "missing_demand_refs" in result.recommendation.rejection_reasons
+
+
+def test_raw_amazon_completeness_does_not_authorize_recommendation():
+    market = _complete_market()
+    market["amazon_completeness"] = 1.0
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda _q: [SupplierDTO("good")], load_detail=_detail,
+        verify_visual=_visual, market_evidence=lambda _p: market,
+    ), "raw-completeness")
+    assert result.recommendation.status.value == "needs_manual_review"
+    assert "missing_amazon_completeness" in result.recommendation.rejection_reasons
+
+
+def test_failed_query_attempt_has_unknown_counts_in_memory_and_persistence(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'failed-query.db'}")
+    run_migrations(engine)
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda _q: (_ for _ in ()).throw(TimeoutError("late")),
+        load_detail=_detail, verify_visual=_visual, market_evidence=lambda _p: {}, engine=engine,
+    ), "failed-query")
+    first = result.query_attempts[0]
+    assert first["status"] == "failed"
+    assert first["result_count"] is None
+    assert first["relevant_count"] is None
+    assert first["hit_rate"] is None
+    with engine.connect() as conn:
+        row = conn.execute(text("select status,result_count,relevant_count,artifact_ref from query_attempts limit 1")).mappings().one()
+    assert row["status"] == "failed"
+    assert row["result_count"] is None and row["relevant_count"] is None
+    assert json.loads(row["artifact_ref"])["hit_rate"] is None
+
+
+def test_visual_failure_is_bounded_audited_and_persisted_as_review(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'visual-failure.db'}")
+    run_migrations(engine)
+    calls = 0
+    def visual(*_args):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("provider schema failure")
+    result = run_sourcing_slice(_product(), SourcingSliceDependencies(
+        understand=_understanding, search=lambda _q: [SupplierDTO("good")], load_detail=_detail,
+        verify_visual=visual, market_evidence=lambda _p: _complete_market(), engine=engine,
+    ), "visual-failure")
+    assert calls == 2
+    assert result.accepted_matches == []
+    assert result.recommendation.status.value == "needs_manual_review"
+    assert result.visual_failures[0]["attempt_count"] == 2
+    assert result.visual_failures[0]["reason"] == "supplier_visual_internal"
+    with engine.connect() as conn:
+        match = conn.execute(text("select decision,evidence_json from match_evidence limit 1")).mappings().one()
+        rec = conn.execute(text("select status,evidence_json from sourcing_recommendations limit 1")).mappings().one()
+    assert match["decision"] == "manual_review"
+    assert "visual" in json.loads(match["evidence_json"])["missing_evidence"]
+    assert rec["status"] == "needs_manual_review"
+    assert "supplier_visual_internal" in json.loads(rec["evidence_json"])["rejection_reasons"]
 
 
 def test_retries_low_relevance_deduplicates_and_recommends_complete_match():
@@ -157,7 +249,8 @@ def test_missing_decision_evidence_never_recommends(missing):
 def test_logistics_values_must_be_finite_positive_and_referenced(bad):
     market = _complete_market()
     market["logistics_basis"] = dict(market["logistics_basis"])
-    market["logistics_basis"]["weight_kg"] = bad
+    market["logistics_basis"]["value"] = dict(market["logistics_basis"]["value"])
+    market["logistics_basis"]["value"]["weight_kg"] = bad
     result = run_sourcing_slice(_product(), SourcingSliceDependencies(
         understand=_understanding, search=lambda _q: [SupplierDTO("good")], load_detail=_detail,
         verify_visual=_visual, market_evidence=lambda _p: market,
@@ -169,7 +262,8 @@ def test_logistics_values_must_be_finite_positive_and_referenced(bad):
 def test_profit_values_must_be_finite_positive_and_referenced(bad):
     market = _complete_market()
     market["profit_basis"] = dict(market["profit_basis"])
-    market["profit_basis"]["selling_price"] = bad
+    market["profit_basis"]["value"] = dict(market["profit_basis"]["value"])
+    market["profit_basis"]["value"]["selling_price"] = bad
     result = run_sourcing_slice(_product(), SourcingSliceDependencies(
         understand=_understanding, search=lambda _q: [SupplierDTO("good")], load_detail=_detail,
         verify_visual=_visual, market_evidence=lambda _p: market,

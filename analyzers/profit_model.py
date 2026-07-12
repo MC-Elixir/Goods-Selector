@@ -247,7 +247,9 @@ def predict_profit(
     params = params or load_profit_params()
     batch_qty = batch_qty or params["sourcing"]["default_batch_qty"]
 
-    price: float = getattr(product, "price", None) or 0.0
+    price = normalize_positive_number(getattr(product, "price", None))
+    if price is None:
+        raise InsufficientCostEvidence(["selling_price"])
 
     purchase = calc_purchase_cost(supplier, batch_qty, params)
     shipping = calc_shipping_cost(product, params)

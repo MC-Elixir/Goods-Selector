@@ -60,7 +60,7 @@ class ProvenanceRecord(TypedDict):
     status: str
     source_type: str
     observed_at: str
-    confidence: float
+    confidence: float | None
     artifact_hash: str
 
 
@@ -282,7 +282,7 @@ def _with_provenance(detail: dict[str, Any], artifact: str | dict[str, Any]) -> 
             "status": "extracted" if result[key] is not None else "missing",
             "source_type": "offer_detail",
             "observed_at": observed_at,
-            "confidence": 0.95 if result[key] is not None else 0.0,
+            "confidence": 0.95 if result[key] is not None else None,
             "artifact_hash": artifact_hash,
         }
         for key in _REQUIRED_DETAIL_FIELDS

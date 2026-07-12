@@ -278,3 +278,11 @@ def test_predict_profit_margin_reasonable():
     """标准小件产品利润率应在 -20% ~ 70% 之间。"""
     pb = predict_profit(_MockProduct(), _MockSupplier())
     assert -0.20 < pb.profit_margin < 0.70
+
+
+@pytest.mark.parametrize("price", [None, 0, float("nan"), float("inf")])
+def test_predict_profit_rejects_missing_or_invalid_selling_price(price):
+    product = _MockProduct(price=price)
+    with pytest.raises(InsufficientCostEvidence) as exc_info:
+        predict_profit(product, _MockSupplier())
+    assert exc_info.value.fields == ["selling_price"]

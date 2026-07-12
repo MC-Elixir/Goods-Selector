@@ -7,6 +7,7 @@ from statistics import mean
 from typing import Any
 
 from analyzers.profit_model import normalize_positive_number, normalize_price_tier
+from agent.provenance import trusted_evidence_value
 from matchers.brand_safety import brand_tokens, contains_brand_term
 from matchers.product_spec import ProductSpec, compare_specs, spec_from_supplier, spec_from_text
 from schemas.sourcing import AmazonProductUnderstanding, MatchEvidence
@@ -185,15 +186,22 @@ def build_match_evidence(
     raw = supplier.raw_data if isinstance(getattr(supplier, "raw_data", None), dict) else {}
     detail_value = raw.get("detail", {})
     detail = detail_value if isinstance(detail_value, dict) else {}
+    provenance = detail.get("provenance") if isinstance(detail.get("provenance"), dict) else {}
+
+    def trusted_detail(name: str) -> Any | None:
+        record = provenance.get(name)
+        if not isinstance(record, dict):
+            return None
+        return trusted_evidence_value({**record, "value": detail.get(name)})
 
     target_type = understanding.replaceable_part_or_full_product
-    supplier_type = detail.get("product_type")
+    supplier_type = trusted_detail("product_type")
     type_match = _product_type_match(target_type, supplier_type)
-    pack_match = _equal(understanding.package_quantity, detail.get("package_quantity"))
+    pack_match = _equal(understanding.package_quantity, trusted_detail("package_quantity"))
     function_match = _function_match(
         understanding.function,
-        detail.get("function"),
-        getattr(supplier, "title_cn", None),
+        trusted_detail("function"),
+        None,
     )
     visual_relation = visual.get("same_accessory_full_product_relation") if isinstance(visual, dict) else None
     if visual_relation is False:
@@ -217,8 +225,11 @@ def build_match_evidence(
         "function": function_match,
         "package_quantity": pack_match,
         "product_type": type_match,
-        "price": 1.0 if _price_present(supplier, detail) else None,
-        "moq": 1.0 if _moq_present(supplier, detail) else None,
+        "price": 1.0 if (
+            trusted_detail("base_price_cny") is not None
+            or trusted_detail("price_tiers") is not None
+        ) and _price_present(supplier, detail) else None,
+        "moq": 1.0 if trusted_detail("moq") is not None and _moq_present(supplier, detail) else None,
     }
     missing = [name for name, value in states.items() if value is None]
     passed = [name for name, value in states.items() if value == 1.0]

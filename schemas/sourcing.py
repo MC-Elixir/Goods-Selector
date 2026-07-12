@@ -28,7 +28,7 @@ class FieldEvidence(BaseModel, Generic[T]):
     source_ref: str | None = None
     observed_at: datetime | None = None
     expires_at: datetime | None = None
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     extraction_method: str | None = None
     schema_version: str = "1.0"
     conflict_refs: list[str] = Field(default_factory=list)
