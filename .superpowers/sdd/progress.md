@@ -75,4 +75,6 @@ Base: 37372f9
 
 ## Final whole-branch review
 
-- In progress for feature scope `658faed..a701379` (Tasks 1–13; excludes the pre-existing/user commit at the base).
+- Complete for feature scope `658faed..39e1d66` (Tasks 1–13 plus evidence hardening; excludes the pre-existing/user commit at the base).
+- Initial review found five evidence-reliability issues; commits `f88fb65` and `39e1d66` fixed all findings.
+- Final verdict: **READY**. Final full suite: **696 passed, 5 skipped**.

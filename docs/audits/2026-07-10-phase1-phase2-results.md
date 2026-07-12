@@ -147,3 +147,14 @@ mock contamination 不可测。本次正式 E2E 配置禁止 mock，且在候选
    不能把新列存在视为字段已补抓。
 5. Phase 3 finite-state Agentic Sourcing Loop 和 `--mode agent` 未实现；当前 agent runtime
    仍主要编排 deterministic pipeline。
+
+## Post-review evidence hardening
+
+整分支复审后又补充了以下 fail-closed 约束：
+
+- 推荐级关键证据必须具有可接受的 `extracted` / `verified` provenance、状态、新鲜度和置信度；
+- 未计算的 confidence 保持 `NULL`，失败查询的 count / hit rate 保持 `NULL`，真实零仍为 `0`；
+- Amazon 售价缺失或非法时不再生成利润快照；
+- 视觉验证保留 provider 稳定错误码，仅瞬态 `PROVIDER_FAILURE` 有界重试一次，schema 错误和图片证据缺失立即转人工复核。
+
+最终提交内容全量复核为 **696 passed、5 skipped、exit 0**；整分支复审结论为 READY。
