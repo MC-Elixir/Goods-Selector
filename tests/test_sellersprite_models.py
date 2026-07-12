@@ -57,7 +57,7 @@ def test_context_canonicalizes_supplied_uuid_sourcing_run_id():
 
 def test_context_rejects_non_uuid_sourcing_run_id():
     with pytest.raises(ValueError, match="sourcing_run_id"):
-        SellerSpriteContext.create("B00Q7OAN50", "run-id\\napi_key=not-for-logs")
+        SellerSpriteContext.create("B00Q7OAN50", "run-id\napi_key=not-for-logs")
 
 
 def test_needs_human_result_preserves_context_and_error_code():
@@ -96,8 +96,8 @@ def test_error_code_policy_allowlists_documented_codes(error_code):
     "untrusted_error_code",
     [
         "unknown",
-        "CAPTCHA\\napi_key=not-for-logs",
-        "CAPTCHA\\x00token=not-for-logs",
+        "CAPTCHA\napi_key=not-for-logs",
+        "CAPTCHA\x00token=not-for-logs",
     ],
 )
 def test_needs_human_maps_untrusted_error_codes_to_internal(untrusted_error_code):
