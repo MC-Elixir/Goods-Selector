@@ -71,4 +71,8 @@ Base: 37372f9
 - Task 10: complete (commits 4df7f57..c766584, review clean; full 605 passed, 5 skipped) — Schema-validated dual-image verification
 - Task 11: complete (commits c766584..edc9017, final review approved; focused 81 passed; full 669 passed, 5 skipped) — Bounded sourcing slice and evidence exports
 - Task 12: complete (commits 8fd369c..d739514, review approved; focused 9 passed; empty predictions preserve null metrics) — Benchmark evaluator with honest denominators
-- Task 13: in progress — Compatibility, full verification, and real no-mock E2E
+- Task 13: complete (commits 64d8308..a701379, review approved; focused 46 passed; final full 679 passed, 5 skipped; copied DB integrity/FK clean; real no-mock E2E externally blocked before crawl by invalid market key) — Compatibility, full verification, and real no-mock E2E
+
+## Final whole-branch review
+
+- In progress for feature scope `658faed..a701379` (Tasks 1–13; excludes the pre-existing/user commit at the base).
