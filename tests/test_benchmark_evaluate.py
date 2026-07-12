@@ -235,3 +235,48 @@ def test_cli_writes_deterministic_null_metrics_for_empty_predictions(tmp_path):
         "supplier_precision_at_1": None,
         "supplier_precision_at_5": None,
     }
+
+
+def test_recommendation_precision_excludes_missing_ground_truth():
+    labels = [
+        {
+            "case_id": "unknown-label",
+            "reviewed": True,
+            "correct_offer_ids": ["1"],
+            "no_match": False,
+            "recommendation_label": None,
+        }
+    ]
+    predictions = {
+        "unknown-label": {
+            "ranked_offer_ids": ["1"],
+            "recommendation_status": "recommend",
+        }
+    }
+
+    result = evaluate(labels, predictions)
+
+    assert result["recommendation_precision"] is None
+
+
+def test_supplier_precision_excludes_match_label_without_correct_offers():
+    labels = [
+        {
+            "case_id": "incomplete-match-label",
+            "reviewed": True,
+            "correct_offer_ids": [],
+            "no_match": False,
+            "recommendation_label": "reject",
+        }
+    ]
+    predictions = {
+        "incomplete-match-label": {
+            "ranked_offer_ids": ["unexpected"],
+            "recommendation_status": "reject",
+        }
+    }
+
+    result = evaluate(labels, predictions)
+
+    assert result["supplier_precision_at_1"] is None
+    assert result["supplier_precision_at_5"] is None

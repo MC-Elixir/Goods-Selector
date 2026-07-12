@@ -47,6 +47,7 @@ def evaluate(
         for item in reviewed
         if item.get("no_match") is False
         and isinstance(item.get("correct_offer_ids"), list)
+        and bool(item["correct_offer_ids"])
         and isinstance(predictions[item["case_id"]].get("ranked_offer_ids"), list)
     ]
     no_match_cases = [
@@ -79,15 +80,19 @@ def evaluate(
         isinstance(predictions[item["case_id"]].get("recommendation_status"), str)
         for item in reviewed
     )
-    recommended = (
-        [
-            item
-            for item in reviewed
-            if predictions[item["case_id"]]["recommendation_status"] == "recommend"
-        ]
-        if statuses_known
-        else []
-    )
+    recommendation_labeled = [
+        item
+        for item in reviewed
+        if item.get("recommendation_label") in {"recommend", "reject"}
+        and isinstance(
+            predictions[item["case_id"]].get("recommendation_status"), str
+        )
+    ]
+    recommended = [
+        item
+        for item in recommendation_labeled
+        if predictions[item["case_id"]]["recommendation_status"] == "recommend"
+    ]
     correct_recommendations = sum(
         item.get("recommendation_label") == "recommend" for item in recommended
     )
@@ -140,7 +145,7 @@ def evaluate(
         ),
         "recommendation_precision": (
             _ratio(correct_recommendations, len(recommended))
-            if statuses_known
+            if recommendation_labeled
             else None
         ),
         "manual_review_rate": (
