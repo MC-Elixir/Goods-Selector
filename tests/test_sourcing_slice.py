@@ -373,3 +373,28 @@ def test_default_relevance_title_requires_meaningful_phrase_not_short_substring(
     assert _default_relevance(query, SupplierDTO("yes", title_cn="家用净水器替换滤芯批发"))
     assert not _default_relevance(query, SupplierDTO("no", title_cn="空气滤芯"))
     assert not _default_relevance(SimpleNamespace(text="水"), SupplierDTO("short", title_cn="净水器"))
+
+
+@pytest.mark.parametrize("query,title,expected", [
+    ("净水器 替换滤芯", "净水器配件", False),
+    ("净水器 替换滤芯", "净水器替换滤芯四只装", True),
+    ("water filter", "water bottle", False),
+    ("water filter", "water filter cartridge", True),
+    ("replacement cartridge", "premium replacement cartridge", True),
+])
+def test_default_title_relevance_requires_core_term_coverage(query, title, expected):
+    assert _default_relevance(SimpleNamespace(text=query), SupplierDTO("title", title_cn=title)) is expected
+
+
+def test_default_relevance_recognizes_real_playwright_image_producer_shape_only_with_score():
+    query = SimpleNamespace(text="unrelated query")
+    image_hit = SupplierDTO(
+        "img", image_similarity=0.85,
+        raw_data={"title_cn": "unrelated", "full_text": "", "source": "alibaba_playwright"},
+    )
+    keyword_hit = SupplierDTO(
+        "kw", image_similarity=None,
+        raw_data={"title_cn": "unrelated", "full_text": "", "source": "alibaba_playwright"},
+    )
+    assert _default_relevance(query, image_hit)
+    assert not _default_relevance(query, keyword_hit)

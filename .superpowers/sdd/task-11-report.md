@@ -80,3 +80,14 @@ Focused verification: `48 passed, 1 warning`.
 - Focused Task 11 and related query/match/search verification: `96 passed`.
 - The prior full-suite PID `68160` exited before this final commit; its final summary was not
   available to this worker. Final-HEAD full verification remains environment pending.
+
+## Strict Title and Playwright Image Relevance
+
+- Multi-term title evidence now requires deterministic 75% core-term coverage with at least
+  two complete terms; two-term queries therefore require both terms. ASCII terms use word
+  equality and CJK terms use complete normalized query terms, not shared bigrams.
+- `alibaba_playwright` is recognized as image-capable only when a finite image similarity is
+  present and meets the high image threshold; ordinary keyword results have no image score and
+  do not pass this rule.
+- Focused Task 11 plus Alibaba Playwright/diagnostic verification: `64 passed`.
+- Prior full PID `74404` ended before this commit; final-HEAD full remains environment pending.

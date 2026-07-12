@@ -63,18 +63,24 @@ def _default_relevance(query: Any, supplier: Any) -> bool:
         return text_score >= TEXT_RELEVANCE_THRESHOLD
     image_score = _finite_score(getattr(supplier, "image_similarity", None))
     source = str(raw.get("source", "")).casefold()
-    if image_score is not None and source in {"image_search", "pailitao", "alibaba_pailitao"}:
+    if image_score is not None and source in {
+        "image_search", "pailitao", "alibaba_pailitao", "alibaba_playwright",
+    }:
         return image_score >= IMAGE_RELEVANCE_THRESHOLD
     query_terms = _normalized_terms(getattr(query, "text", ""))
     title_terms = _normalized_terms(getattr(supplier, "title_cn", ""))
     if not query_terms or not title_terms:
         return False
-    query_ascii = {term for term in query_terms if term.isascii()}
     title_ascii = {term for term in title_terms if term.isascii()}
-    if query_ascii & title_ascii:
-        return True
-    shared = _bigrams(query_terms) & _bigrams(title_terms)
-    return len(shared) >= 2
+    title_cjk = "".join(term for term in title_terms if not term.isascii())
+    matches = [
+        term in title_ascii if term.isascii() else term in title_cjk
+        for term in query_terms
+    ]
+    if len(query_terms) == 1:
+        return matches[0]
+    required = max(2, math.ceil(len(query_terms) * 0.75))
+    return sum(matches) >= required
 
 
 @dataclass
