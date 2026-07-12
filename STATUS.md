@@ -1,7 +1,15 @@
 # Amazon Selector — Pipeline Status
 
-**Snapshot date**: 2026-06-24
-**Pipeline version**: 0.2.2
+**Snapshot date**: 2026-07-12
+**Pipeline mode**: deterministic 7-stage compatibility mode（Phase 3 `--mode agent` 尚未实现）
+
+**Phase 1–2 verification**: 数据证据、12 类去品牌查询、1688 详情页阻断识别、
+结构化 MatchEvidence、双图验证和保守推荐门禁已加入。完整实测见
+`docs/audits/2026-07-10-phase1-phase2-results.md`。当前真实 E2E 被 SellerSprite
+无效密钥在市场证据门禁处阻断；这不是质量成功，也没有人工 reviewed benchmark
+标签可用于声称匹配准确率提升。
+
+**Pipeline version**: 0.2.2 compatibility baseline
 **Last full E2E run**: [run #6] success — 5 Amazon products → 1/3 candidates 拿到真实 1688 offer（B01M16WBW1 → offer 780485617589；64 个新 cookies 首请求有效，后续 TMD 拦截降级 mock）。Excel/Markdown/JSON 导出正常。
 
 **0.2.2（2026-06-23）**：放弃 1688 官方 API、仅用爬虫 —— 清空 `.env` 三个 `ALIBABA_*` key（官方 API 自动跳过）；新增 `enable_scrapling_matcher` 开关默认禁用被 TMD 拦的 Scrapling 死路径，直接降级 Playwright。主路径现为 Playwright 单路（详见 §4.1/§4.2 与 `CHANGELOG.md`）。
@@ -14,9 +22,11 @@
 
 整条 7 阶段 pipeline 端到端跑通，能产出真实候选选品池。
 主要靠两个修复让数据真正可用：Amazon 端把 prodDetTable 选器重写（brand / BSR / 重量 / 尺寸命中率从 0% 提到 90%+），1688 端让 Playwright 路径使用真实浏览器 context 注入 64 个 cookies（拿到真实 1688 商品）。
-剩下的都是"配置就能跑"或者"独立大功能"的问题，不阻塞主流程。
+当前主要阻塞是外部市场数据凭证和 1688 API/页面稳定性；关键证据缺失时正式模式
+会失败关闭，因此这些问题会阻止强推荐，这是预期的数据可靠性行为。
 
-**1688 货源匹配现已仅走爬虫**（0.2.2）：放弃官方 API、禁用被 TMD 拦的 Scrapling HTTP 路径，主路径 = Playwright（注入 cookies 拿真实 offer）→ mock 兜底。
+**正式 no-mock 模式**：主路径使用真实搜索/详情来源；被登录、captcha 或 TMD
+拦截时进入人工处理或数据不足，不降级为 mock 候选。
 
 ---
 

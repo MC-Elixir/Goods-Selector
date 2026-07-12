@@ -1,5 +1,6 @@
 from click.testing import CliRunner
 
+import main as main_module
 from agent.smoke_run import SmokeRunConfig, run_smoke
 from config.settings import settings
 from main import cli
@@ -119,6 +120,19 @@ def test_agent_web_cli_warns_that_docker_is_the_default_runtime(monkeypatch):
     assert "docker compose up -d --build amazon-selector" in result.output
     assert "http://127.0.0.1:8765" in result.output
     assert called == [{"host": "127.0.0.1", "port": 8765}]
+
+
+def test_legacy_pipeline_command_remains_default(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main_module, "run_pipeline", lambda **kwargs: calls.append(kwargs) or 77)
+
+    result = CliRunner().invoke(
+        cli,
+        ["run", "--category", "Sports & Outdoors", "--limit", "1"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [{"category": "Sports & Outdoors", "limit": 1, "marketplace": "US"}]
 
 
 def test_run_smoke_can_require_market_data(monkeypatch, tmp_path):

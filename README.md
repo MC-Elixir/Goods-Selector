@@ -2,7 +2,9 @@
 
 Amazon Best Seller 选品自动化系统。给定一个 Amazon 类目 → 爬取 BSR 榜单产品 → 视觉识别 + 1688 爬虫匹配货源 → 利润预测 → 6 维度评分 → 硬性筛选 → 排名 → 导出候选选品池（Excel / Markdown / JSON）。
 
-**当前版本 0.2.2**（2026-06-23）。7 阶段 pipeline 端到端跑通，测试 181 passed。详见 [STATUS.md](STATUS.md) / [CHANGELOG.md](CHANGELOG.md) / [SHOWCASE.md](SHOWCASE.md)。
+当前兼容入口仍是 7 阶段 deterministic pipeline；Phase 3 的 `--mode agent`
+有限状态循环尚未实现。最新的 Phase 1–2 验证结果及外部数据阻塞见
+[审计报告](docs/audits/2026-07-10-phase1-phase2-results.md)。
 
 ## 快速开始
 
@@ -111,7 +113,9 @@ python setup_amazon_login.py     # 弹浏览器手动登录 Amazon → 存 data/
 python setup_1688_login.py       # 弹浏览器手动登录 1688  → 存 data/1688_cookies.json
 ```
 
-cookies 会过期（通常数天~两周），过期后 1688 搜索会被 TMD 风控弹回登录页、货源匹配降级到 mock 占位。届时重跑对应登录脚本刷新即可。
+cookies 会过期（通常数天~两周）。正式 no-mock 模式下，1688 登录或 TMD
+风控会使该候选失败关闭或进入人工处理，不会以 mock 供应商替代。届时重跑对应
+登录脚本刷新即可。
 
 ## 7 阶段流水线
 
@@ -119,7 +123,7 @@ cookies 会过期（通常数天~两周），过期后 1688 搜索会被 TMD 风
 main.py run --category --limit --marketplace
   └─ pipeline/orchestrator.py::run_pipeline
        1. crawl    crawlers/amazon_bsr.py      Amazon BSR 榜单 → ProductDTO（Scrapling 抗检测后端，prodDetTable 选器）
-       2. match    matchers/__init__.py        视觉识别→Playwright 1688 爬虫→mock 兜底→启发式+LLM 验证
+       2. match    matchers/__init__.py        视觉识别→Playwright 1688 爬虫→启发式+LLM 验证
        3. profit   analyzers/profit_model.py    6 项成本 + 净利率/净利润预测
        4. market   analyzers/maijiajingling.py  卖家精灵市场分析（需 MJJL_API_KEY，无则跳过）
        5. score    analyzers/scorer.py          6 维度评分 + 硬性筛选
@@ -136,7 +140,7 @@ amazon_selector/
 ├── main.py                 # CLI 入口（init-db | run）
 ├── config/                 # settings.py(pydantic) + profit_params.yaml + scoring_weights.yaml
 ├── crawlers/               # Amazon BSR 采集（_amazon_extractors 共享选器 + scrapling/playwright 后端）
-├── matchers/               # 1688 货源匹配（vision + playwright 爬虫 + verifier + mock 兜底）
+├── matchers/               # 1688 货源匹配（vision + playwright 爬虫 + verifier）
 ├── analyzers/              # profit_model / scorer / maijiajingling(卖家精灵)
 ├── pipeline/               # orchestrator(7阶段编排) + filters(排名)
 ├── reports/                # exporter(Excel/Markdown/JSON)
@@ -154,7 +158,11 @@ amazon_selector/
 - **所有可调参数在 YAML**：`config/profit_params.yaml`（成本率）+ `config/scoring_weights.yaml`（评分权重+硬筛阈值），调参不改代码。评分权重必须和=1.0，由 `test_weights_sum_to_one` 强制。
 - **Snapshot 模式**：`ProfitSnapshot`/`Score` 追加写入，携带当时的 YAML 快照 JSON，历史决策可回放。
 - **缓存**：diskcache 24h TTL，Amazon 同 ASIN/BSR 页回放秒出；验证码命中时删缓存避免污染。
-- **1688 仅走爬虫**（0.2.2）：弃用官方 API、默认禁用被 TMD 拦的 Scrapling HTTP 路径，主路径=Playwright 注入 cookies 拿真实 offer，mock 兜底保证永不断流。
+- **正式 no-mock 失败关闭**：Playwright 搜索或详情页被登录、captcha、TMD
+  风控拦截时，不把拦截页解析成 offer，也不让 mock supplier 进入候选、持久化或导出。
+- **证据门禁**：新 sourcing slice 生成 12 类去品牌查询，保存查询尝试，抓取候选
+  详情并做结构化与双图验证；缺失关键价格、MOQ、尺寸、重量、需求或竞争证据时
+  只能输出人工复核、拒绝或数据不足，不能强推荐。
 
 ## 文档
 

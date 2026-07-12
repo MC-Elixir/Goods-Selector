@@ -246,6 +246,25 @@ risk_score = score
 | 供应商数 | = 0              | 无货源无法经营                    |
 | 大品牌词 | 命中               | 侵权风险                       |
 
+## 证据门禁（先于强推荐）
+
+总分只表达在已知输入上的加权结果，不等于证据充分。Phase 1–2 sourcing slice 在
+推荐状态前另行执行证据门禁：
+
+- 价格、MOQ、产品尺寸、重量、市场需求或竞争证据缺失时，不得输出 `recommend`；
+- `missing` / `stale` / `mock` / `conflicting` 不会静默转换为数值 0；真实 0 只有在
+  来源明确且任务已完成时才参与计算；
+- 配件与整机、套装数量、核心功能硬冲突直接拒绝；显式负面视觉分类不能增加分数；
+- 视觉只是 MatchEvidence 的一个维度，必须与类目、功能、材质、规格、包装数量和
+  文本语义证据共同满足 minimum evidence threshold；
+- JSON Schema 校验失败的结构化 LLM 输出失败关闭；正式 no-mock 模式下 mock
+  supplier 不进入候选、持久化或导出；
+- 推荐状态为 `recommend`、`watchlist`、`needs_manual_review`、`reject` 或
+  `insufficient_data`，并保留通过理由、拒绝理由、缺失证据和来源引用。
+
+现有 `run_pipeline()` 仍是 deterministic 兼容路径。上述有限 sourcing slice 不代表
+Phase 3 的 `python main.py run --mode agent` 已实现。
+
 
 ---
 
@@ -263,4 +282,3 @@ risk_score = score
 - 权重和必须 = 1.0（CI 校验，`tests/test_scoring.py::test_weights_sum_to_one`）
 - 每个 `score_`* 函数：边界值（0 / target / 上限）+ 异常输入（None / 负值）
 - `apply_hard_filters`：覆盖全部触发分支
-
