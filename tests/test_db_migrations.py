@@ -13,7 +13,11 @@ def test_migration_is_additive_idempotent_and_enables_foreign_keys(tmp_path):
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE products (id INTEGER PRIMARY KEY, asin TEXT NOT NULL)"))
         conn.execute(text("INSERT INTO products(id, asin) VALUES (1, 'B000KEEP')"))
-    assert run_migrations(engine) == ["0001_evidence_foundation", "0002_repair_evidence_semantics"]
+    assert run_migrations(engine) == [
+        "0001_evidence_foundation",
+        "0002_repair_evidence_semantics",
+        "0003_sellersprite_browser_imports",
+    ]
     assert run_migrations(engine) == []
     names = set(inspect(engine).get_table_names())
     assert {"field_evidence", "query_attempts", "match_evidence", "sourcing_recommendations"} <= names
@@ -306,7 +310,10 @@ def test_legacy_0001_database_is_repaired_without_losing_history(tmp_path):
         connection.execute(text("DELETE FROM query_attempts WHERE id=99"))
         connection.execute(text("DELETE FROM match_evidence WHERE id=99"))
 
-    assert run_migrations(engine) == ["0002_repair_evidence_semantics"]
+    assert run_migrations(engine) == [
+        "0002_repair_evidence_semantics",
+        "0003_sellersprite_browser_imports",
+    ]
     assert run_migrations(engine) == []
 
     with engine.connect() as connection:
