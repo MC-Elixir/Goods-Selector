@@ -37,6 +37,7 @@ class SellerSpriteDependencies:
     clock: Callable[[], float] | None = None
     sleeper: Callable[[float], None] | None = None
     is_cancelled: Callable[[], bool] | None = None
+    browser_enabled: bool | None = None
     download_dir: Path | str | None = None
     page_timeout_seconds: int | None = None
     export_timeout_seconds: int | None = None
@@ -49,6 +50,11 @@ class SellerSpriteDependencies:
         self.clock = self.clock or monotonic
         self.sleeper = self.sleeper or sleep
         self.is_cancelled = self.is_cancelled or (lambda: False)
+        self.browser_enabled = (
+            settings.sellersprite_browser_enabled
+            if self.browser_enabled is None
+            else bool(self.browser_enabled)
+        )
         self.download_dir = Path(
             self.download_dir
             or settings.sellersprite_browser_download_dir
@@ -78,6 +84,7 @@ class SellerSpriteDependencies:
             page_timeout_seconds=int(self.page_timeout_seconds),
             export_timeout_seconds=int(self.export_timeout_seconds),
             download_observer=self.download_observer,
+            is_cancelled=self.is_cancelled,
         )
 
 
@@ -92,7 +99,11 @@ def run_reverse_keyword_export(
     dependencies = dependencies or SellerSpriteDependencies()
     context = SellerSpriteContext.create(asin, sourcing_run_id=sourcing_run_id)
     _record(dependencies, "sellersprite_started", context)
-    if dependencies.profile is None or dependencies.session_factory is None:
+    if (
+        not dependencies.browser_enabled
+        or dependencies.profile is None
+        or dependencies.session_factory is None
+    ):
         return _terminal_result(dependencies, context, "EXTENSION_UNAVAILABLE")
 
     retries = max(0, min(1, int(dependencies.max_retries)))
@@ -108,17 +119,19 @@ def run_reverse_keyword_export(
                 artifact = session.export_sellersprite_reverse_keywords(context.asin)
                 _ensure_not_cancelled(dependencies)
             try:
+                _ensure_not_cancelled(dependencies)
                 imported = dependencies.importer(context, artifact)
             except SellerSpriteImportError as exc:
                 raise SellerSpriteWorkflowError(exc.error_code) from exc
-            _ensure_not_cancelled(dependencies)
-            persisted = _save(dependencies.repository, imported)
             _record(
                 dependencies,
                 "sellersprite_exported",
                 context,
                 {"file_sha256": _safe_digest(artifact)},
             )
+            _ensure_not_cancelled(dependencies)
+            persisted = _save(dependencies.repository, imported)
+            _ensure_not_cancelled(dependencies)
             _record(
                 dependencies,
                 "sellersprite_imported",

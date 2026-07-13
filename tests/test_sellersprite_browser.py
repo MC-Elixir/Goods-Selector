@@ -35,6 +35,9 @@ class FakeLocator:
 
     def click(self, **_kwargs) -> None:
         self.page.clicked.append(self.name)
+        callback = self.page.on_click.get(self.name)
+        if callback:
+            callback()
 
     def fill(self, value: str, **_kwargs) -> None:
         self.page.filled[self.name] = value
@@ -50,10 +53,15 @@ class FakePage:
         self.goto_calls: list[str] = []
         self.clicked: list[str] = []
         self.filled: dict[str, str] = {}
+        self.on_click: dict[str, object] = {}
+        self.on_goto: object | None = None
+        self.timeout_calls: list[int] = []
         self.url = f"https://www.amazon.com/dp/{asin}"
 
     def goto(self, url: str, **_kwargs) -> None:
         self.goto_calls.append(url)
+        if self.on_goto:
+            self.on_goto()
 
     def locator(self, selector: str) -> FakeLocator:
         return FakeLocator(self, selector.removeprefix("css="))
@@ -62,6 +70,7 @@ class FakePage:
         return FakeLocator(self, "frame")
 
     def wait_for_timeout(self, _milliseconds: int) -> None:
+        self.timeout_calls.append(_milliseconds)
         return None
 
 
@@ -75,8 +84,17 @@ class FakeObserver:
         self.snapshots.append(path)
         return "snapshot"
 
-    def wait(self, path: Path, snapshot: object, timeout_seconds: int) -> object:
+    def wait(
+        self,
+        path: Path,
+        snapshot: object,
+        timeout_seconds: int,
+        *,
+        cancel_check=None,
+    ) -> object:
         self.waits.append((path, snapshot, timeout_seconds))
+        if cancel_check:
+            cancel_check()
         return self.artifact
 
 
@@ -119,6 +137,29 @@ def test_adapter_opens_only_us_asin_page_and_checks_redirected_asin(tmp_path):
     page.url = "https://www.amazon.com/dp/B000000000"
     with pytest.raises(SellerSpriteWorkflowError, match="ASIN_MISMATCH"):
         session.open_amazon_product("B00Q7OAN50")
+
+
+def test_adapter_cancellation_after_navigation_prevents_followup_wait(tmp_path):
+    cancelled = False
+    page = FakePage(asin="B00Q7OAN50", visible_markers={"ready"})
+
+    def cancel_after_goto() -> None:
+        nonlocal cancelled
+        cancelled = True
+
+    page.on_goto = cancel_after_goto
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        page=page,
+        is_cancelled=lambda: cancelled,
+    )
+
+    with pytest.raises(SellerSpriteWorkflowError, match="CANCELLED"):
+        session.open_amazon_product("B00Q7OAN50")
+
+    assert page.goto_calls == ["https://www.amazon.com/dp/B00Q7OAN50"]
+    assert page.timeout_calls == []
 
 
 def test_adapter_attaches_only_through_injected_cdp_resolver(tmp_path):
@@ -179,6 +220,34 @@ def test_adapter_snapshots_before_single_export_click_and_delegates_download(tmp
     assert page.filled == {"asin_input": "B00Q7OAN50"}
     assert observer.snapshots == [tmp_path]
     assert observer.waits == [(tmp_path, "snapshot", 17)]
+
+
+def test_adapter_cancellation_after_submit_prevents_results_snapshot_and_export(tmp_path):
+    cancelled = False
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"ready", "reverse_keywords", "asin_input", "submit", "results_ready", "export"},
+    )
+
+    def cancel_after_submit() -> None:
+        nonlocal cancelled
+        cancelled = True
+
+    page.on_click["submit"] = cancel_after_submit
+    observer = FakeObserver(object())
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        page=page,
+        download_observer=observer,
+        is_cancelled=lambda: cancelled,
+    )
+
+    with pytest.raises(SellerSpriteWorkflowError, match="CANCELLED"):
+        session.export_sellersprite_reverse_keywords("B00Q7OAN50")
+
+    assert page.clicked == ["reverse_keywords", "submit"]
+    assert observer.snapshots == []
 
 
 def test_adapter_never_uses_an_unvalidated_direct_profile(tmp_path):

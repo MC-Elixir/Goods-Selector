@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from math import isfinite
 from pathlib import Path
 from time import monotonic, sleep
+from typing import Callable
 
 from agent.sellersprite_policy import normalize_sellersprite_error_code
 
@@ -21,6 +22,7 @@ _TEMPORARY_DOWNLOAD_SUFFIXES = (".crdownload", ".part", ".partial", ".tmp")
 _POLL_INTERVAL_SECONDS = 0.25
 _STABILITY_INTERVAL_SECONDS = 0.25
 _HASH_CHUNK_SIZE = 64 * 1024
+CancelCheck = Callable[[], bool]
 
 
 class DownloadError(RuntimeError):
@@ -108,6 +110,9 @@ def wait_for_new_download(
     path: Path,
     snapshot: DownloadSnapshot,
     timeout_seconds: int,
+    *,
+    cancel_check: CancelCheck | None = None,
+    sleeper: Callable[[float], None] = sleep,
 ) -> DownloadedArtifact:
     """Return one newly-created, stable, nonempty allowed export.
 
@@ -128,17 +133,23 @@ def wait_for_new_download(
 
     deadline = monotonic() + timeout
     while True:
+        _raise_if_cancelled(cancel_check)
         candidates = _new_export_candidates(directory, snapshot)
+        _raise_if_cancelled(cancel_check)
         if len(candidates) > 1:
             raise DownloadError("AMBIGUOUS_DOWNLOAD")
 
         remaining = deadline - monotonic()
         if len(candidates) == 1 and remaining >= _STABILITY_INTERVAL_SECONDS:
             candidate = candidates[0]
-            if _size_is_stable(candidate):
+            if _size_is_stable(candidate, cancel_check=cancel_check, sleeper=sleeper):
                 try:
+                    _raise_if_cancelled(cancel_check)
                     artifact = DownloadedArtifact.from_path(candidate)
-                except DownloadError:
+                    _raise_if_cancelled(cancel_check)
+                except DownloadError as exc:
+                    if exc.error_code == "CANCELLED":
+                        raise
                     # A writer can finish, replace, or remove a file between
                     # the stability check and hashing.  Keep observing only
                     # while the configured budget remains.
@@ -149,7 +160,9 @@ def wait_for_new_download(
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise DownloadError("DOWNLOAD_TIMEOUT")
-        sleep(min(_POLL_INTERVAL_SECONDS, remaining))
+        _raise_if_cancelled(cancel_check)
+        sleeper(min(_POLL_INTERVAL_SECONDS, remaining))
+        _raise_if_cancelled(cancel_check)
 
 
 def _new_export_candidates(directory: Path, snapshot: DownloadSnapshot) -> list[Path]:
@@ -180,16 +193,30 @@ def _is_new_completed_export(path: Path, snapshot: DownloadSnapshot) -> bool:
         return False
 
 
-def _size_is_stable(path: Path) -> bool:
+def _size_is_stable(
+    path: Path,
+    *,
+    cancel_check: CancelCheck | None = None,
+    sleeper: Callable[[float], None] = sleep,
+) -> bool:
     try:
+        _raise_if_cancelled(cancel_check)
         before = path.stat()
+        _raise_if_cancelled(cancel_check)
         if before.st_size <= 0:
             return False
-        sleep(_STABILITY_INTERVAL_SECONDS)
+        sleeper(_STABILITY_INTERVAL_SECONDS)
+        _raise_if_cancelled(cancel_check)
         after = path.stat()
+        _raise_if_cancelled(cancel_check)
     except OSError:
         return False
     return before.st_size == after.st_size and before.st_mtime_ns == after.st_mtime_ns
+
+
+def _raise_if_cancelled(cancel_check: CancelCheck | None) -> None:
+    if cancel_check and cancel_check():
+        raise DownloadError("CANCELLED")
 
 
 def _sha256_file(path: Path) -> str:

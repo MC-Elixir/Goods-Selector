@@ -71,8 +71,15 @@ class FilesystemDownloadObserver:
         path: Path,
         snapshot: DownloadSnapshot,
         timeout_seconds: int,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> DownloadedArtifact:
-        return wait_for_new_download(path, snapshot, timeout_seconds)
+        return wait_for_new_download(
+            path,
+            snapshot,
+            timeout_seconds,
+            cancel_check=cancel_check,
+        )
 
 
 class PlaywrightSellerSpriteSession:
@@ -91,6 +98,7 @@ class PlaywrightSellerSpriteSession:
         page: Any | None = None,
         playwright_factory: Callable[[], Any] | None = None,
         cdp_resolver: Callable[[], str] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> None:
         self.profile = profile
         self.download_dir = Path(download_dir)
@@ -101,6 +109,7 @@ class PlaywrightSellerSpriteSession:
         self._page = page
         self._playwright_factory = playwright_factory
         self._cdp_resolver = cdp_resolver or _resolve_cdp_ws
+        self._is_cancelled = is_cancelled or (lambda: False)
         self._playwright: Any | None = None
         self._browser: Any | None = None
 
@@ -111,16 +120,24 @@ class PlaywrightSellerSpriteSession:
         return self._page
 
     def __enter__(self) -> "PlaywrightSellerSpriteSession":
+        self._ensure_not_cancelled()
         if self._page is not None:
             return self
         try:
+            self._ensure_not_cancelled()
             factory = self._playwright_factory or _default_playwright_factory
             self._playwright = factory()
+            self._ensure_not_cancelled()
+            cdp_endpoint = self._cdp_resolver()
+            self._ensure_not_cancelled()
             self._browser = self._playwright.chromium.connect_over_cdp(
-                self._cdp_resolver()
+                cdp_endpoint
             )
+            self._ensure_not_cancelled()
             self._page = _first_attached_page(self._browser)
+            self._ensure_not_cancelled()
         except SellerSpriteWorkflowError:
+            self._close()
             raise
         except Exception as exc:
             self._close()
@@ -133,29 +150,43 @@ class PlaywrightSellerSpriteSession:
     def open_amazon_product(self, asin: str) -> None:
         asin = validate_sellersprite_asin(asin)
         target = f"https://www.amazon.com/dp/{asin}"
+        self._ensure_not_cancelled()
         try:
             self.page.goto(
                 target,
                 wait_until="domcontentloaded",
                 timeout=self.page_timeout_seconds * 1000,
             )
-            self.page.wait_for_timeout(5000)
+        except SellerSpriteWorkflowError:
+            raise
         except Exception as exc:
             raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+        self._ensure_not_cancelled()
+        try:
+            self.page.wait_for_timeout(5000)
+        except SellerSpriteWorkflowError:
+            raise
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+        self._ensure_not_cancelled()
         if not _page_asin_matches(self.page, asin):
             raise SellerSpriteWorkflowError("ASIN_MISMATCH")
+        self._ensure_not_cancelled()
 
     def check_sellersprite_extension(self) -> None:
+        self._ensure_not_cancelled()
         if not _profile_is_valid(self.profile):
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._raise_if_human_terminal()
         if not self._is_visible("ready"):
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        self._ensure_not_cancelled()
 
     def export_sellersprite_reverse_keywords(self, asin: str) -> DownloadedArtifact:
         """Click exactly one configured Export control after a directory snapshot."""
 
         asin = validate_sellersprite_asin(asin)
+        self._ensure_not_cancelled()
         self._raise_if_human_terminal()
         self._click_required("reverse_keywords")
         self._raise_if_human_terminal()
@@ -164,29 +195,41 @@ class PlaywrightSellerSpriteSession:
         self._raise_if_human_terminal()
         if not self._is_visible("results_ready"):
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        self._ensure_not_cancelled()
 
+        self._ensure_not_cancelled()
         try:
             snapshot = self._download_observer.snapshot(self.download_dir)
+        except SellerSpriteWorkflowError:
+            raise
         except DownloadError as exc:
             raise SellerSpriteWorkflowError(exc.error_code) from exc
         except Exception as exc:
             raise SellerSpriteWorkflowError("INVALID_EXPORT") from exc
+        self._ensure_not_cancelled()
 
         self._raise_if_human_terminal()
         self._click_required("export")
+        self._ensure_not_cancelled()
         return self.wait_for_browser_download(snapshot)
 
     def wait_for_browser_download(self, snapshot: DownloadSnapshot) -> DownloadedArtifact:
+        self._ensure_not_cancelled()
         try:
-            return self._download_observer.wait(
+            artifact = self._download_observer.wait(
                 self.download_dir,
                 snapshot,
                 self.export_timeout_seconds,
+                cancel_check=self._is_cancelled,
             )
+        except SellerSpriteWorkflowError:
+            raise
         except DownloadError as exc:
             raise SellerSpriteWorkflowError(exc.error_code) from exc
         except Exception as exc:
             raise SellerSpriteWorkflowError("DOWNLOAD_TIMEOUT") from exc
+        self._ensure_not_cancelled()
+        return artifact
 
     def import_sellersprite_export(
         self,
@@ -201,23 +244,33 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("INVALID_EXPORT") from exc
 
     def _click_required(self, locator_name: str) -> None:
+        self._ensure_not_cancelled()
         if not self._is_visible(locator_name):
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        self._ensure_not_cancelled()
         try:
             self._locator(locator_name).click(timeout=self.page_timeout_seconds * 1000)
+        except SellerSpriteWorkflowError:
+            raise
         except Exception as exc:
             raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+        self._ensure_not_cancelled()
 
     def _fill_required(self, locator_name: str, value: str) -> None:
+        self._ensure_not_cancelled()
         if not self._is_visible(locator_name):
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        self._ensure_not_cancelled()
         try:
             self._locator(locator_name).fill(
                 value,
                 timeout=self.page_timeout_seconds * 1000,
             )
+        except SellerSpriteWorkflowError:
+            raise
         except Exception as exc:
             raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+        self._ensure_not_cancelled()
 
     def _raise_if_human_terminal(self) -> None:
         for locator_name, error_code in _HUMAN_TERMINAL_LOCATORS:
@@ -225,27 +278,43 @@ class PlaywrightSellerSpriteSession:
                 raise SellerSpriteWorkflowError(error_code)
 
     def _is_visible(self, locator_name: str) -> bool:
+        self._ensure_not_cancelled()
         try:
-            return bool(self._locator(locator_name).is_visible())
+            visible = bool(self._locator(locator_name).is_visible())
+        except SellerSpriteWorkflowError:
+            raise
         except Exception:
             return False
+        self._ensure_not_cancelled()
+        return visible
 
     def _locator(self, locator_name: str) -> Any:
         # The profile validates this locator's syntax at load time.  Passing it
         # verbatim preserves its explicit selector engine and forbids generated
         # selectors or coordinate-based interactions.
+        self._ensure_not_cancelled()
         value = getattr(self.profile, locator_name)
         prefix, _separator, payload = value.partition("=")
         if prefix == "iframe":
             frame_selector, target_selector = _split_nested_locator(payload)
-            return self.page.frame_locator(frame_selector).locator(target_selector)
+            locator = self.page.frame_locator(frame_selector).locator(target_selector)
+            self._ensure_not_cancelled()
+            return locator
         if prefix == "shadow":
             host_selector, target_selector = _split_nested_locator(payload)
             # Playwright locators pierce an open shadow root.  The explicit
             # host/target profile boundary prevents discovery or selector
             # generation; a closed root simply reports unavailable upstream.
-            return self.page.locator(host_selector).locator(target_selector)
-        return self.page.locator(value)
+            locator = self.page.locator(host_selector).locator(target_selector)
+            self._ensure_not_cancelled()
+            return locator
+        locator = self.page.locator(value)
+        self._ensure_not_cancelled()
+        return locator
+
+    def _ensure_not_cancelled(self) -> None:
+        if self._is_cancelled():
+            raise SellerSpriteWorkflowError("CANCELLED")
 
     def _close(self) -> None:
         browser, playwright = self._browser, self._playwright

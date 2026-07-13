@@ -11,6 +11,7 @@ from agent.sellersprite_service import (
 )
 from agent.tools.sellersprite_browser import SellerSpriteWorkflowError
 from agent.tools.sellersprite_importer import SellerSpriteImportError
+from config.settings import settings
 
 
 def valid_profile() -> SellerSpriteLocatorProfile:
@@ -34,8 +35,9 @@ class FakeImported:
 
 
 class FakeSession:
-    def __init__(self, *, error_code: str | None = None) -> None:
+    def __init__(self, *, error_code: str | None = None, artifact: object | None = None) -> None:
         self.error_code = error_code
+        self.artifact = artifact if artifact is not None else object()
         self.opened: list[str] = []
         self.checked = 0
         self.exported = 0
@@ -57,7 +59,7 @@ class FakeSession:
     def export_sellersprite_reverse_keywords(self, _asin: str) -> object:
         self.exported += 1
         self._maybe_fail()
-        return object()
+        return self.artifact
 
     def _maybe_fail(self) -> None:
         if self.error_code:
@@ -98,6 +100,7 @@ def fake_dependencies():
     dependencies = SellerSpriteDependencies(
         profile=valid_profile(),
         session_factory=lambda: session,
+        browser_enabled=True,
         importer=lambda _context, _artifact: imported,
         repository=repository,
         event_recorder=lambda **event: events.append(event),
@@ -155,6 +158,76 @@ def test_absent_profile_never_constructs_or_guesses_browser_selector(fake_depend
     assert result.status == "NEEDS_HUMAN"
     assert result.error_code == "EXTENSION_UNAVAILABLE"
     assert session.opened == []
+
+
+def test_disabled_browser_setting_blocks_even_injected_runnable_session(monkeypatch):
+    monkeypatch.setattr(settings, "sellersprite_browser_enabled", False)
+    session = FakeSession()
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        session_factory=lambda: session,
+    )
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "NEEDS_HUMAN"
+    assert result.error_code == "EXTENSION_UNAVAILABLE"
+    assert session.opened == []
+
+
+def test_cancellation_after_navigation_stops_before_extension_check(fake_dependencies):
+    dependencies, session, repository, _events = fake_dependencies
+    cancelled = False
+
+    def is_cancelled() -> bool:
+        return cancelled
+
+    def cancel_after_open(asin: str) -> None:
+        nonlocal cancelled
+        session.opened.append(asin)
+        cancelled = True
+
+    session.open_amazon_product = cancel_after_open
+    dependencies.is_cancelled = is_cancelled
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "CANCELLED"
+    assert session.opened == ["B00Q7OAN50"]
+    assert session.checked == 0
+    assert session.exported == 0
+    assert repository.saved == []
+
+
+def test_export_event_is_recorded_before_repository_failure(fake_dependencies):
+    dependencies, session, _repository, events = fake_dependencies
+
+    def fail_save(_imported):
+        raise RuntimeError("database unavailable")
+
+    session.artifact = type("Artifact", (), {"sha256": "a" * 64})()
+    dependencies.repository = fail_save
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    exported = [event for event in events if event["event"] == "sellersprite_exported"]
+    assert result.status == "INTERNAL"
+    assert len(exported) == 1
+    assert exported[0]["payload"]["file_sha256"] == "a" * 64
+    assert events[-1]["event"] == "sellersprite_failed"
+
+
+def test_default_session_receives_dependency_cancellation_predicate(tmp_path):
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        browser_enabled=True,
+        download_dir=tmp_path,
+        is_cancelled=lambda: True,
+    )
+
+    session = dependencies._make_default_session()
+
+    with pytest.raises(SellerSpriteWorkflowError, match="CANCELLED"):
+        session.__enter__()
 
 
 def test_transient_export_failure_retries_once(fake_dependencies):

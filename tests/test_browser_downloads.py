@@ -78,6 +78,44 @@ def test_wait_for_new_download_rejects_multiple_new_final_exports(tmp_path):
     assert error.value.error_code == "AMBIGUOUS_DOWNLOAD"
 
 
+def test_wait_for_new_download_stops_during_poll_when_cancelled(tmp_path):
+    before = snapshot_download_dir(tmp_path)
+    cancelled = False
+
+    def cancel_after_first_sleep(_seconds: float) -> None:
+        nonlocal cancelled
+        cancelled = True
+
+    with pytest.raises(DownloadError, match="CANCELLED") as error:
+        wait_for_new_download(
+            tmp_path,
+            before,
+            timeout_seconds=1,
+            cancel_check=lambda: cancelled,
+            sleeper=cancel_after_first_sleep,
+        )
+
+    assert error.value.error_code == "CANCELLED"
+
+
+def test_wait_for_new_download_propagates_cancellation_during_artifact_read(
+    tmp_path, monkeypatch
+):
+    before = snapshot_download_dir(tmp_path)
+    (tmp_path / "keywords.csv").write_text("Keyword\numbrella\n", encoding="utf-8")
+
+    def cancelled_read(_path):
+        raise DownloadError("CANCELLED")
+
+    monkeypatch.setattr("agent.tools.browser_downloads._size_is_stable", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(DownloadedArtifact, "from_path", cancelled_read)
+
+    with pytest.raises(DownloadError, match="CANCELLED") as error:
+        wait_for_new_download(tmp_path, before, timeout_seconds=1)
+
+    assert error.value.error_code == "CANCELLED"
+
+
 def test_snapshot_records_only_existing_names_and_uses_path_objects(tmp_path):
     existing = tmp_path / "before.xlsx"
     existing.write_bytes(b"not parsed by the observer")
