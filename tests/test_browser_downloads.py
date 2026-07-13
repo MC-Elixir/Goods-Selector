@@ -27,13 +27,21 @@ def test_wait_for_new_download_ignores_crdownload_and_hashes_stable_csv(tmp_path
     assert artifact.sha256 == DownloadedArtifact.from_path(completed).sha256
 
 
-def test_wait_for_new_download_does_not_select_an_old_preexisting_file(tmp_path):
+def test_wait_for_new_download_does_not_select_an_old_preexisting_file(
+    tmp_path, monkeypatch
+):
     old_file = tmp_path / "old.csv"
     old_file.write_text("Keyword\numbrella\n", encoding="utf-8")
     before = snapshot_download_dir(tmp_path)
 
+    # If a regression admitted a pre-existing name, this removes the
+    # stability wait and makes the incorrect path return an artifact.  A zero
+    # timeout cannot distinguish that failure from the observer's timeout
+    # guard, because it never reaches candidate evaluation.
+    monkeypatch.setattr("agent.tools.browser_downloads._size_is_stable", lambda _: True)
+
     with pytest.raises(DownloadError, match="DOWNLOAD_TIMEOUT") as error:
-        wait_for_new_download(tmp_path, before, timeout_seconds=0)
+        wait_for_new_download(tmp_path, before, timeout_seconds=0.3)
 
     assert error.value.error_code == "DOWNLOAD_TIMEOUT"
 
