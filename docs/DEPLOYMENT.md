@@ -4,11 +4,18 @@
 
 ## 1. 准备 `.env`
 
-从模板复制：
+`.env`（以及某些机器上已有的 `.env.example`）是本地私有文件，均不会提交到
+仓库，也不会被复制进生产镜像。因此新 clone 的目录**不能假定**存在
+`.env.example`，不要直接执行 `cp .env.example .env`。在部署机器手工创建私有配置：
 
 ```bash
-cp .env.example .env
+umask 077
+touch .env
+${EDITOR:-vi} .env
 ```
+
+若团队已通过受控渠道提供了该机器上的本地模板，先确认文件存在且内容可信后才可
+复制它；不要把含密钥的模板提交到仓库。
 
 至少配置：
 
@@ -196,7 +203,7 @@ Docker 默认端口以外的 WebUI 入口运行：正式服务仍是
 持续启用自动化的开关。建议在用户在场时运行：
 
 ```bash
-SELLERSPRITE_E2E=1 docker compose exec -T amazon-selector \
+docker compose exec -T -e SELLERSPRITE_E2E=1 amazon-selector \
   pytest tests/e2e/test_sellersprite_extension.py -q -s
 ```
 
@@ -259,8 +266,41 @@ docker compose ps
 docker compose logs -f amazon-selector
 docker compose restart amazon-selector
 docker compose down
-docker compose run --rm amazon-selector pytest tests/ -q
 ```
+
+### 全量回归（挂载当前源码）
+
+正式 WebUI 使用 `docker compose up -d --build amazon-selector`，并仍通过
+`http://127.0.0.1:8765` 提供服务。该生产镜像有意通过 `.dockerignore` 排除
+`README.md`、`Dockerfile`、`docker-compose.yml` 等仓库根文件；因此不要把
+`docker compose run --rm amazon-selector pytest tests/ -q` 当成完整源码回归，它会
+使依赖这些静态文件的测试失去运行条件。
+
+先构建当前测试镜像，再把可见工作区只读挂载到容器，并用独立临时数据目录运行：
+
+```bash
+docker compose build amazon-selector
+
+TEST_DATA="$(mktemp -d)"
+cleanup() {
+  docker run --rm -v "$TEST_DATA:/data" --entrypoint sh amazon-selector:dev \
+    -lc 'rm -rf /data/* /data/.[!.]* /data/..?*' >/dev/null 2>&1 || true
+  rmdir "$TEST_DATA" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+docker run --rm \
+  -e PYTHONDONTWRITEBYTECODE=1 \
+  -e LOG_DIR=/app/data/logs \
+  -v "$PWD:/app:ro" \
+  -v "$TEST_DATA:/app/data" \
+  -w /app \
+  --entrypoint pytest \
+  amazon-selector:dev tests/ -q -s -p no:cacheprovider
+```
+
+这条命令不读取 Compose 的本地 `.env`，也不会写入真实 `data/`。`cleanup` 使用
+容器删除临时目录中的 root 所有者文件，避免普通宿主机用户在测试后无法清理它。
 
 ## 9. 日志和长任务排障
 

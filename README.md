@@ -118,8 +118,19 @@ docker compose run --rm amazon-selector run --category "Home & Kitchen" --limit 
 docker compose run --rm amazon-selector init-db
 docker compose run --rm amazon-selector smoke-run --category "Home & Kitchen" --limit 1
 
-# 容器内跑测试
-docker compose run --rm amazon-selector pytest tests/ -q
+# 全量回归：生产镜像有意不包含 Dockerfile、README 等仓库根文件，
+# 因此需要把当前源码只读挂载进隔离容器（完整命令见 docs/DEPLOYMENT.md）。
+docker compose build amazon-selector
+TEST_DATA="$(mktemp -d)"
+cleanup() {
+  docker run --rm -v "$TEST_DATA:/data" --entrypoint sh amazon-selector:dev \
+    -lc 'rm -rf /data/* /data/.[!.]* /data/..?*' >/dev/null 2>&1 || true
+  rmdir "$TEST_DATA" 2>/dev/null || true
+}
+trap cleanup EXIT
+docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -e LOG_DIR=/app/data/logs \
+  -v "$PWD:/app:ro" -v "$TEST_DATA:/app/data" -w /app --entrypoint pytest \
+  amazon-selector:dev tests/ -q -s -p no:cacheprovider
 ```
 
 数据持久化：`./data:/app/data` 卷挂载，SQLite 数据库、缓存、cookies、导出文件、日志都落在这里。首次启动时 entrypoint 会自动创建 `cache/`、`exports/`、`images/`、`logs/` 并跑 `init-db` 建表。
