@@ -11,6 +11,7 @@ const state = {
   expandedReviews: new Set(),
   selectedAsin: "",
   activeSection: "run",
+  sellerSpriteKeywordRows: [],
   lang: localStorage.getItem("agentLang") || "en",
 };
 
@@ -39,6 +40,27 @@ const I18N = {
     "browser.supplierDetail": "1688 detail enrich",
     "browser.taskType": "Browser task",
     "browser.url": "Page URL",
+    "sellersprite.reverseKeywords.title": "SellerSprite Reverse Keyword Export",
+    "sellersprite.reverseKeywords.subtitle": "Export and import up to 20 structured reverse-keyword rows for one Amazon US ASIN.",
+    "sellersprite.reverseKeywords.asin": "Amazon US ASIN",
+    "sellersprite.reverseKeywords.asinPlaceholder": "10-character ASIN, for example B00Q7OAN50",
+    "sellersprite.reverseKeywords.export": "Export reverse keywords",
+    "sellersprite.reverseKeywords.running": "Exporting reverse keywords. Keep Chrome open.",
+    "sellersprite.reverseKeywords.success": "Export imported successfully: {count} keyword rows available.",
+    "sellersprite.reverseKeywords.noRows": "The export completed, but no keyword rows are available to display.",
+    "sellersprite.reverseKeywords.needsHuman": "SellerSprite needs your action in Chrome before this export can continue.",
+    "sellersprite.reverseKeywords.captcha": "A SellerSprite captcha or verification is shown. Complete it in Chrome, then retry.",
+    "sellersprite.reverseKeywords.authentication": "Sign in to SellerSprite in Chrome, then retry the export.",
+    "sellersprite.reverseKeywords.permission": "Your SellerSprite account does not have permission for this export.",
+    "sellersprite.reverseKeywords.disabled": "SellerSprite browser automation is disabled or unavailable. Enable it and verify the Chrome extension.",
+    "sellersprite.reverseKeywords.cancelled": "The reverse-keyword export was cancelled.",
+    "sellersprite.reverseKeywords.failed": "The reverse-keyword export could not be completed. Review the local service status and retry.",
+    "sellersprite.reverseKeywords.requestFailed": "The local service could not start the reverse-keyword export. Check the ASIN and retry.",
+    "sellersprite.reverseKeywords.table.keyword": "Keyword",
+    "sellersprite.reverseKeywords.table.searchVolume": "Search volume",
+    "sellersprite.reverseKeywords.table.purchaseRate": "Purchase rate",
+    "sellersprite.reverseKeywords.table.competingProducts": "Competing products",
+    "sellersprite.reverseKeywords.table.trend": "Trend",
     "chat.placeholder": "Ask about the current run or selected ASIN",
     "chat.send": "Send",
     "chat.title": "Selection Assistant",
@@ -310,6 +332,27 @@ const I18N = {
     "browser.supplierDetail": "1688 详情补采",
     "browser.taskType": "浏览器任务",
     "browser.url": "页面链接",
+    "sellersprite.reverseKeywords.title": "卖家精灵反查关键词导出",
+    "sellersprite.reverseKeywords.subtitle": "为一个 Amazon US ASIN 导出并导入最多 20 条结构化反查关键词数据。",
+    "sellersprite.reverseKeywords.asin": "Amazon US ASIN",
+    "sellersprite.reverseKeywords.asinPlaceholder": "10 位 ASIN，例如 B00Q7OAN50",
+    "sellersprite.reverseKeywords.export": "导出反查关键词",
+    "sellersprite.reverseKeywords.running": "正在导出反查关键词，请保持 Chrome 打开。",
+    "sellersprite.reverseKeywords.success": "导出已成功导入：可查看 {count} 条关键词数据。",
+    "sellersprite.reverseKeywords.noRows": "导出已完成，但没有可展示的关键词数据。",
+    "sellersprite.reverseKeywords.needsHuman": "卖家精灵需要你先在 Chrome 中完成操作，才能继续导出。",
+    "sellersprite.reverseKeywords.captcha": "卖家精灵显示了验证码或验证页面。请在 Chrome 中完成验证后重试。",
+    "sellersprite.reverseKeywords.authentication": "请先在 Chrome 中登录卖家精灵，再重试导出。",
+    "sellersprite.reverseKeywords.permission": "你的卖家精灵账号没有此导出功能的权限。",
+    "sellersprite.reverseKeywords.disabled": "卖家精灵浏览器自动化已关闭或不可用。请启用后检查 Chrome 扩展。",
+    "sellersprite.reverseKeywords.cancelled": "反查关键词导出已取消。",
+    "sellersprite.reverseKeywords.failed": "反查关键词导出未能完成。请检查本地服务状态后重试。",
+    "sellersprite.reverseKeywords.requestFailed": "本地服务无法开始反查关键词导出。请检查 ASIN 后重试。",
+    "sellersprite.reverseKeywords.table.keyword": "关键词",
+    "sellersprite.reverseKeywords.table.searchVolume": "搜索量",
+    "sellersprite.reverseKeywords.table.purchaseRate": "购买率",
+    "sellersprite.reverseKeywords.table.competingProducts": "竞品数",
+    "sellersprite.reverseKeywords.table.trend": "趋势",
     "chat.placeholder": "询问当前任务或选中的 ASIN",
     "chat.send": "发送",
     "chat.title": "选品聊天助手",
@@ -654,6 +697,7 @@ function bindActions() {
   $("#alibabaPifatuanForm").addEventListener("submit", checkAlibabaPifatuan);
   $("#alibabaImportForm").addEventListener("submit", importAlibabaPayload);
   $("#browserAgentForm").addEventListener("submit", sendBrowserAgentTask);
+  $("#sellerSpriteReverseKeywordForm").addEventListener("submit", runSellerSpriteReverseKeywords);
   $("#chatForm").addEventListener("submit", sendChatMessage);
 }
 
@@ -849,6 +893,120 @@ async function importAlibabaPayload(event) {
   }
 }
 
+async function runSellerSpriteReverseKeywords(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = $("#sellerSpriteReverseKeywordStatus");
+  const submitButton = form.querySelector("button[type='submit']");
+  const asin = String(new FormData(form).get("asin") || "").trim();
+
+  status.className = "";
+  status.textContent = t("sellersprite.reverseKeywords.running");
+  state.sellerSpriteKeywordRows = [];
+  renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
+  submitButton.disabled = true;
+  try {
+    const result = await postJson("/api/sellersprite/reverse-keywords", { asin });
+    status.className = sellerSpriteStatusClass(result);
+    status.textContent = sellerSpriteStatusText(result);
+    state.sellerSpriteKeywordRows = result?.status === "SUCCESS" && Array.isArray(result.data?.keyword_rows)
+      ? result.data.keyword_rows
+      : [];
+    renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
+  } catch (_error) {
+    status.className = "status-error";
+    status.textContent = t("sellersprite.reverseKeywords.requestFailed");
+    state.sellerSpriteKeywordRows = [];
+    renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
+  } finally {
+    submitButton.disabled = false;
+  }
+}
+
+function sellerSpriteStatusClass(result) {
+  return result?.status === "SUCCESS" ? "status-ok" : "status-error";
+}
+
+function sellerSpriteStatusText(result) {
+  if (result?.status === "SUCCESS") {
+    const rowCount = sellerSpritePublicNumber(result?.data?.row_count);
+    if (rowCount === null) return t("sellersprite.reverseKeywords.noRows");
+    return t("sellersprite.reverseKeywords.success").replace("{count}", sellerSpriteNumberText(rowCount));
+  }
+
+  const errorCode = result?.error_code || result?.status;
+  if (errorCode === "CAPTCHA") return t("sellersprite.reverseKeywords.captcha");
+  if (errorCode === "SELLERSPRITE_LOGIN_REQUIRED") return t("sellersprite.reverseKeywords.authentication");
+  if (errorCode === "SELLERSPRITE_PERMISSION_REQUIRED") return t("sellersprite.reverseKeywords.permission");
+  if (errorCode === "EXTENSION_UNAVAILABLE") return t("sellersprite.reverseKeywords.disabled");
+  if (errorCode === "CANCELLED") return t("sellersprite.reverseKeywords.cancelled");
+  if (result?.status === "NEEDS_HUMAN") return t("sellersprite.reverseKeywords.needsHuman");
+  return t("sellersprite.reverseKeywords.failed");
+}
+
+function renderSellerSpriteKeywordRows(rows) {
+  const results = $("#sellerSpriteReverseKeywordResults");
+  const safeRows = Array.isArray(rows) ? rows.slice(0, 20) : [];
+  if (!safeRows.length) {
+    results.replaceChildren();
+    return;
+  }
+
+  results.innerHTML = `
+    <div class="sellersprite-keyword-table-wrap">
+      <table class="sellersprite-keyword-table">
+        <thead>
+          <tr>
+            <th>${escapeHtml(t("sellersprite.reverseKeywords.table.keyword"))}</th>
+            <th>${escapeHtml(t("sellersprite.reverseKeywords.table.searchVolume"))}</th>
+            <th>${escapeHtml(t("sellersprite.reverseKeywords.table.purchaseRate"))}</th>
+            <th>${escapeHtml(t("sellersprite.reverseKeywords.table.competingProducts"))}</th>
+            <th>${escapeHtml(t("sellersprite.reverseKeywords.table.trend"))}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${safeRows.map((row) => sellerSpriteKeywordRow(row)).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function sellerSpriteKeywordRow(row) {
+  const safeRow = row && typeof row === "object" ? row : {};
+  return `
+    <tr>
+      <td>${escapeHtml(typeof safeRow.keyword === "string" ? safeRow.keyword : "-")}</td>
+      <td>${escapeHtml(sellerSpriteMetricValue(safeRow, "search_volume", "search_volume_lower_bound"))}</td>
+      <td>${escapeHtml(sellerSpriteRateValue(safeRow))}</td>
+      <td>${escapeHtml(sellerSpriteMetricValue(safeRow, "competing_products", "competing_products_lower_bound"))}</td>
+      <td>${escapeHtml(typeof safeRow.trend === "string" && safeRow.trend.trim() ? safeRow.trend : "-")}</td>
+    </tr>
+  `;
+}
+
+function sellerSpriteMetricValue(row, exactField, lowerBoundField) {
+  const exact = sellerSpritePublicNumber(row?.[exactField]);
+  if (exact !== null) return sellerSpriteNumberText(exact);
+  const lowerBound = sellerSpritePublicNumber(row?.[lowerBoundField]);
+  return lowerBound === null ? "-" : `≥${sellerSpriteNumberText(lowerBound)}`;
+}
+
+function sellerSpriteRateValue(row) {
+  const exact = sellerSpritePublicNumber(row?.purchase_rate);
+  if (exact !== null) return `${sellerSpriteNumberText(exact)}%`;
+  const lowerBound = sellerSpritePublicNumber(row?.purchase_rate_lower_bound);
+  return lowerBound === null ? "-" : `≥${sellerSpriteNumberText(lowerBound)}%`;
+}
+
+function sellerSpritePublicNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function sellerSpriteNumberText(value) {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+}
+
 async function sendBrowserAgentTask(event) {
   event.preventDefault();
   const form = new FormData($("#browserAgentForm"));
@@ -938,6 +1096,7 @@ function applyLanguage() {
   renderManualQueue();
   renderConfigStatus();
   renderChatContext();
+  renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
 }
 
 function t(key) {

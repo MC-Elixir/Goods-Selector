@@ -230,6 +230,27 @@
             </div>
           </div>
           <div class="settings-status" id="configStatusGrid"></div>
+          <section class="sellersprite-keyword-card" aria-labelledby="sellerSpriteReverseKeywordTitle">
+            <div class="sellersprite-keyword-card-head">
+              <div>
+                <h3 id="sellerSpriteReverseKeywordTitle" data-i18n="sellersprite.reverseKeywords.title">SellerSprite Reverse Keyword Export</h3>
+                <p data-i18n="sellersprite.reverseKeywords.subtitle">Export and import up to 20 structured reverse-keyword rows for one Amazon US ASIN.</p>
+              </div>
+            </div>
+            <form class="settings-config-form sellersprite-keyword-form" id="sellerSpriteReverseKeywordForm">
+              <label>
+                <span data-i18n="sellersprite.reverseKeywords.asin">Amazon US ASIN</span>
+                <input name="asin" maxlength="10" autocomplete="off" data-i18n-placeholder="sellersprite.reverseKeywords.asinPlaceholder" placeholder="B00Q7OAN50" required>
+              </label>
+              <label>
+                <span data-i18n="run.marketplace">Marketplace</span>
+                <input value="Amazon US" disabled>
+              </label>
+              <button class="primary-button" type="submit" data-i18n="sellersprite.reverseKeywords.export">Export reverse keywords</button>
+              <small id="sellerSpriteReverseKeywordStatus" role="status" aria-live="polite"></small>
+            </form>
+            <div class="sellersprite-keyword-results" id="sellerSpriteReverseKeywordResults" aria-live="polite"></div>
+          </section>
           <form class="settings-config-form browser-agent-form" id="browserAgentForm">
             <label>
               <span data-i18n="browser.taskType">Browser task</span>
