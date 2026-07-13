@@ -163,6 +163,38 @@ def test_sellersprite_reverse_keyword_endpoint_only_returns_safe_result_fields(
     assert "secret" not in str(payload)
 
 
+@pytest.mark.parametrize(
+    "manifest_id",
+    [None, "not-a-uuid", "01234567-89AB-4DEF-8123-456789ABCDEF"],
+    ids=["missing", "invalid", "non-canonical"],
+)
+def test_sellersprite_reverse_keyword_endpoint_never_claims_success_without_canonical_manifest_id(
+    monkeypatch, server_client, manifest_id
+):
+    context = SellerSpriteContext.create("B00Q7OAN50")
+    data = {
+        "row_count": 1,
+        "file_sha256": "c" * 64,
+        "keyword_rows": [{"keyword": "insulated bottle", "search_volume": 10}],
+    }
+    if manifest_id is not None:
+        data["manifest_id"] = manifest_id
+    monkeypatch.setattr(
+        server,
+        "run_reverse_keyword_export",
+        lambda **_: SellerSpriteResult(status="SUCCESS", context=context, data=data),
+    )
+
+    status, payload = server_client.post_json(
+        "/api/sellersprite/reverse-keywords", {"asin": "B00Q7OAN50"}
+    )
+
+    assert status == HTTPStatus.OK
+    assert payload["status"] == "INTERNAL"
+    assert payload["error_code"] == "INTERNAL"
+    assert payload["data"] == {}
+
+
 def test_config_from_body_includes_market_data_requirement():
     config = _config_from_body({
         "category": "Home & Kitchen",

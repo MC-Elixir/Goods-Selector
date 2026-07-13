@@ -86,7 +86,7 @@ class FakeRepository:
 
     def save(self, imported: FakeImported) -> dict[str, str]:
         self.saved.append(imported)
-        return {"id": "manifest-1"}
+        return {"id": "01234567-89ab-4def-8123-456789abcdef"}
 
 
 @pytest.fixture
@@ -248,6 +248,31 @@ def test_export_event_is_recorded_before_repository_failure(fake_dependencies):
     assert result.status == "INTERNAL"
     assert len(exported) == 1
     assert exported[0]["payload"]["file_sha256"] == "a" * 64
+    assert events[-1]["event"] == "sellersprite_failed"
+
+
+@pytest.mark.parametrize(
+    "persisted",
+    [
+        {},
+        {"id": "not-a-uuid"},
+        {"id": "01234567-89AB-4DEF-8123-456789ABCDEF"},
+    ],
+    ids=["missing-id", "invalid-id", "non-canonical-id"],
+)
+def test_success_requires_a_canonical_persisted_manifest_id(fake_dependencies, persisted):
+    dependencies, _session, repository, events = fake_dependencies
+    dependencies.repository = lambda imported: (repository.saved.append(imported), persisted)[1]
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "INTERNAL"
+    assert result.error_code == "INTERNAL"
+    assert repository.saved
+    exported = [event for event in events if event["event"] == "sellersprite_exported"]
+    assert len(exported) == 1
+    assert exported[0]["payload"]["file_sha256"] == "a" * 64
+    assert not [event for event in events if event["event"] == "sellersprite_imported"]
     assert events[-1]["event"] == "sellersprite_failed"
 
 

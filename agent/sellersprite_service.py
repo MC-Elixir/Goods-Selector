@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 from time import monotonic, sleep
 from typing import Any, Callable
+from uuid import UUID
 
 from agent.run_events import record_run_event
 from agent.sellersprite_models import SellerSpriteContext, SellerSpriteLocatorProfile, SellerSpriteResult
@@ -162,11 +163,16 @@ def run_reverse_keyword_export(
             _ensure_not_cancelled(dependencies)
             persisted = _save(dependencies.repository, imported)
             _ensure_not_cancelled(dependencies)
+            manifest_id = _safe_manifest_id(persisted)
+            if manifest_id is None:
+                # The database result closes the artifact-to-manifest evidence
+                # chain.  Do not publish success without its immutable ID.
+                raise SellerSpriteWorkflowError("INTERNAL")
             _record(
                 dependencies,
                 "sellersprite_imported",
                 context,
-                {"row_count": imported.row_count, "manifest_id": _safe_manifest_id(persisted)},
+                {"row_count": imported.row_count, "manifest_id": manifest_id},
             )
             return SellerSpriteResult(
                 status="SUCCESS",
@@ -175,7 +181,7 @@ def run_reverse_keyword_export(
                     "row_count": imported.row_count,
                     "file_sha256": file_sha256,
                     "keyword_rows": keyword_rows,
-                    "manifest_id": _safe_manifest_id(persisted),
+                    "manifest_id": manifest_id,
                 },
             )
         except SellerSpriteWorkflowError as exc:
@@ -252,7 +258,13 @@ def _safe_digest(artifact: Any) -> str | None:
 
 def _safe_manifest_id(persisted: Any) -> str | None:
     value = persisted.get("id") if isinstance(persisted, dict) else None
-    return value if isinstance(value, str) else None
+    if not isinstance(value, str):
+        return None
+    try:
+        canonical = str(UUID(value))
+    except ValueError:
+        return None
+    return canonical if value == canonical else None
 
 
 def _public_keyword_rows(rows: object) -> list[dict[str, Any]]:

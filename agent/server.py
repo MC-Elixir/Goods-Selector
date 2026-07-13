@@ -377,11 +377,9 @@ def _safe_sellersprite_result_data(data: object) -> dict:
     if isinstance(keyword_rows, list):
         safe["keyword_rows"] = _safe_sellersprite_keyword_rows(keyword_rows)
     manifest_id = data.get("manifest_id")
-    if isinstance(manifest_id, str):
-        try:
-            safe["manifest_id"] = str(uuid.UUID(manifest_id))
-        except ValueError:
-            pass
+    canonical_manifest_id = _canonical_sellersprite_manifest_id(manifest_id)
+    if canonical_manifest_id is not None:
+        safe["manifest_id"] = canonical_manifest_id
     return safe
 
 
@@ -419,7 +417,18 @@ def _has_complete_sellersprite_success_evidence(data: dict) -> bool:
         and isinstance(data.get("file_sha256"), str)
         and _SHA256_RE.fullmatch(data["file_sha256"]) is not None
         and isinstance(data.get("keyword_rows"), list)
+        and _canonical_sellersprite_manifest_id(data.get("manifest_id")) is not None
     )
+
+
+def _canonical_sellersprite_manifest_id(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        canonical = str(uuid.UUID(value))
+    except ValueError:
+        return None
+    return canonical if value == canonical else None
 
 
 def _config_from_body(body: dict) -> AgentRunConfig:
