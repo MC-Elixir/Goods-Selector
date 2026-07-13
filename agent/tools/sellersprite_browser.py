@@ -46,6 +46,7 @@ _PROFILE_LOCATOR_NAMES = (
     "asin_input",
     "submit",
     "results_ready",
+    "export_menu",
     "export",
 )
 _LOCATOR_PREFIXES = frozenset(
@@ -201,6 +202,8 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._ensure_not_cancelled()
 
+        self._ensure_not_cancelled()
+        self._click_required("export_menu")
         self._ensure_not_cancelled()
         try:
             snapshot = self._download_observer.snapshot(self.download_dir)

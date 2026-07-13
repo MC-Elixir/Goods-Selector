@@ -25,6 +25,7 @@ _REQUIRED_LOCATOR_NAMES = (
     "asin_input",
     "submit",
     "results_ready",
+    "export_menu",
     "export",
 )
 _SUPPORTED_LOCATOR_PREFIXES = frozenset(
@@ -101,6 +102,7 @@ class SellerSpriteLocatorProfile:
     asin_input: str
     submit: str
     results_ready: str
+    export_menu: str
     export: str
 
     @classmethod

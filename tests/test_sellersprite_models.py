@@ -31,6 +31,7 @@ def _documented_locators() -> dict[str, str]:
         "asin_input": "name=asin",
         "submit": "role=button[name='Search']",
         "results_ready": "css=[data-state='results-ready']",
+        "export_menu": "css=#export-menu",
         "export": "role=button[name='Export']",
     }
 
@@ -173,6 +174,16 @@ def test_profile_requires_panel_open_locator(tmp_path):
         SellerSpriteLocatorProfile.from_json(path)
 
 
+def test_profile_requires_export_menu_locator(tmp_path):
+    path = tmp_path / "profile.json"
+    locators = _documented_locators()
+    locators.pop("export_menu")
+    path.write_text(json.dumps(locators), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="export_menu"):
+        SellerSpriteLocatorProfile.from_json(path)
+
+
 @pytest.mark.parametrize(
     "invalid_locator",
     [
@@ -224,6 +235,7 @@ def test_profile_loads_all_documented_locators(tmp_path):
 
     assert profile.panel_open == "css=#panel-open"
     assert profile.ready == "css=#panel"
+    assert profile.export_menu == "css=#export-menu"
     assert profile.export == "role=button[name='Export']"
 
 

@@ -27,17 +27,21 @@ remains disabled by default.
   `css=#main-sellersprite-extension form[name="header-search-form"] .input-group-suffix`.
 - The reverse-result readiness signal is
   `css=#main-sellersprite-extension .result-number-bar`.
-- A reverse-results export button was observed in an earlier authenticated
-  view as a visible `button` with exact text `导出`; its configured locator
-  must be scoped to the extension root and revalidated after sign-in.
+- In the observed window layout, the export action is first moved into the
+  visible extension control
+  `css=#main-sellersprite-extension .footer-nex .more-btn`. Clicking it opens
+  a document-level Element Plus popover, where the export button is
+  `css=[id^="el-popper-container"] button:has-text("导出")`. The action is
+  opened before the download-directory snapshot and clicked exactly once.
 - The captcha terminal marker exists as
   `css=#main-sellersprite-extension .robot-card-container`; it was present but
   not visible during the authenticated observation.
 - On 2026-07-14 the actual login terminal view was observed as
   `css=#main-sellersprite-extension .ext-sign-in-container`, with visible
   user-login text. This maps to `SELLERSPRITE_LOGIN_REQUIRED`.
-- No permission-required state was observed, so no permission selector is
-  treated as a verified live finding.
+- No permission-required state was observed. The local non-production profile
+  uses the conservative visible-text fallback `text=权限`; it is not treated as
+  a verified permission-state marker until that state is observed.
 
 ## Download mapping
 

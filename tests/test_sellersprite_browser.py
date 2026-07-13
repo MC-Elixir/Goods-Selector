@@ -22,6 +22,7 @@ def valid_profile() -> SellerSpriteLocatorProfile:
         asin_input="css=asin_input",
         submit="css=submit",
         results_ready="css=results_ready",
+        export_menu="css=export_menu",
         export="css=export",
     )
 
@@ -233,7 +234,7 @@ def test_adapter_snapshots_before_single_export_click_and_delegates_download(tmp
     observer = FakeObserver(artifact)
     page = FakePage(
         asin="B00Q7OAN50",
-        visible_markers={"ready", "reverse_keywords", "asin_input", "submit", "results_ready", "export"},
+        visible_markers={"ready", "reverse_keywords", "asin_input", "submit", "results_ready", "export_menu", "export"},
     )
     session = PlaywrightSellerSpriteSession(
         profile=valid_profile(),
@@ -247,7 +248,7 @@ def test_adapter_snapshots_before_single_export_click_and_delegates_download(tmp
     downloaded = session.export_sellersprite_reverse_keywords("B00Q7OAN50")
 
     assert downloaded is artifact
-    assert page.clicked == ["reverse_keywords", "submit", "export"]
+    assert page.clicked == ["reverse_keywords", "submit", "export_menu", "export"]
     assert page.filled == {"asin_input": "B00Q7OAN50"}
     assert observer.snapshots == [tmp_path]
     assert observer.waits == [(tmp_path, "snapshot", 17)]
