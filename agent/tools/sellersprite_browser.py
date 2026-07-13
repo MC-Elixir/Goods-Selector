@@ -1,0 +1,325 @@
+"""Deterministic, profile-driven SellerSprite browser operations.
+
+This module deliberately does not discover or synthesize selectors.  A
+human-validated :class:`SellerSpriteLocatorProfile` is the sole authority for
+extension interactions, which keeps the browser workflow safe to attach to a
+user's already-running Chrome session through CDP.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any, Callable
+from urllib.parse import urlparse
+
+from agent.browser_agent import _resolve_cdp_ws
+from agent.sellersprite_models import SellerSpriteContext, SellerSpriteLocatorProfile
+from agent.sellersprite_policy import normalize_sellersprite_error_code, validate_sellersprite_asin
+from agent.tools.browser_downloads import (
+    DownloadError,
+    DownloadSnapshot,
+    DownloadedArtifact,
+    snapshot_download_dir,
+    wait_for_new_download,
+)
+from agent.tools.sellersprite_importer import (
+    ImportedSellerSpriteExport,
+    SellerSpriteImportError,
+    import_sellersprite_export,
+)
+
+
+_AMAZON_US_HOSTS = frozenset({"amazon.com", "www.amazon.com"})
+_ASIN_PATH_RE = re.compile(r"^/dp/(?P<asin>[A-Z0-9]{10})(?:/|$)", re.IGNORECASE)
+_HUMAN_TERMINAL_LOCATORS = (
+    ("captcha", "CAPTCHA"),
+    ("login_required", "SELLERSPRITE_LOGIN_REQUIRED"),
+    ("permission_required", "SELLERSPRITE_PERMISSION_REQUIRED"),
+)
+_PROFILE_LOCATOR_NAMES = (
+    "ready",
+    "login_required",
+    "permission_required",
+    "captcha",
+    "reverse_keywords",
+    "asin_input",
+    "submit",
+    "results_ready",
+    "export",
+)
+_LOCATOR_PREFIXES = frozenset(
+    {"css", "text", "role", "id", "name", "iframe", "shadow"}
+)
+
+
+class SellerSpriteWorkflowError(RuntimeError):
+    """A browser-layer result that is safe to expose to the workflow."""
+
+    def __init__(self, error_code: str) -> None:
+        self.error_code = normalize_sellersprite_error_code(error_code)
+        super().__init__(self.error_code)
+
+
+class FilesystemDownloadObserver:
+    """Small adapter so filesystem observation is fully replaceable in tests."""
+
+    def snapshot(self, path: Path) -> DownloadSnapshot:
+        return snapshot_download_dir(path)
+
+    def wait(
+        self,
+        path: Path,
+        snapshot: DownloadSnapshot,
+        timeout_seconds: int,
+    ) -> DownloadedArtifact:
+        return wait_for_new_download(path, snapshot, timeout_seconds)
+
+
+class PlaywrightSellerSpriteSession:
+    """Attach to Chrome and perform one profile-defined reverse-keyword export."""
+
+    def __init__(
+        self,
+        *,
+        profile: SellerSpriteLocatorProfile,
+        download_dir: Path | str,
+        page_timeout_seconds: int = 45,
+        export_timeout_seconds: int = 120,
+        download_observer: Any | None = None,
+        importer: Callable[[SellerSpriteContext, DownloadedArtifact], ImportedSellerSpriteExport]
+        | None = None,
+        page: Any | None = None,
+        playwright_factory: Callable[[], Any] | None = None,
+        cdp_resolver: Callable[[], str] | None = None,
+    ) -> None:
+        self.profile = profile
+        self.download_dir = Path(download_dir)
+        self.page_timeout_seconds = page_timeout_seconds
+        self.export_timeout_seconds = export_timeout_seconds
+        self._download_observer = download_observer or FilesystemDownloadObserver()
+        self._importer = importer or import_sellersprite_export
+        self._page = page
+        self._playwright_factory = playwright_factory
+        self._cdp_resolver = cdp_resolver or _resolve_cdp_ws
+        self._playwright: Any | None = None
+        self._browser: Any | None = None
+
+    @property
+    def page(self) -> Any:
+        if self._page is None:
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        return self._page
+
+    def __enter__(self) -> "PlaywrightSellerSpriteSession":
+        if self._page is not None:
+            return self
+        try:
+            factory = self._playwright_factory or _default_playwright_factory
+            self._playwright = factory()
+            self._browser = self._playwright.chromium.connect_over_cdp(
+                self._cdp_resolver()
+            )
+            self._page = _first_attached_page(self._browser)
+        except SellerSpriteWorkflowError:
+            raise
+        except Exception as exc:
+            self._close()
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE") from exc
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self._close()
+
+    def open_amazon_product(self, asin: str) -> None:
+        asin = validate_sellersprite_asin(asin)
+        target = f"https://www.amazon.com/dp/{asin}"
+        try:
+            self.page.goto(
+                target,
+                wait_until="domcontentloaded",
+                timeout=self.page_timeout_seconds * 1000,
+            )
+            self.page.wait_for_timeout(5000)
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+        if not _page_asin_matches(self.page, asin):
+            raise SellerSpriteWorkflowError("ASIN_MISMATCH")
+
+    def check_sellersprite_extension(self) -> None:
+        if not _profile_is_valid(self.profile):
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        self._raise_if_human_terminal()
+        if not self._is_visible("ready"):
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+
+    def export_sellersprite_reverse_keywords(self, asin: str) -> DownloadedArtifact:
+        """Click exactly one configured Export control after a directory snapshot."""
+
+        asin = validate_sellersprite_asin(asin)
+        self._raise_if_human_terminal()
+        self._click_required("reverse_keywords")
+        self._raise_if_human_terminal()
+        self._fill_required("asin_input", asin)
+        self._click_required("submit")
+        self._raise_if_human_terminal()
+        if not self._is_visible("results_ready"):
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+
+        try:
+            snapshot = self._download_observer.snapshot(self.download_dir)
+        except DownloadError as exc:
+            raise SellerSpriteWorkflowError(exc.error_code) from exc
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("INVALID_EXPORT") from exc
+
+        self._raise_if_human_terminal()
+        self._click_required("export")
+        return self.wait_for_browser_download(snapshot)
+
+    def wait_for_browser_download(self, snapshot: DownloadSnapshot) -> DownloadedArtifact:
+        try:
+            return self._download_observer.wait(
+                self.download_dir,
+                snapshot,
+                self.export_timeout_seconds,
+            )
+        except DownloadError as exc:
+            raise SellerSpriteWorkflowError(exc.error_code) from exc
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("DOWNLOAD_TIMEOUT") from exc
+
+    def import_sellersprite_export(
+        self,
+        context: SellerSpriteContext,
+        artifact: DownloadedArtifact,
+    ) -> ImportedSellerSpriteExport:
+        try:
+            return self._importer(context, artifact)
+        except SellerSpriteImportError as exc:
+            raise SellerSpriteWorkflowError(exc.error_code) from exc
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("INVALID_EXPORT") from exc
+
+    def _click_required(self, locator_name: str) -> None:
+        if not self._is_visible(locator_name):
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        try:
+            self._locator(locator_name).click(timeout=self.page_timeout_seconds * 1000)
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+
+    def _fill_required(self, locator_name: str, value: str) -> None:
+        if not self._is_visible(locator_name):
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        try:
+            self._locator(locator_name).fill(
+                value,
+                timeout=self.page_timeout_seconds * 1000,
+            )
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+
+    def _raise_if_human_terminal(self) -> None:
+        for locator_name, error_code in _HUMAN_TERMINAL_LOCATORS:
+            if self._is_visible(locator_name):
+                raise SellerSpriteWorkflowError(error_code)
+
+    def _is_visible(self, locator_name: str) -> bool:
+        try:
+            return bool(self._locator(locator_name).is_visible())
+        except Exception:
+            return False
+
+    def _locator(self, locator_name: str) -> Any:
+        # The profile validates this locator's syntax at load time.  Passing it
+        # verbatim preserves its explicit selector engine and forbids generated
+        # selectors or coordinate-based interactions.
+        value = getattr(self.profile, locator_name)
+        prefix, _separator, payload = value.partition("=")
+        if prefix == "iframe":
+            frame_selector, target_selector = _split_nested_locator(payload)
+            return self.page.frame_locator(frame_selector).locator(target_selector)
+        if prefix == "shadow":
+            host_selector, target_selector = _split_nested_locator(payload)
+            # Playwright locators pierce an open shadow root.  The explicit
+            # host/target profile boundary prevents discovery or selector
+            # generation; a closed root simply reports unavailable upstream.
+            return self.page.locator(host_selector).locator(target_selector)
+        return self.page.locator(value)
+
+    def _close(self) -> None:
+        browser, playwright = self._browser, self._playwright
+        self._browser = None
+        self._playwright = None
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+        if playwright is not None:
+            try:
+                playwright.stop()
+            except Exception:
+                pass
+
+
+def _default_playwright_factory() -> Any:
+    from playwright.sync_api import sync_playwright
+
+    return sync_playwright().start()
+
+
+def _first_attached_page(browser: Any) -> Any:
+    for context in getattr(browser, "contexts", []):
+        pages = getattr(context, "pages", [])
+        if pages:
+            return pages[0]
+    raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+
+
+def _page_asin_matches(page: Any, asin: str) -> bool:
+    """Accept only a final Amazon US `/dp/<ASIN>` URL for this export run."""
+
+    try:
+        parsed = urlparse(str(page.url))
+    except Exception:
+        return False
+    host = (parsed.hostname or "").lower()
+    match = _ASIN_PATH_RE.match(parsed.path)
+    return bool(match and host in _AMAZON_US_HOSTS and match.group("asin").upper() == asin)
+
+
+def _profile_is_valid(profile: SellerSpriteLocatorProfile) -> bool:
+    """Defend against callers bypassing ``SellerSpriteLocatorProfile.from_json``."""
+
+    for name in _PROFILE_LOCATOR_NAMES:
+        value = getattr(profile, name, None)
+        if not _locator_value_is_valid(value):
+            return False
+    return True
+
+
+def _locator_value_is_valid(value: object, *, nested: bool = False) -> bool:
+    if not isinstance(value, str):
+        return False
+    prefix, separator, selector = value.partition("=")
+    if not separator or prefix not in _LOCATOR_PREFIXES or not selector.strip():
+        return False
+    if prefix not in {"iframe", "shadow"}:
+        return True
+    if nested:
+        return False
+    try:
+        outer, inner = _split_nested_locator(selector)
+    except SellerSpriteWorkflowError:
+        return False
+    return _locator_value_is_valid(outer, nested=True) and _locator_value_is_valid(
+        inner, nested=True
+    )
+
+
+def _split_nested_locator(value: str) -> tuple[str, str]:
+    outer, separator, inner = value.partition(">>")
+    if not separator or not outer.strip() or not inner.strip():
+        raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+    return outer.strip(), inner.strip()
