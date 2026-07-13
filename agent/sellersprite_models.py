@@ -16,6 +16,7 @@ from agent.sellersprite_policy import (
 
 
 _REQUIRED_LOCATOR_NAMES = (
+    "panel_open",
     "ready",
     "login_required",
     "permission_required",
@@ -91,6 +92,7 @@ class SellerSpriteResult:
 
 @dataclass(frozen=True)
 class SellerSpriteLocatorProfile:
+    panel_open: str
     ready: str
     login_required: str
     permission_required: str

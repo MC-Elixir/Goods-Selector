@@ -22,6 +22,7 @@ settings_module = importlib.import_module("config.settings")
 
 def _documented_locators() -> dict[str, str]:
     return {
+        "panel_open": "css=#panel-open",
         "ready": "css=#panel",
         "login_required": "text=Log in",
         "permission_required": "css=[data-state='permission-required']",
@@ -162,6 +163,16 @@ def test_profile_rejects_missing_required_locator(tmp_path):
         SellerSpriteLocatorProfile.from_json(missing_path)
 
 
+def test_profile_requires_panel_open_locator(tmp_path):
+    path = tmp_path / "profile.json"
+    locators = _documented_locators()
+    locators.pop("panel_open")
+    path.write_text(json.dumps(locators), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="panel_open"):
+        SellerSpriteLocatorProfile.from_json(path)
+
+
 @pytest.mark.parametrize(
     "invalid_locator",
     [
@@ -211,6 +222,7 @@ def test_profile_loads_all_documented_locators(tmp_path):
 
     profile = SellerSpriteLocatorProfile.from_json(path)
 
+    assert profile.panel_open == "css=#panel-open"
     assert profile.ready == "css=#panel"
     assert profile.export == "role=button[name='Export']"
 

@@ -37,6 +37,7 @@ _HUMAN_TERMINAL_LOCATORS = (
     ("permission_required", "SELLERSPRITE_PERMISSION_REQUIRED"),
 )
 _PROFILE_LOCATOR_NAMES = (
+    "panel_open",
     "ready",
     "login_required",
     "permission_required",
@@ -178,6 +179,9 @@ class PlaywrightSellerSpriteSession:
         if not _profile_is_valid(self.profile):
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._raise_if_human_terminal()
+        if not self._is_visible("ready"):
+            self._click_required("panel_open")
+            self._raise_if_human_terminal()
         if not self._is_visible("ready"):
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._ensure_not_cancelled()

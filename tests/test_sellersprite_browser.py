@@ -13,6 +13,7 @@ from agent.tools.sellersprite_browser import (
 
 def valid_profile() -> SellerSpriteLocatorProfile:
     return SellerSpriteLocatorProfile(
+        panel_open="css=panel_open",
         ready="css=ready",
         login_required="css=login_required",
         permission_required="css=permission_required",
@@ -193,6 +194,36 @@ def test_adapter_stops_for_human_terminal_state_without_clicking(tmp_path):
 
     with pytest.raises(SellerSpriteWorkflowError, match="CAPTCHA"):
         session.check_sellersprite_extension()
+
+    assert page.clicked == []
+
+
+def test_adapter_opens_collapsed_panel_before_ready_check(tmp_path):
+    page = FakePage(asin="B00Q7OAN50", visible_markers={"panel_open"})
+    page.on_click["panel_open"] = lambda: page.visible_markers.add("ready")
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        page=page,
+    )
+
+    session.check_sellersprite_extension()
+
+    assert page.clicked == ["panel_open"]
+
+
+def test_adapter_does_not_toggle_an_already_open_panel(tmp_path):
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"panel_open", "ready"},
+    )
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        page=page,
+    )
+
+    session.check_sellersprite_extension()
 
     assert page.clicked == []
 
