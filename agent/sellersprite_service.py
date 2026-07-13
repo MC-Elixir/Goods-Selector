@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
+import re
 from time import monotonic, sleep
 from typing import Any, Callable
 
@@ -22,6 +24,27 @@ _HUMAN_OUTCOME_CODES = frozenset(
     {"EXTENSION_UNAVAILABLE", "SELLERSPRITE_LOGIN_REQUIRED", "SELLERSPRITE_PERMISSION_REQUIRED", "CAPTCHA"}
 )
 _RETRYABLE_CODES = frozenset({"EXPORT_FAILED", "DOWNLOAD_TIMEOUT"})
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_PUBLIC_KEYWORD_NUMERIC_FIELDS = (
+    "search_volume",
+    "search_volume_lower_bound",
+    "purchase_volume",
+    "purchase_volume_lower_bound",
+    "purchase_rate",
+    "purchase_rate_lower_bound",
+    "competing_products",
+    "competing_products_lower_bound",
+    "spr",
+    "spr_lower_bound",
+    "organic_rank",
+    "organic_rank_lower_bound",
+    "ad_rank",
+    "ad_rank_lower_bound",
+    "trend_lower_bound",
+    "trend_duration_seconds",
+    "duration_seconds",
+)
+_PUBLIC_KEYWORD_TEXT_FIELDS = ("trend", "duration")
 
 
 @dataclass
@@ -123,11 +146,18 @@ def run_reverse_keyword_export(
                 imported = dependencies.importer(context, artifact)
             except SellerSpriteImportError as exc:
                 raise SellerSpriteWorkflowError(exc.error_code) from exc
+            file_sha256 = _safe_digest(getattr(imported, "artifact", None))
+            if file_sha256 is None:
+                # The importer is the integrity boundary.  A successful export
+                # is not public evidence unless its imported artifact has a
+                # canonical SHA-256 digest.
+                raise SellerSpriteWorkflowError("INVALID_EXPORT")
+            keyword_rows = _public_keyword_rows(getattr(imported, "rows", []))
             _record(
                 dependencies,
                 "sellersprite_exported",
                 context,
-                {"file_sha256": _safe_digest(artifact)},
+                {"file_sha256": file_sha256},
             )
             _ensure_not_cancelled(dependencies)
             persisted = _save(dependencies.repository, imported)
@@ -143,7 +173,8 @@ def run_reverse_keyword_export(
                 context=context,
                 data={
                     "row_count": imported.row_count,
-                    "keywords": [row.get("keyword") for row in imported.rows],
+                    "file_sha256": file_sha256,
+                    "keyword_rows": keyword_rows,
                     "manifest_id": _safe_manifest_id(persisted),
                 },
             )
@@ -214,9 +245,50 @@ def _default_repository(imported: ImportedSellerSpriteExport) -> dict[str, Any]:
 
 def _safe_digest(artifact: Any) -> str | None:
     digest = getattr(artifact, "sha256", None)
-    return digest if isinstance(digest, str) and len(digest) == 64 else None
+    if not isinstance(digest, str) or _SHA256_RE.fullmatch(digest) is None:
+        return None
+    return digest.lower()
 
 
 def _safe_manifest_id(persisted: Any) -> str | None:
     value = persisted.get("id") if isinstance(persisted, dict) else None
     return value if isinstance(value, str) else None
+
+
+def _public_keyword_rows(rows: object) -> list[dict[str, Any]]:
+    """Return a bounded, typed projection of normalized importer rows.
+
+    ``raw_payload`` belongs to the persisted audit manifest only.  The public
+    workflow result deliberately contains only documented metrics so callers
+    never receive source columns, paths, or other implementation details.
+    """
+    if not isinstance(rows, list):
+        return []
+    public_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        keyword = row.get("keyword")
+        if not isinstance(keyword, str) or not keyword.strip():
+            continue
+        safe_row: dict[str, Any] = {"keyword": keyword.strip()}
+        for field in _PUBLIC_KEYWORD_NUMERIC_FIELDS:
+            value = row.get(field)
+            if _is_safe_metric_number(value):
+                safe_row[field] = value
+        for field in _PUBLIC_KEYWORD_TEXT_FIELDS:
+            value = row.get(field)
+            if isinstance(value, str) and value.strip():
+                safe_row[field] = value.strip()
+        public_rows.append(safe_row)
+        if len(public_rows) == 20:
+            break
+    return public_rows
+
+
+def _is_safe_metric_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and isfinite(value)
+    )

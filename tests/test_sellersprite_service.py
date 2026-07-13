@@ -32,6 +32,7 @@ def valid_profile() -> SellerSpriteLocatorProfile:
 class FakeImported:
     rows: list[dict[str, object]]
     row_count: int
+    artifact: object
 
 
 class FakeSession:
@@ -94,8 +95,12 @@ def fake_dependencies():
     repository = FakeRepository()
     events: list[dict[str, object]] = []
     imported = FakeImported(
-        rows=[{"keyword": "umbrella"}, {"keyword": "patio umbrella"}],
+        rows=[
+            {"keyword": "umbrella", "search_volume": 1000},
+            {"keyword": "patio umbrella", "search_volume_lower_bound": 10_000},
+        ],
         row_count=2,
+        artifact=type("Artifact", (), {"sha256": "a" * 64})(),
     )
     dependencies = SellerSpriteDependencies(
         profile=valid_profile(),
@@ -120,8 +125,38 @@ def test_workflow_opens_checks_exports_imports_and_persists(fake_dependencies):
     assert session.checked == 1
     assert session.exported == 1
     assert result.data["row_count"] == 2
-    assert len(result.data["keywords"]) == 2
+    assert result.data["file_sha256"] == "a" * 64
+    assert result.data["keyword_rows"] == [
+        {"keyword": "umbrella", "search_volume": 1000},
+        {"keyword": "patio umbrella", "search_volume_lower_bound": 10_000},
+    ]
     assert repository.saved and events[-1]["event"] == "sellersprite_imported"
+
+
+def test_success_evidence_is_bounded_structured_and_does_not_expose_raw_payload(fake_dependencies):
+    dependencies, _session, _repository, _events = fake_dependencies
+    dependencies.importer = lambda _context, _artifact: FakeImported(
+        rows=[
+            {
+                "keyword": f"keyword {index}",
+                "search_volume": index,
+                "raw_payload": {"cookie": "secret"},
+                "untrusted_metric": "not-public",
+            }
+            for index in range(21)
+        ],
+        row_count=21,
+        artifact=type("Artifact", (), {"sha256": "b" * 64})(),
+    )
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "SUCCESS"
+    assert result.data["row_count"] == 21
+    assert result.data["file_sha256"] == "b" * 64
+    assert len(result.data["keyword_rows"]) == 20
+    assert result.data["keyword_rows"][0] == {"keyword": "keyword 0", "search_volume": 0}
+    assert all("raw_payload" not in row and "untrusted_metric" not in row for row in result.data["keyword_rows"])
 
 
 @pytest.mark.parametrize(

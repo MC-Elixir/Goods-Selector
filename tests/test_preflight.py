@@ -78,6 +78,7 @@ def test_seller_sprite_browser_preflight_is_independent_of_mjjl(monkeypatch, tmp
     monkeypatch.setattr(settings, "sellersprite_browser_locator_profile_path", str(profile))
     monkeypatch.setattr(settings, "sellersprite_browser_download_dir", str(download_dir))
     monkeypatch.setattr(preflight, "_resolve_cdp_ws", lambda: "ws://127.0.0.1:9222/devtools/browser/id")
+    monkeypatch.setattr(preflight, "_assert_cdp_websocket_reachable", lambda _value: None)
 
     check = preflight._check_seller_sprite_browser()
 
@@ -87,6 +88,37 @@ def test_seller_sprite_browser_preflight_is_independent_of_mjjl(monkeypatch, tmp
         "detail": "Chrome CDP, locator profile, and download directory verified",
         "level": "ok",
     }
+
+
+def test_seller_sprite_browser_preflight_warns_when_raw_cdp_websocket_is_unreachable(monkeypatch, tmp_path):
+    profile = tmp_path / "locators.json"
+    profile.write_text(json.dumps({
+        "ready": "css=.ready", "login_required": "css=.login",
+        "permission_required": "css=.permission", "captcha": "css=.captcha",
+        "reverse_keywords": "css=.reverse", "asin_input": "css=input",
+        "submit": "css=.submit", "results_ready": "css=.results", "export": "css=.export",
+    }), encoding="utf-8")
+    download_dir = tmp_path / "downloads"
+    download_dir.mkdir()
+    monkeypatch.setattr(settings, "sellersprite_browser_enabled", True)
+    monkeypatch.setattr(settings, "sellersprite_browser_locator_profile_path", str(profile))
+    monkeypatch.setattr(settings, "sellersprite_browser_download_dir", str(download_dir))
+    monkeypatch.delenv("BU_CDP_HTTP", raising=False)
+    monkeypatch.setenv("BU_CDP_WS", "ws://stale.example.invalid:9222/devtools/browser/id")
+    attempted = []
+
+    def reject_connection(address, timeout):
+        attempted.append((address, timeout))
+        raise OSError("unreachable")
+
+    monkeypatch.setattr(preflight.socket, "create_connection", reject_connection)
+
+    check = preflight._check_seller_sprite_browser()
+
+    assert check["key"] == "seller_sprite_browser"
+    assert check["level"] == "warning"
+    assert "connection unavailable" in check["label"].lower()
+    assert attempted == [(("stale.example.invalid", 9222), 2.0)]
 
 
 def test_alibaba_open_preflight_ok_after_successful_diagnostic(monkeypatch):

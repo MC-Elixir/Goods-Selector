@@ -59,6 +59,16 @@ def test_sellersprite_reverse_keyword_endpoint_rejects_invalid_asin(server_clien
     assert "ASIN" in payload["error"]
 
 
+@pytest.mark.parametrize("asin", [1234567890, True, ["B00Q7OAN50"], {"asin": "B00Q7OAN50"}])
+def test_sellersprite_reverse_keyword_endpoint_rejects_non_string_asin(server_client, asin):
+    status, payload = server_client.post_json(
+        "/api/sellersprite/reverse-keywords", {"asin": asin}
+    )
+
+    assert status == HTTPStatus.BAD_REQUEST
+    assert "ASIN" in payload["error"]
+
+
 def test_sellersprite_reverse_keyword_endpoint_rejects_non_object_json(server_client):
     status, payload = server_client.post_json(
         "/api/sellersprite/reverse-keywords", ["B00Q7OAN50"]
@@ -114,8 +124,17 @@ def test_sellersprite_reverse_keyword_endpoint_only_returns_safe_result_fields(
         status="SUCCESS",
         context=context,
         data={
-            "row_count": 1,
-            "keywords": ["insulated bottle"],
+            "row_count": 21,
+            "file_sha256": "c" * 64,
+            "keyword_rows": [
+                {
+                    "keyword": f"insulated bottle {index}",
+                    "search_volume": index,
+                    "raw_payload": {"cookie": "secret"},
+                    "untrusted_metric": "not-public",
+                }
+                for index in range(21)
+            ],
             "manifest_id": manifest_id,
             "download_path": "/secret/download.csv",
             "cookies": "session=secret",
@@ -129,11 +148,18 @@ def test_sellersprite_reverse_keyword_endpoint_only_returns_safe_result_fields(
     )
 
     assert status == HTTPStatus.OK
-    assert payload["data"] == {
-        "row_count": 1,
-        "keywords": ["insulated bottle"],
-        "manifest_id": manifest_id,
+    assert payload["data"]["row_count"] == 21
+    assert payload["data"]["file_sha256"] == "c" * 64
+    assert payload["data"]["manifest_id"] == manifest_id
+    assert len(payload["data"]["keyword_rows"]) == 20
+    assert payload["data"]["keyword_rows"][0] == {
+        "keyword": "insulated bottle 0",
+        "search_volume": 0,
     }
+    assert all(
+        set(row) <= {"keyword", "search_volume"}
+        for row in payload["data"]["keyword_rows"]
+    )
     assert "secret" not in str(payload)
 
 

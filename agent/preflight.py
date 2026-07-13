@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import socket
 import time
 from pathlib import Path
 from typing import Any
@@ -94,8 +95,7 @@ def _check_seller_sprite_browser() -> dict[str, Any]:
 
     try:
         cdp_ws = _resolve_cdp_ws()
-        if not _is_safe_cdp_websocket(cdp_ws):
-            raise ValueError("unusable CDP websocket")
+        _assert_cdp_websocket_reachable(cdp_ws)
     except Exception:
         return _warn(key, "SellerSprite browser Chrome connection unavailable", "Start Chrome remote debugging and configure CDP")
 
@@ -125,6 +125,20 @@ def _is_safe_cdp_websocket(value: object) -> bool:
     except ValueError:
         return False
     return parsed.scheme in {"ws", "wss"} and bool(parsed.hostname)
+
+
+def _assert_cdp_websocket_reachable(value: object, *, timeout_seconds: float = 2.0) -> None:
+    """Perform a bounded DNS/TCP reachability check without browser actions."""
+    if not _is_safe_cdp_websocket(value):
+        raise ValueError("unusable CDP websocket")
+    parsed = urlparse(value)
+    assert parsed.hostname is not None  # Guarded by _is_safe_cdp_websocket.
+    try:
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    except ValueError as exc:
+        raise ValueError("unusable CDP websocket") from exc
+    with socket.create_connection((parsed.hostname, port), timeout=timeout_seconds):
+        pass
 
 
 def _check_alibaba_open() -> dict[str, Any]:

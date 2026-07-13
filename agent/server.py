@@ -5,6 +5,7 @@ import csv
 import json
 import mimetypes
 import os
+import re
 import uuid
 from io import StringIO
 from http import HTTPStatus
@@ -39,6 +40,17 @@ from matchers.imported_suppliers import import_alibaba_supplier_payload, list_im
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = PROJECT_ROOT / "webui"
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_PUBLIC_SELLERSPRITE_NUMERIC_FIELDS = frozenset({
+    "search_volume", "search_volume_lower_bound",
+    "purchase_volume", "purchase_volume_lower_bound",
+    "purchase_rate", "purchase_rate_lower_bound",
+    "competing_products", "competing_products_lower_bound",
+    "spr", "spr_lower_bound", "organic_rank", "organic_rank_lower_bound",
+    "ad_rank", "ad_rank_lower_bound", "trend_lower_bound",
+    "trend_duration_seconds", "duration_seconds",
+})
+_PUBLIC_SELLERSPRITE_TEXT_FIELDS = frozenset({"trend", "duration"})
 
 
 class AgentRequestHandler(SimpleHTTPRequestHandler):
@@ -302,7 +314,9 @@ def _handle_browser_agent_request(body: dict) -> tuple[HTTPStatus, dict]:
 
 def _handle_sellersprite_reverse_keyword_request(body: dict) -> dict:
     """Run one bounded browser export and expose only its public evidence."""
-    asin = validate_sellersprite_asin(str(body.get("asin") or ""))
+    # Do not stringify JSON scalars: ``1234567890`` and ``true`` must never
+    # become valid-looking ASINs at the API boundary.
+    asin = validate_sellersprite_asin(body.get("asin"))
     sourcing_run_id = _optional_sellersprite_sourcing_run_id(body.get("sourcing_run_id"))
     result = run_reverse_keyword_export(asin=asin, sourcing_run_id=sourcing_run_id)
     return _safe_sellersprite_result_payload(result)
@@ -327,16 +341,25 @@ def _safe_sellersprite_result_payload(result: SellerSpriteResult) -> dict:
     compact keyword evidence returned by the service.
     """
     context = result.context
+    safe_data = _safe_sellersprite_result_data(result.data)
+    status = result.status
+    error_code = result.error_code
+    if status == "SUCCESS" and not _has_complete_sellersprite_success_evidence(safe_data):
+        # Never claim a successful browser export if an injected/broken service
+        # result omitted the immutable evidence required by this contract.
+        status = "INTERNAL"
+        error_code = "INTERNAL"
+        safe_data = {}
     return {
-        "status": result.status,
-        "error_code": result.error_code,
+        "status": status,
+        "error_code": error_code,
         "context": {
             "asin": context.asin,
             "sourcing_run_id": context.sourcing_run_id,
             "call_id": context.call_id,
             "observed_at": context.observed_at,
         },
-        "data": _safe_sellersprite_result_data(result.data),
+        "data": safe_data,
     }
 
 
@@ -347,9 +370,12 @@ def _safe_sellersprite_result_data(data: object) -> dict:
     row_count = data.get("row_count")
     if isinstance(row_count, int) and not isinstance(row_count, bool) and row_count >= 0:
         safe["row_count"] = row_count
-    keywords = data.get("keywords")
-    if isinstance(keywords, list) and all(isinstance(keyword, str) for keyword in keywords):
-        safe["keywords"] = keywords
+    file_sha256 = data.get("file_sha256")
+    if isinstance(file_sha256, str) and _SHA256_RE.fullmatch(file_sha256):
+        safe["file_sha256"] = file_sha256.lower()
+    keyword_rows = data.get("keyword_rows")
+    if isinstance(keyword_rows, list):
+        safe["keyword_rows"] = _safe_sellersprite_keyword_rows(keyword_rows)
     manifest_id = data.get("manifest_id")
     if isinstance(manifest_id, str):
         try:
@@ -357,6 +383,43 @@ def _safe_sellersprite_result_data(data: object) -> dict:
         except ValueError:
             pass
     return safe
+
+
+def _safe_sellersprite_keyword_rows(rows: list[object]) -> list[dict]:
+    safe_rows: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        keyword = row.get("keyword")
+        if not isinstance(keyword, str) or not keyword.strip():
+            continue
+        safe_row: dict = {"keyword": keyword.strip()}
+        for field in _PUBLIC_SELLERSPRITE_NUMERIC_FIELDS:
+            value = row.get(field)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                # JSON serialization rejects only NaN/Infinity inconsistently;
+                # a string comparison keeps this small boundary dependency-free.
+                if value == value and value not in (float("inf"), float("-inf")):
+                    safe_row[field] = value
+        for field in _PUBLIC_SELLERSPRITE_TEXT_FIELDS:
+            value = row.get(field)
+            if isinstance(value, str) and value.strip():
+                safe_row[field] = value.strip()
+        safe_rows.append(safe_row)
+        if len(safe_rows) == 20:
+            break
+    return safe_rows
+
+
+def _has_complete_sellersprite_success_evidence(data: dict) -> bool:
+    return (
+        isinstance(data.get("row_count"), int)
+        and not isinstance(data.get("row_count"), bool)
+        and data["row_count"] >= 0
+        and isinstance(data.get("file_sha256"), str)
+        and _SHA256_RE.fullmatch(data["file_sha256"]) is not None
+        and isinstance(data.get("keyword_rows"), list)
+    )
 
 
 def _config_from_body(body: dict) -> AgentRunConfig:
