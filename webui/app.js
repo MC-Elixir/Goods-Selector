@@ -47,6 +47,7 @@ const I18N = {
     "sellersprite.reverseKeywords.export": "Export reverse keywords",
     "sellersprite.reverseKeywords.running": "Exporting reverse keywords. Keep Chrome open.",
     "sellersprite.reverseKeywords.success": "Export imported successfully: {count} keyword rows available.",
+    "sellersprite.reverseKeywords.showing": "Export imported successfully: Showing {shown} of {total} keyword rows.",
     "sellersprite.reverseKeywords.noRows": "The export completed, but no keyword rows are available to display.",
     "sellersprite.reverseKeywords.needsHuman": "SellerSprite needs your action in Chrome before this export can continue.",
     "sellersprite.reverseKeywords.captcha": "A SellerSprite captcha or verification is shown. Complete it in Chrome, then retry.",
@@ -339,6 +340,7 @@ const I18N = {
     "sellersprite.reverseKeywords.export": "导出反查关键词",
     "sellersprite.reverseKeywords.running": "正在导出反查关键词，请保持 Chrome 打开。",
     "sellersprite.reverseKeywords.success": "导出已成功导入：可查看 {count} 条关键词数据。",
+    "sellersprite.reverseKeywords.showing": "导出已成功导入：当前展示 {shown}/{total} 条关键词数据。",
     "sellersprite.reverseKeywords.noRows": "导出已完成，但没有可展示的关键词数据。",
     "sellersprite.reverseKeywords.needsHuman": "卖家精灵需要你先在 Chrome 中完成操作，才能继续导出。",
     "sellersprite.reverseKeywords.captcha": "卖家精灵显示了验证码或验证页面。请在 Chrome 中完成验证后重试。",
@@ -909,9 +911,7 @@ async function runSellerSpriteReverseKeywords(event) {
     const result = await postJson("/api/sellersprite/reverse-keywords", { asin });
     status.className = sellerSpriteStatusClass(result);
     status.textContent = sellerSpriteStatusText(result);
-    state.sellerSpriteKeywordRows = result?.status === "SUCCESS" && Array.isArray(result.data?.keyword_rows)
-      ? result.data.keyword_rows
-      : [];
+    state.sellerSpriteKeywordRows = sellerSpriteKeywordRows(result);
     renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
   } catch (_error) {
     status.className = "status-error";
@@ -929,9 +929,15 @@ function sellerSpriteStatusClass(result) {
 
 function sellerSpriteStatusText(result) {
   if (result?.status === "SUCCESS") {
-    const rowCount = sellerSpritePublicNumber(result?.data?.row_count);
-    if (rowCount === null) return t("sellersprite.reverseKeywords.noRows");
-    return t("sellersprite.reverseKeywords.success").replace("{count}", sellerSpriteNumberText(rowCount));
+    const shown = sellerSpriteKeywordRows(result).length;
+    const total = sellerSpritePublicNumber(result?.data?.row_count);
+    if (!shown) return t("sellersprite.reverseKeywords.noRows");
+    if (total !== null && total > shown) {
+      return t("sellersprite.reverseKeywords.showing")
+        .replace("{shown}", sellerSpriteNumberText(shown))
+        .replace("{total}", sellerSpriteNumberText(total));
+    }
+    return t("sellersprite.reverseKeywords.success").replace("{count}", sellerSpriteNumberText(shown));
   }
 
   const errorCode = result?.error_code || result?.status;
@@ -942,6 +948,12 @@ function sellerSpriteStatusText(result) {
   if (errorCode === "CANCELLED") return t("sellersprite.reverseKeywords.cancelled");
   if (result?.status === "NEEDS_HUMAN") return t("sellersprite.reverseKeywords.needsHuman");
   return t("sellersprite.reverseKeywords.failed");
+}
+
+function sellerSpriteKeywordRows(result) {
+  return result?.status === "SUCCESS" && Array.isArray(result.data?.keyword_rows)
+    ? result.data.keyword_rows.slice(0, 20)
+    : [];
 }
 
 function renderSellerSpriteKeywordRows(rows) {
