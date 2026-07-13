@@ -71,6 +71,38 @@ BU_CDP_HTTP=http://host.docker.internal:9222
 
 系统会从 `${BU_CDP_HTTP}/json/version` 自动解析当前 `webSocketDebuggerUrl`，所以 Chrome 重启后通常不需要重新复制 `/devtools/browser/<id>`。`BU_CDP_WS=ws://.../devtools/browser/<id>` 仍可用于高级固定端点，但 browser id 可能随 Chrome 重启变化。
 
+### SellerSprite 反查关键词浏览器导出（受控功能）
+
+这项功能与上面的通用 Browser Assistant 相互独立：它只处理一个 Amazon **US**
+ASIN 的 SellerSprite 可见反查关键词导出。默认**关闭**，且仓库不会提供或猜测
+SellerSprite locator profile。当前真实页面调查状态见
+[docs/research/sellersprite_dom_investigation.md](docs/research/sellersprite_dom_investigation.md)。
+
+启用前必须由已登录 SellerSprite 的用户在可见 Chrome 中亲自确认，并先完成真实
+DOM、导出表头、扩展版本和 Windows 宿主机到 Docker 下载目录映射的脱敏记录。把
+经过审查的 locator profile 保存在本机受控目录，不要提交 cookies、账号、密钥或
+profile 内容到仓库。常态配置保持：
+
+```dotenv
+SELLERSPRITE_BROWSER_ENABLED=false
+```
+
+在用户明确批准且上述记录完成后，才在本地 `.env` 中设置真实路径与 CDP 入口；
+以下名称是配置项，不是可直接照抄的 profile 或宿主机路径：
+
+```dotenv
+SELLERSPRITE_BROWSER_ENABLED=true
+SELLERSPRITE_BROWSER_LOCATOR_PROFILE_PATH=/app/data/<your-reviewed-profile>.json
+SELLERSPRITE_BROWSER_DOWNLOAD_DIR=/app/data/imports/sellersprite
+SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR=<your-separately-controlled-windows-directory>
+BU_CDP_HTTP=http://host.docker.internal:9222
+```
+
+现场验证只允许在用户显式设置 `SELLERSPRITE_E2E=1` 后运行；该变量是一次性
+用户批准，不是日常开关。遇到 `SELLERSPRITE_LOGIN_REQUIRED`、
+`SELLERSPRITE_PERMISSION_REQUIRED` 或 `CAPTCHA` 时，这些都是终止状态：停止，
+把 `SELLERSPRITE_BROWSER_ENABLED` 设回 `false`，不要重试、绕过或伪造成功。
+
 ## Docker
 
 本项目支持 Docker 部署，**正式跑默认禁用 mock 供应商**（`alibaba_allow_mock_suppliers` 默认 False，compose 环境变量再次硬设 `false`）。
