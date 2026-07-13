@@ -51,10 +51,27 @@ The user configured Chrome to download to the project-controlled WSL path:
   `\\wsl.localhost\Ubuntu\home\dell\code\amazon_selector\data\imports\sellersprite`
 - Docker path: `/app/data/imports/sellersprite`
 
-Both the host-side directory and the Docker path were writable. No actual
-export file was produced after this mapping was configured because the
-extension reached `SELLERSPRITE_LOGIN_REQUIRED` before export. Filename, file
-type, headers, and importer column mappings remain unverified.
+Both the host-side directory and the Docker path were writable. After the user
+confirmed Chrome's download prompt, a real XLSX export was received. The
+filename identifies the Amazon-US ASIN and a result count; it is intentionally
+not reproduced here. The file contained 1,109 normalized rows and was
+persisted with SHA-256
+`5b25b3e03d15f9b931b1c97a5ebdb057a58c7d450d5f3a1c1e2b7b00124d0763`.
+
+The sanitized export header list was:
+
+`流量词`, `关键词翻译`, `AC推荐词`, `流量占比`, `预估周曝光量`, `关键词类型`,
+`转化效果`, `流量词类型`, `自然流量占比`, `广告流量占比`, `自然排名`,
+`自然排名页码`, `更新时间` (twice), `广告排名`, `广告排名页码`, `ABA周排名`,
+`月搜索量`, `SPR`, `标题密度`, `购买量`, `购买率`, `展示量`, `点击量`, `商品数`,
+`需供比`, `广告竞品数`, `点击总占比`, `转化总占比`, `PPC价格`, `建议竞价范围`,
+`前十ASIN`.
+
+The importer now maps `流量词` to `keyword` and `商品数` to
+`competing_products`, and accepts duplicate unmapped headers such as the two
+`更新时间` columns. An explicit automatic E2E rerun with a 300-second observer
+window did not create another file; automated no-prompt download behavior
+therefore remains unverified.
 
 ## Safety and acceptance gate
 
@@ -62,8 +79,8 @@ No cookies, account identifiers, secrets, browser history, query results, or
 screenshots are recorded here. The login terminal outcome was not retried or
 bypassed.
 
-Do not enable browser export or create a production locator profile until the
-user re-authenticates in their visible Chrome session, a permission marker (if
-shown) is recorded, and one controlled export proves the downloaded artifact,
-headers, import normalization, and SQLite manifest. The opt-in E2E test also
-requires explicit `SELLERSPRITE_E2E=1`; a skipped test is not verification.
+Do not enable browser export by default until a permission marker (if shown) is
+recorded and the opt-in automatic E2E completes with Chrome configured for
+non-interactive downloading. The user-approved controlled export has proved
+the artifact, headers, import normalization, and SQLite manifest; the
+automatic no-prompt download variant remains a separate outstanding check.

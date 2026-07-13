@@ -16,6 +16,7 @@ from config.settings import settings
 
 def valid_profile() -> SellerSpriteLocatorProfile:
     return SellerSpriteLocatorProfile(
+        panel_open="css=panel_open",
         ready="css=ready",
         login_required="css=login_required",
         permission_required="css=permission_required",
@@ -24,6 +25,7 @@ def valid_profile() -> SellerSpriteLocatorProfile:
         asin_input="css=asin_input",
         submit="css=submit",
         results_ready="css=results_ready",
+        export_menu="css=export_menu",
         export="css=export",
     )
 

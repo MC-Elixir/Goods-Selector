@@ -61,6 +61,7 @@ def test_seller_sprite_browser_preflight_is_warning_when_disabled(monkeypatch):
 def test_seller_sprite_browser_preflight_is_independent_of_mjjl(monkeypatch, tmp_path):
     profile = tmp_path / "locators.json"
     profile.write_text(json.dumps({
+        "panel_open": "css=.panel-open",
         "ready": "css=.ready",
         "login_required": "css=.login",
         "permission_required": "css=.permission",
@@ -69,6 +70,7 @@ def test_seller_sprite_browser_preflight_is_independent_of_mjjl(monkeypatch, tmp
         "asin_input": "css=input",
         "submit": "css=.submit",
         "results_ready": "css=.results",
+        "export_menu": "css=.export-menu",
         "export": "css=.export",
     }), encoding="utf-8")
     download_dir = tmp_path / "downloads"
@@ -93,10 +95,10 @@ def test_seller_sprite_browser_preflight_is_independent_of_mjjl(monkeypatch, tmp
 def test_seller_sprite_browser_preflight_warns_when_raw_cdp_websocket_is_unreachable(monkeypatch, tmp_path):
     profile = tmp_path / "locators.json"
     profile.write_text(json.dumps({
-        "ready": "css=.ready", "login_required": "css=.login",
+        "panel_open": "css=.panel-open", "ready": "css=.ready", "login_required": "css=.login",
         "permission_required": "css=.permission", "captcha": "css=.captcha",
         "reverse_keywords": "css=.reverse", "asin_input": "css=input",
-        "submit": "css=.submit", "results_ready": "css=.results", "export": "css=.export",
+        "submit": "css=.submit", "results_ready": "css=.results", "export_menu": "css=.export-menu", "export": "css=.export",
     }), encoding="utf-8")
     download_dir = tmp_path / "downloads"
     download_dir.mkdir()

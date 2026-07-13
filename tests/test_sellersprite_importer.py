@@ -84,6 +84,40 @@ def test_import_preserves_compact_chinese_metric_as_a_lower_bound(tmp_path):
     assert imported.rows[0]["search_volume_lower_bound"] == 1_000_000
 
 
+def test_import_accepts_sellersprite_flow_keyword_header(tmp_path):
+    artifact = make_artifact(
+        tmp_path,
+        "流量词,月搜索量,购买量,购买率,商品数\n床单,2510,7358,3.13%,120\n",
+    )
+
+    imported = import_sellersprite_export(SellerSpriteContext.create("B00Q7OAN50"), artifact)
+
+    row = imported.rows[0]
+    assert row["keyword"] == "床单"
+    assert row["search_volume"] == 2510
+    assert row["purchase_volume"] == 7358
+    assert row["purchase_rate"] == 3.13
+    assert row["competing_products"] == 120
+
+
+def test_import_allows_duplicate_unmapped_sellersprite_headers(tmp_path):
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["流量词", "更新时间", "更新时间", "月搜索量"])
+    sheet.append(["床单", "2026-07-01", "2026-07-02", 2510])
+    path = tmp_path / "sellersprite.xlsx"
+    workbook.save(path)
+
+    imported = import_sellersprite_export(
+        SellerSpriteContext.create("B00Q7OAN50"),
+        DownloadedArtifact.from_path(path),
+    )
+
+    assert imported.row_count == 1
+    assert imported.rows[0]["keyword"] == "床单"
+    assert imported.rows[0]["search_volume"] == 2510
+
+
 def test_import_exposes_original_headers_for_csv_and_xlsx(tmp_path):
     csv_artifact = make_artifact(tmp_path, "Keyword,Search Volume\numbrella,1\n")
     csv_import = import_sellersprite_export(SellerSpriteContext.create("B00Q7OAN50"), csv_artifact)

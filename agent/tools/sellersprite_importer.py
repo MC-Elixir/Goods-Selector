@@ -43,6 +43,7 @@ _HEADER_ALIASES = {
     "关键词": "keyword",
     "关键字": "keyword",
     "搜索词": "keyword",
+    "流量词": "keyword",
     "search volume": "search_volume",
     "monthly search volume": "search_volume",
     "searches": "search_volume",
@@ -63,6 +64,7 @@ _HEADER_ALIASES = {
     "competition": "competing_products",
     "竞品数": "competing_products",
     "竞争商品数": "competing_products",
+    "商品数": "competing_products",
     "spr": "spr",
     "organic rank": "organic_rank",
     "natural rank": "organic_rank",
@@ -249,8 +251,6 @@ def _read_xlsx(path: Path) -> tuple[list[str], list[dict[str, Any]]]:
 
 def _validate_headers(headers: list[str]) -> dict[str, str]:
     if not headers or any(not header.strip() for header in headers):
-        raise SellerSpriteImportError("INVALID_EXPORT")
-    if len({_header_key(header) for header in headers}) != len(headers):
         raise SellerSpriteImportError("INVALID_EXPORT")
 
     canonical_headers: dict[str, str] = {}
