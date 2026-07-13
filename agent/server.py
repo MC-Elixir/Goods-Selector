@@ -5,6 +5,7 @@ import csv
 import json
 import mimetypes
 import os
+import uuid
 from io import StringIO
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +30,9 @@ from agent.runner import AGENT_SYSTEM_PROMPT, AgentRuntime
 from agent.run_events import list_run_events
 from agent.state import AgentRunConfig
 from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
+from agent.sellersprite_models import SellerSpriteResult
+from agent.sellersprite_policy import validate_sellersprite_asin
+from agent.sellersprite_service import run_reverse_keyword_export
 from config.settings import settings
 from crawlers.amazon_search import keyword_preview, normalize_keyword
 from matchers.imported_suppliers import import_alibaba_supplier_payload, list_imported_suppliers
@@ -125,6 +129,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/browser-agent":
                 status, payload = _handle_browser_agent_request(body)
                 return self._json(payload, status)
+            if parsed.path == "/api/sellersprite/reverse-keywords":
+                return self._json(_handle_sellersprite_reverse_keyword_request(body))
             if parsed.path == "/api/config/seller-sprite":
                 result = configure_seller_sprite(
                     str(body.get("key") or ""),
@@ -292,6 +298,65 @@ def _handle_browser_agent_request(body: dict) -> tuple[HTTPStatus, dict]:
         keyword=str(body.get("keyword") or ""),
     )
     return HTTPStatus.OK, result
+
+
+def _handle_sellersprite_reverse_keyword_request(body: dict) -> dict:
+    """Run one bounded browser export and expose only its public evidence."""
+    asin = validate_sellersprite_asin(str(body.get("asin") or ""))
+    sourcing_run_id = _optional_sellersprite_sourcing_run_id(body.get("sourcing_run_id"))
+    result = run_reverse_keyword_export(asin=asin, sourcing_run_id=sourcing_run_id)
+    return _safe_sellersprite_result_payload(result)
+
+
+def _optional_sellersprite_sourcing_run_id(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise ValueError("sourcing_run_id must be a UUID")
+    try:
+        return str(uuid.UUID(value.strip()))
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("sourcing_run_id must be a UUID") from exc
+
+
+def _safe_sellersprite_result_payload(result: SellerSpriteResult) -> dict:
+    """Serialize only browser-export fields safe for the local WebUI.
+
+    The importer manifest includes host paths and raw source data; neither is
+    an API contract.  Keep this response limited to run metadata and the
+    compact keyword evidence returned by the service.
+    """
+    context = result.context
+    return {
+        "status": result.status,
+        "error_code": result.error_code,
+        "context": {
+            "asin": context.asin,
+            "sourcing_run_id": context.sourcing_run_id,
+            "call_id": context.call_id,
+            "observed_at": context.observed_at,
+        },
+        "data": _safe_sellersprite_result_data(result.data),
+    }
+
+
+def _safe_sellersprite_result_data(data: object) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    safe: dict = {}
+    row_count = data.get("row_count")
+    if isinstance(row_count, int) and not isinstance(row_count, bool) and row_count >= 0:
+        safe["row_count"] = row_count
+    keywords = data.get("keywords")
+    if isinstance(keywords, list) and all(isinstance(keyword, str) for keyword in keywords):
+        safe["keywords"] = keywords
+    manifest_id = data.get("manifest_id")
+    if isinstance(manifest_id, str):
+        try:
+            safe["manifest_id"] = str(uuid.UUID(manifest_id))
+        except ValueError:
+            pass
+    return safe
 
 
 def _config_from_body(body: dict) -> AgentRunConfig:

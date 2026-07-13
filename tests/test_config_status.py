@@ -80,6 +80,35 @@ def test_config_status_reports_missing_alibaba_parts(monkeypatch):
     assert status["alibaba_open"]["has_access_token"] is False
 
 
+def test_browser_readiness_is_independent_of_mjjl_api_key(monkeypatch):
+    monkeypatch.setattr(settings, "mjjl_api_key", "")
+    monkeypatch.setattr(settings, "sellersprite_browser_enabled", True)
+    monkeypatch.setattr(settings, "sellersprite_browser_locator_profile_path", "/host/profile.json")
+    monkeypatch.setattr(settings, "sellersprite_browser_download_dir", "/container/downloads")
+    monkeypatch.setattr(settings, "sellersprite_browser_host_download_dir", "C:/Downloads")
+    monkeypatch.setattr(settings, "sellersprite_browser_page_timeout_seconds", 45)
+    monkeypatch.setattr(settings, "sellersprite_browser_export_timeout_seconds", 120)
+    monkeypatch.setattr(settings, "sellersprite_browser_min_interval_seconds", 5)
+    monkeypatch.setattr(settings, "sellersprite_browser_max_retries", 1)
+
+    status = get_config_status()
+
+    browser = status["seller_sprite_browser"]
+    assert browser == {
+        "enabled": True,
+        "locator_profile_configured": True,
+        "download_dir_configured": True,
+        "host_download_dir_configured": True,
+        "page_timeout_seconds": 45,
+        "export_timeout_seconds": 120,
+        "min_interval_seconds": 5,
+        "max_retries": 1,
+    }
+    assert "/host/profile.json" not in str(browser)
+    assert "/container/downloads" not in str(browser)
+    assert "C:/Downloads" not in str(browser)
+
+
 def test_configure_seller_sprite_writes_env_without_returning_secret(monkeypatch, tmp_path):
     env_path = tmp_path / ".env"
     env_path.write_text("MJJL_API_KEY=\n", encoding="utf-8")

@@ -69,6 +69,22 @@ def get_config_status() -> dict[str, Any]:
             "cdp_http_configured": bool((os.getenv("BU_CDP_HTTP") or "").strip()),
             "cdp_ws_configured": bool((os.getenv("BU_CDP_WS") or "").strip()),
         },
+        "seller_sprite_browser": {
+            "enabled": bool(settings.sellersprite_browser_enabled),
+            "locator_profile_configured": bool(
+                str(settings.sellersprite_browser_locator_profile_path or "").strip()
+            ),
+            "download_dir_configured": bool(
+                str(settings.sellersprite_browser_download_dir or "").strip()
+            ),
+            "host_download_dir_configured": bool(
+                str(settings.sellersprite_browser_host_download_dir or "").strip()
+            ),
+            "page_timeout_seconds": int(settings.sellersprite_browser_page_timeout_seconds),
+            "export_timeout_seconds": int(settings.sellersprite_browser_export_timeout_seconds),
+            "min_interval_seconds": int(settings.sellersprite_browser_min_interval_seconds),
+            "max_retries": int(settings.sellersprite_browser_max_retries),
+        },
     }
 
 

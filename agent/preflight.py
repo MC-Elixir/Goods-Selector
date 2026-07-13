@@ -6,9 +6,12 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from agent.alibaba_diagnostics import load_alibaba_open_diagnostic
+from agent.browser_agent import _resolve_cdp_ws
 from agent.seller_sprite_diagnostics import load_seller_sprite_diagnostic
+from agent.sellersprite_models import SellerSpriteLocatorProfile
 from config.settings import DATA_DIR, settings
 
 
@@ -16,6 +19,7 @@ def run_preflight() -> dict[str, Any]:
     checks = [
         _check_ppio(),
         _check_seller_sprite(),
+        _check_seller_sprite_browser(),
         _check_alibaba_open(),
         _check_amazon_cookies(),
         _check_1688_cookies(),
@@ -62,6 +66,65 @@ def _check_seller_sprite() -> dict[str, Any]:
             "Run SellerSprite ASIN check before requiring market data",
         )
     return _warn("seller_sprite", "SellerSprite API key missing", "Set MJJL_API_KEY")
+
+
+def _check_seller_sprite_browser() -> dict[str, Any]:
+    """Check the separate browser-export capability without blocking sourcing.
+
+    This intentionally has no dependency on the SellerSprite HTTP API key or
+    its market-data diagnostic.  The browser extension is a distinct,
+    human-authorized local capability and remains an advisory preflight item.
+    """
+    key = "seller_sprite_browser"
+    if not settings.sellersprite_browser_enabled:
+        return _warn(key, "SellerSprite browser disabled", "Set SELLERSPRITE_BROWSER_ENABLED to enable it")
+
+    try:
+        profile_path = str(settings.sellersprite_browser_locator_profile_path or "").strip()
+        if not profile_path:
+            raise ValueError("missing locator profile")
+        SellerSpriteLocatorProfile.from_json(Path(profile_path))
+    except Exception:
+        return _warn(key, "SellerSprite browser locator profile unavailable", "Configure a valid locator profile")
+
+    try:
+        _assert_sellersprite_download_dir_writable()
+    except Exception:
+        return _warn(key, "SellerSprite browser download directory unavailable", "Configure a writable container download directory")
+
+    try:
+        cdp_ws = _resolve_cdp_ws()
+        if not _is_safe_cdp_websocket(cdp_ws):
+            raise ValueError("unusable CDP websocket")
+    except Exception:
+        return _warn(key, "SellerSprite browser Chrome connection unavailable", "Start Chrome remote debugging and configure CDP")
+
+    return _ok(
+        key,
+        "SellerSprite browser ready",
+        "Chrome CDP, locator profile, and download directory verified",
+    )
+
+
+def _assert_sellersprite_download_dir_writable() -> None:
+    raw_path = str(settings.sellersprite_browser_download_dir or "").strip()
+    if not raw_path:
+        raise ValueError("missing container download directory")
+    path = Path(raw_path)
+    path.mkdir(parents=True, exist_ok=True)
+    probe = path / ".sellersprite_write_probe"
+    probe.write_text("ok", encoding="utf-8")
+    probe.unlink(missing_ok=True)
+
+
+def _is_safe_cdp_websocket(value: object) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return parsed.scheme in {"ws", "wss"} and bool(parsed.hostname)
 
 
 def _check_alibaba_open() -> dict[str, Any]:
