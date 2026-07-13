@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from xml.etree.ElementTree import ParseError
+from unittest.mock import patch
+from zipfile import ZipFile
 
 import openpyxl
 import pytest
@@ -120,6 +123,60 @@ def test_import_rejects_empty_or_schema_invalid_csv_exports(tmp_path, name, cont
 
 def test_import_rejects_unreadable_xlsx(tmp_path):
     artifact = make_artifact(tmp_path, "not a workbook", "broken.xlsx")
+
+    with pytest.raises(SellerSpriteImportError, match="INVALID_EXPORT") as error:
+        import_sellersprite_export(SellerSpriteContext.create("B00Q7OAN50"), artifact)
+
+    assert error.value.error_code == "INVALID_EXPORT"
+
+
+@pytest.mark.parametrize(
+    "xlsx_error",
+    [
+        KeyError("xl/workbook.xml"),
+        ParseError("invalid OOXML member"),
+    ],
+)
+def test_import_converts_xlsx_parser_errors_to_invalid_export(tmp_path, xlsx_error):
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Keyword"])
+    sheet.append(["umbrella"])
+    path = tmp_path / "parser-error.xlsx"
+    workbook.save(path)
+    artifact = DownloadedArtifact.from_path(path)
+
+    with patch(
+        "agent.tools.sellersprite_importer.openpyxl.load_workbook",
+        side_effect=xlsx_error,
+    ):
+        with pytest.raises(SellerSpriteImportError, match="INVALID_EXPORT") as error:
+            import_sellersprite_export(SellerSpriteContext.create("B00Q7OAN50"), artifact)
+
+    assert error.value.error_code == "INVALID_EXPORT"
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        {"[Content_Types].xml": "<Types"},
+        {
+            "[Content_Types].xml": (
+                '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                '<Override PartName="/xl/workbook.xml" '
+                'ContentType="application/vnd.openxmlformats-officedocument.'
+                'spreadsheetml.sheet.main+xml"/>'
+                "</Types>"
+            )
+        },
+    ],
+)
+def test_import_rejects_invalid_or_missing_xlsx_zip_members(tmp_path, members):
+    path = tmp_path / "invalid-member.xlsx"
+    with ZipFile(path, "w") as archive:
+        for member, contents in members.items():
+            archive.writestr(member, contents)
+    artifact = DownloadedArtifact.from_path(path)
 
     with pytest.raises(SellerSpriteImportError, match="INVALID_EXPORT") as error:
         import_sellersprite_export(SellerSpriteContext.create("B00Q7OAN50"), artifact)

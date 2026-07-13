@@ -38,6 +38,7 @@ class DownloadSnapshot:
     directory: Path
     names: frozenset[str]
     observed_at: str
+    observed_at_ns: int
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ def snapshot_download_dir(path: Path) -> DownloadSnapshot:
 
     try:
         names = frozenset(entry.name for entry in directory.iterdir())
+        observed_at_ns = directory.stat().st_mtime_ns
     except OSError as exc:
         raise DownloadError("INVALID_EXPORT") from exc
 
@@ -95,6 +97,10 @@ def snapshot_download_dir(path: Path) -> DownloadSnapshot:
         directory=directory,
         names=names,
         observed_at=datetime.now(UTC).isoformat(),
+        # File mtimes are set by the download filesystem.  Use that same
+        # filesystem's directory clock rather than this process's clock so
+        # host/container clock skew cannot reject a real fresh download.
+        observed_at_ns=observed_at_ns,
     )
 
 
@@ -164,7 +170,12 @@ def _is_new_completed_export(path: Path, snapshot: DownloadSnapshot) -> bool:
     if path.suffix.lower() not in ALLOWED_EXPORT_SUFFIXES:
         return False
     try:
-        return path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+        if path.is_symlink() or not path.is_file():
+            return False
+        state = path.stat()
+        # A stale export can be copied into the directory after the snapshot
+        # under a new name.  It is still not evidence of this export action.
+        return state.st_size > 0 and state.st_mtime_ns >= snapshot.observed_at_ns
     except OSError:
         return False
 

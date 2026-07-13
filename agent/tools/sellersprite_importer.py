@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Iterable
-from zipfile import BadZipFile
-
 import openpyxl
 from openpyxl.utils.exceptions import InvalidFileException
 
@@ -231,11 +229,21 @@ def _read_xlsx(path: Path) -> tuple[list[str], list[dict[str, Any]]]:
                     for index, header in enumerate(headers)
                 }
             )
-    except (BadZipFile, OSError, ValueError, InvalidFileException) as exc:
+    except SellerSpriteImportError:
+        raise
+    except Exception as exc:
+        # OOXML is untrusted input.  ``openpyxl`` and its XML/zip backends can
+        # surface different exception classes for malformed members, missing
+        # required parts, or parser failures; none may escape to the API.
         raise SellerSpriteImportError("INVALID_EXPORT") from exc
     finally:
         if workbook is not None:
-            workbook.close()
+            try:
+                workbook.close()
+            except Exception:
+                # Closing a partially initialized workbook must not turn a
+                # safe import failure into an unhandled server exception.
+                pass
     return headers, rows
 
 

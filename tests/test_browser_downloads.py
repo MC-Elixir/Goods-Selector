@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,19 @@ def test_wait_for_new_download_does_not_select_an_old_preexisting_file(tmp_path)
 
     with pytest.raises(DownloadError, match="DOWNLOAD_TIMEOUT") as error:
         wait_for_new_download(tmp_path, before, timeout_seconds=0)
+
+    assert error.value.error_code == "DOWNLOAD_TIMEOUT"
+
+
+def test_wait_for_new_download_rejects_new_name_with_predating_mtime(tmp_path):
+    before = snapshot_download_dir(tmp_path)
+    stale = tmp_path / "late-appearing-stale.csv"
+    stale.write_text("Keyword\numbrella\n", encoding="utf-8")
+    stale_mtime_ns = before.observed_at_ns - 1_000_000_000
+    os.utime(stale, ns=(stale_mtime_ns, stale_mtime_ns))
+
+    with pytest.raises(DownloadError, match="DOWNLOAD_TIMEOUT") as error:
+        wait_for_new_download(tmp_path, before, timeout_seconds=0.3)
 
     assert error.value.error_code == "DOWNLOAD_TIMEOUT"
 
