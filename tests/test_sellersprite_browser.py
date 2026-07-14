@@ -216,6 +216,24 @@ def test_adapter_opens_collapsed_panel_before_ready_check(tmp_path):
     assert page.clicked == ["panel_open"]
 
 
+def test_adapter_waits_for_extension_panel_to_finish_opening(tmp_path):
+    page = FakePage(asin="B00Q7OAN50", visible_markers={"panel_open"})
+
+    def reveal_after_panel_animation(_milliseconds: int) -> None:
+        page.visible_markers.add("ready")
+
+    page.wait_for_timeout = reveal_after_panel_animation
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        page=page,
+    )
+
+    session.check_sellersprite_extension()
+
+    assert page.clicked == ["panel_open"]
+
+
 def test_adapter_does_not_toggle_an_already_open_panel(tmp_path):
     page = FakePage(
         asin="B00Q7OAN50",

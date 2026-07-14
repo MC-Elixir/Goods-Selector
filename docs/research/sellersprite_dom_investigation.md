@@ -78,8 +78,11 @@ after that vendor state is observed and reviewed.
 The daily workflow now uses the volume-backed
 `data/sellersprite_browser_config.json` and applies CDP
 `Browser.setDownloadBehavior` for only the attached browser lifetime before
-the single export click. Its no-prompt automatic E2E still requires a new
-explicit approved live verification; it is not claimed by this investigation.
+the single export click. A user-approved live E2E on 2026-07-14 completed the
+automatic download/import path without a Chrome save confirmation: it imported
+1,110 rows into immutable manifest
+`da33f8b8-2ced-420e-b69c-c5d776c630e3` with SHA-256
+`5ffeda654aa01ec085511bd13cdf57b16dd49062c5fe60dfb47cae293f5c71da`.
 
 ## Safety and acceptance gate
 
@@ -89,5 +92,6 @@ bypassed.
 
 Do not invent a permission or quota locator from normal-page text. The
 user-approved controlled export has proved the artifact, headers, import
-normalization, and SQLite manifest; automatic no-prompt download and any
-unobserved terminal-state locator each remain separate verification gates.
+normalization, SQLite manifest, and automatic no-prompt download. Any
+unobserved permission or quota terminal-state locator remains a separate
+verification gate.

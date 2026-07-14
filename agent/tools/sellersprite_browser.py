@@ -183,6 +183,14 @@ class PlaywrightSellerSpriteSession:
         self._raise_if_human_terminal()
         if not self._is_visible("ready"):
             self._click_required("panel_open")
+            # The extension expands asynchronously after navigation.  Keep a
+            # bounded settling interval before evaluating the explicit ready
+            # marker; do not infer readiness from the click itself.
+            try:
+                self.page.wait_for_timeout(1000)
+            except Exception as exc:
+                raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE") from exc
+            self._ensure_not_cancelled()
             self._raise_if_human_terminal()
         if not self._is_visible("ready"):
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
