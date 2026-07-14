@@ -12,6 +12,7 @@ const state = {
   selectedAsin: "",
   activeSection: "run",
   sellerSpriteKeywordRows: [],
+  sellerSpriteImportHistory: [],
   lang: localStorage.getItem("agentLang") || "en",
 };
 
@@ -700,6 +701,7 @@ function bindActions() {
   $("#alibabaImportForm").addEventListener("submit", importAlibabaPayload);
   $("#browserAgentForm").addEventListener("submit", sendBrowserAgentTask);
   $("#sellerSpriteReverseKeywordForm").addEventListener("submit", runSellerSpriteReverseKeywords);
+  $("#sellerSpriteBrowserConfigForm").addEventListener("submit", configureSellerSpriteBrowser);
   $("#chatForm").addEventListener("submit", sendChatMessage);
 }
 
@@ -713,6 +715,7 @@ async function refreshAll() {
     refreshPrompt(),
     refreshManualQueue(),
     refreshImportedSuppliers(),
+    refreshSellerSpriteImportHistory(),
   ]);
   await refreshResults();
 }
@@ -766,6 +769,34 @@ async function refreshConfigStatus() {
   state.configStatus = data;
   fillAlibabaSearchApiForm(data.alibaba_open || {});
   renderConfigStatus();
+  renderSellerSpriteBrowserCapability(data.seller_sprite_browser || {});
+}
+
+async function refreshSellerSpriteImportHistory() {
+  const data = await getJson("/api/sellersprite/imports?limit=20");
+  state.sellerSpriteImportHistory = Array.isArray(data.items) ? data.items : [];
+  renderSellerSpriteImportHistory(state.sellerSpriteImportHistory);
+}
+
+async function configureSellerSpriteBrowser(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = new FormData(form);
+  const status = $("#sellerSpriteBrowserConfigStatus");
+  try {
+    const result = await postJson("/api/sellersprite/browser-config", {
+      locator_profile_path: String(values.get("locator_profile_path") || ""),
+      download_dir: String(values.get("download_dir") || ""),
+      host_download_dir: String(values.get("host_download_dir") || ""),
+      enabled: Boolean(form.elements.enabled.checked),
+    });
+    status.className = result.status === "ready" ? "status-ok" : "status-error";
+    status.textContent = result.status === "ready" ? "Browser configuration saved." : "Browser configuration is incomplete.";
+    await Promise.all([refreshConfigStatus(), refreshPreflight()]);
+  } catch (error) {
+    status.className = "status-error";
+    status.textContent = error.message;
+  }
 }
 
 async function refreshPrompt() {
@@ -919,7 +950,8 @@ async function runSellerSpriteReverseKeywords(event) {
     state.sellerSpriteKeywordRows = [];
     renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
   } finally {
-    submitButton.disabled = false;
+    updateSellerSpriteExportAvailability();
+    await refreshSellerSpriteImportHistory();
   }
 }
 
@@ -944,10 +976,53 @@ function sellerSpriteStatusText(result) {
   if (errorCode === "CAPTCHA") return t("sellersprite.reverseKeywords.captcha");
   if (errorCode === "SELLERSPRITE_LOGIN_REQUIRED") return t("sellersprite.reverseKeywords.authentication");
   if (errorCode === "SELLERSPRITE_PERMISSION_REQUIRED") return t("sellersprite.reverseKeywords.permission");
+  if (errorCode === "SELLERSPRITE_QUOTA_EXCEEDED") return "SellerSprite quota is exhausted. Review your SellerSprite plan in Chrome, then retry.";
   if (errorCode === "EXTENSION_UNAVAILABLE") return t("sellersprite.reverseKeywords.disabled");
   if (errorCode === "CANCELLED") return t("sellersprite.reverseKeywords.cancelled");
   if (result?.status === "NEEDS_HUMAN") return t("sellersprite.reverseKeywords.needsHuman");
   return t("sellersprite.reverseKeywords.failed");
+}
+
+function renderSellerSpriteBrowserCapability(browser) {
+  const target = $("#sellerSpriteBrowserCapability");
+  if (!target) return;
+  const status = browser?.status || "disabled";
+  target.className = status === "ready" ? "status-ok sellersprite-browser-capability" : "status-error sellersprite-browser-capability";
+  target.textContent = status === "ready"
+    ? "Browser export available: Chrome CDP, local locator profile, and download directory are configured."
+    : status === "disabled"
+      ? "Browser export is disabled. Save the local browser configuration to enable it."
+      : "Browser export configuration is incomplete. Check the local locator profile and download directory.";
+  const form = $("#sellerSpriteBrowserConfigForm");
+  if (form) form.elements.enabled.checked = Boolean(browser?.enabled);
+  updateSellerSpriteExportAvailability();
+}
+
+function updateSellerSpriteExportAvailability() {
+  const button = $("#sellerSpriteReverseKeywordForm button[type='submit']");
+  if (button) button.disabled = state.configStatus?.seller_sprite_browser?.status !== "ready";
+}
+
+function renderSellerSpriteImportHistory(items) {
+  const target = $("#sellerSpriteImportHistory");
+  if (!target) return;
+  target.replaceChildren();
+  const rows = Array.isArray(items) ? items.slice(0, 20) : [];
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "No imported SellerSprite downloads yet.";
+    target.appendChild(empty);
+    return;
+  }
+  const list = document.createElement("ul");
+  list.className = "sellersprite-import-history-list";
+  rows.forEach((item) => {
+    const entry = document.createElement("li");
+    const sha = typeof item.file_sha256 === "string" ? item.file_sha256.slice(0, 12) : "-";
+    entry.textContent = `${item.observed_at || "-"} · ${item.asin || "-"} · ${item.row_count ?? "-"} rows · ${item.artifact_type || "-"} · ${sha} · ${item.status || "-"}`;
+    list.appendChild(entry);
+  });
+  target.appendChild(list);
 }
 
 function sellerSpriteKeywordRows(result) {

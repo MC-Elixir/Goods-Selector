@@ -13,7 +13,8 @@ from agent.alibaba_diagnostics import load_alibaba_open_diagnostic
 from agent.browser_agent import _resolve_cdp_ws
 from agent.seller_sprite_diagnostics import load_seller_sprite_diagnostic
 from agent.sellersprite_models import SellerSpriteLocatorProfile
-from config.settings import DATA_DIR, settings
+from agent.sellersprite_browser_config import load_sellersprite_browser_config, project_local_path
+from config.settings import DATA_DIR, PROJECT_ROOT, settings
 
 
 def run_preflight() -> dict[str, Any]:
@@ -77,19 +78,23 @@ def _check_seller_sprite_browser() -> dict[str, Any]:
     human-authorized local capability and remains an advisory preflight item.
     """
     key = "seller_sprite_browser"
-    if not settings.sellersprite_browser_enabled:
+    browser_config = load_sellersprite_browser_config(PROJECT_ROOT, settings)
+    if not browser_config.enabled:
         return _warn(key, "SellerSprite browser disabled", "Set SELLERSPRITE_BROWSER_ENABLED to enable it")
 
     try:
-        profile_path = str(settings.sellersprite_browser_locator_profile_path or "").strip()
+        profile_path = str(browser_config.locator_profile_path or "").strip()
         if not profile_path:
             raise ValueError("missing locator profile")
-        SellerSpriteLocatorProfile.from_json(Path(profile_path))
+        if profile_path.startswith("/app/data/"):
+            SellerSpriteLocatorProfile.from_json(project_local_path(PROJECT_ROOT, profile_path))
+        else:
+            SellerSpriteLocatorProfile.from_json(Path(profile_path))
     except Exception:
         return _warn(key, "SellerSprite browser locator profile unavailable", "Configure a valid locator profile")
 
     try:
-        _assert_sellersprite_download_dir_writable()
+        _assert_sellersprite_download_dir_writable(browser_config.download_dir)
     except Exception:
         return _warn(key, "SellerSprite browser download directory unavailable", "Configure a writable container download directory")
 
@@ -106,11 +111,11 @@ def _check_seller_sprite_browser() -> dict[str, Any]:
     )
 
 
-def _assert_sellersprite_download_dir_writable() -> None:
-    raw_path = str(settings.sellersprite_browser_download_dir or "").strip()
+def _assert_sellersprite_download_dir_writable(raw_path: str | None = None) -> None:
+    raw_path = str(raw_path if raw_path is not None else settings.sellersprite_browser_download_dir or "").strip()
     if not raw_path:
         raise ValueError("missing container download directory")
-    path = Path(raw_path)
+    path = project_local_path(PROJECT_ROOT, raw_path) if raw_path.startswith("/app/data/") else Path(raw_path)
     path.mkdir(parents=True, exist_ok=True)
     probe = path / ".sellersprite_write_probe"
     probe.write_text("ok", encoding="utf-8")

@@ -12,17 +12,18 @@ from uuid import UUID
 from agent.run_events import record_run_event
 from agent.sellersprite_models import SellerSpriteContext, SellerSpriteLocatorProfile, SellerSpriteResult
 from agent.sellersprite_policy import normalize_sellersprite_error_code
+from agent.sellersprite_browser_config import load_sellersprite_browser_config, project_local_path
 from agent.tools.sellersprite_browser import PlaywrightSellerSpriteSession, SellerSpriteWorkflowError
 from agent.tools.sellersprite_importer import (
     ImportedSellerSpriteExport,
     SellerSpriteImportError,
     import_sellersprite_export,
 )
-from config.settings import settings
+from config.settings import PROJECT_ROOT, settings
 
 
 _HUMAN_OUTCOME_CODES = frozenset(
-    {"EXTENSION_UNAVAILABLE", "SELLERSPRITE_LOGIN_REQUIRED", "SELLERSPRITE_PERMISSION_REQUIRED", "CAPTCHA"}
+    {"EXTENSION_UNAVAILABLE", "SELLERSPRITE_LOGIN_REQUIRED", "SELLERSPRITE_PERMISSION_REQUIRED", "SELLERSPRITE_QUOTA_EXCEEDED", "CAPTCHA"}
 )
 _RETRYABLE_CODES = frozenset({"EXPORT_FAILED", "DOWNLOAD_TIMEOUT"})
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -74,24 +75,28 @@ class SellerSpriteDependencies:
         self.clock = self.clock or monotonic
         self.sleeper = self.sleeper or sleep
         self.is_cancelled = self.is_cancelled or (lambda: False)
+        browser_config = load_sellersprite_browser_config(PROJECT_ROOT, settings)
         self.browser_enabled = (
-            settings.sellersprite_browser_enabled
+            browser_config.enabled
             if self.browser_enabled is None
             else bool(self.browser_enabled)
         )
         self.download_dir = Path(
             self.download_dir
-            or settings.sellersprite_browser_download_dir
+            or browser_config.download_dir
             or settings.sellersprite_import_dir
         )
         self.page_timeout_seconds = self.page_timeout_seconds or settings.sellersprite_browser_page_timeout_seconds
         self.export_timeout_seconds = self.export_timeout_seconds or settings.sellersprite_browser_export_timeout_seconds
         self.min_interval_seconds = self.min_interval_seconds if self.min_interval_seconds is not None else settings.sellersprite_browser_min_interval_seconds
         self.max_retries = self.max_retries if self.max_retries is not None else settings.sellersprite_browser_max_retries
-        if self.profile is None and settings.sellersprite_browser_locator_profile_path:
+        if self.profile is None and browser_config.locator_profile_path:
             try:
+                profile_path = browser_config.locator_profile_path
                 self.profile = SellerSpriteLocatorProfile.from_json(
-                    Path(settings.sellersprite_browser_locator_profile_path)
+                    project_local_path(PROJECT_ROOT, profile_path)
+                    if profile_path.startswith("/app/data/")
+                    else Path(profile_path)
                 )
             except ValueError:
                 self.profile = None

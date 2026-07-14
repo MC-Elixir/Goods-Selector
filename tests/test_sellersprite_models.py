@@ -239,6 +239,15 @@ def test_profile_loads_all_documented_locators(tmp_path):
     assert profile.export == "role=button[name='Export']"
 
 
+def test_profile_keeps_quota_detection_optional_until_vendor_locator_is_verified(tmp_path):
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(_documented_locators()), encoding="utf-8")
+
+    profile = SellerSpriteLocatorProfile.from_json(path)
+
+    assert profile.quota_required == ""
+
+
 def test_asin_policy_normalizes_amazon_identifier():
     assert validate_sellersprite_asin(" b00q7oan50 ") == "B00Q7OAN50"
 

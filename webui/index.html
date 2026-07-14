@@ -237,6 +237,27 @@
                 <p data-i18n="sellersprite.reverseKeywords.subtitle">Export and import up to 20 structured reverse-keyword rows for one Amazon US ASIN.</p>
               </div>
             </div>
+            <p class="sellersprite-browser-capability" id="sellerSpriteBrowserCapability" role="status" aria-live="polite"></p>
+            <form class="settings-config-form sellersprite-browser-config-form" id="sellerSpriteBrowserConfigForm">
+              <label>
+                <span>Locator profile</span>
+                <input name="locator_profile_path" value="/app/data/sellersprite_live_locators.json" autocomplete="off" required>
+              </label>
+              <label>
+                <span>Container download directory</span>
+                <input name="download_dir" value="/app/data/imports/sellersprite" autocomplete="off" required>
+              </label>
+              <label>
+                <span>Chrome download folder confirmed</span>
+                <input name="host_download_dir" value="Chrome-managed" autocomplete="off" required>
+              </label>
+              <label class="checkbox-label">
+                <input name="enabled" type="checkbox">
+                <span>Enable SellerSprite browser export</span>
+              </label>
+              <button class="ghost-button" type="submit">Save browser configuration</button>
+              <small id="sellerSpriteBrowserConfigStatus" role="status" aria-live="polite"></small>
+            </form>
             <form class="settings-config-form sellersprite-keyword-form" id="sellerSpriteReverseKeywordForm">
               <label>
                 <span data-i18n="sellersprite.reverseKeywords.asin">Amazon US ASIN</span>
@@ -250,6 +271,10 @@
               <small id="sellerSpriteReverseKeywordStatus" role="status" aria-live="polite"></small>
             </form>
             <div class="sellersprite-keyword-results" id="sellerSpriteReverseKeywordResults" aria-live="polite"></div>
+            <section class="sellersprite-import-history" aria-labelledby="sellerSpriteImportHistoryTitle">
+              <h4 id="sellerSpriteImportHistoryTitle">Download audit history</h4>
+              <div id="sellerSpriteImportHistory" aria-live="polite"></div>
+            </section>
           </section>
           <form class="settings-config-form browser-agent-form" id="browserAgentForm">
             <label>

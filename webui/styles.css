@@ -1850,6 +1850,32 @@ td {
   min-height: 0;
 }
 
+.sellersprite-browser-capability {
+  margin: 0.7rem 0;
+}
+
+.settings-config-form.sellersprite-browser-config-form {
+  margin-bottom: 0.9rem;
+}
+
+.sellersprite-import-history {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.8rem;
+}
+
+.sellersprite-import-history h4 {
+  margin: 0 0 0.5rem;
+}
+
+.sellersprite-import-history-list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.86rem;
+}
+
 .sellersprite-keyword-table-wrap {
   overflow-x: auto;
   border-top: 1px solid #dbe3ee;

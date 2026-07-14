@@ -50,7 +50,7 @@ def test_webui_sellersprite_panel_has_submission_and_request_failure_guards():
     assert "submitButton.disabled = true" in js
     assert 'status.textContent = t("sellersprite.reverseKeywords.requestFailed")' in js
     assert "state.sellerSpriteKeywordRows = []" in js
-    assert "finally {\n    submitButton.disabled = false;\n  }" in js
+    assert "finally {\n    updateSellerSpriteExportAvailability();\n    await refreshSellerSpriteImportHistory();\n  }" in js
 
 
 def test_webui_sellersprite_panel_has_translated_human_action_states():
@@ -66,3 +66,15 @@ def test_webui_sellersprite_panel_has_translated_human_action_states():
         "sellersprite.reverseKeywords.showing",
     ):
         assert js.count(f'"{key}"') >= 2
+
+
+def test_webui_sellersprite_panel_shows_browser_readiness_configuration_and_audit_history():
+    html = (PROJECT_ROOT / "webui" / "index.html").read_text(encoding="utf-8")
+    js = (PROJECT_ROOT / "webui" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="sellerSpriteBrowserCapability"' in html
+    assert 'id="sellerSpriteBrowserConfigForm"' in html
+    assert 'id="sellerSpriteImportHistory"' in html
+    assert 'postJson("/api/sellersprite/browser-config"' in js
+    assert 'getJson("/api/sellersprite/imports?limit=20")' in js
+    assert "SELLERSPRITE_QUOTA_EXCEEDED" in js

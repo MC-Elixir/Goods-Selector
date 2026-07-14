@@ -69,9 +69,17 @@ The sanitized export header list was:
 
 The importer now maps `流量词` to `keyword` and `商品数` to
 `competing_products`, and accepts duplicate unmapped headers such as the two
-`更新时间` columns. An explicit automatic E2E rerun with a 300-second observer
-window did not create another file; automated no-prompt download behavior
-therefore remains unverified.
+`更新时间` columns. On 2026-07-14, a read-only live panel inspection showed an
+authenticated result view but no permission-required or quota-exhausted
+terminal state. Therefore no quota locator is committed or implied by this
+record. The local profile supports an optional `quota_required` selector only
+after that vendor state is observed and reviewed.
+
+The daily workflow now uses the volume-backed
+`data/sellersprite_browser_config.json` and applies CDP
+`Browser.setDownloadBehavior` for only the attached browser lifetime before
+the single export click. Its no-prompt automatic E2E still requires a new
+explicit approved live verification; it is not claimed by this investigation.
 
 ## Safety and acceptance gate
 
@@ -79,8 +87,7 @@ No cookies, account identifiers, secrets, browser history, query results, or
 screenshots are recorded here. The login terminal outcome was not retried or
 bypassed.
 
-Do not enable browser export by default until a permission marker (if shown) is
-recorded and the opt-in automatic E2E completes with Chrome configured for
-non-interactive downloading. The user-approved controlled export has proved
-the artifact, headers, import normalization, and SQLite manifest; the
-automatic no-prompt download variant remains a separate outstanding check.
+Do not invent a permission or quota locator from normal-page text. The
+user-approved controlled export has proved the artifact, headers, import
+normalization, and SQLite manifest; automatic no-prompt download and any
+unobserved terminal-state locator each remain separate verification gates.

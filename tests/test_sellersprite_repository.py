@@ -10,7 +10,11 @@ from agent.sellersprite_models import SellerSpriteContext
 from agent.tools.browser_downloads import DownloadedArtifact
 from agent.tools.sellersprite_importer import import_sellersprite_export
 from db.migrate import run_migrations
-from db.sellersprite_repository import get_sellersprite_import, save_sellersprite_import
+from db.sellersprite_repository import (
+    get_sellersprite_import,
+    list_sellersprite_imports,
+    save_sellersprite_import,
+)
 
 
 def _imported_export(tmp_path):
@@ -66,6 +70,23 @@ def test_repository_stores_import_when_field_evidence_is_absent(tmp_path):
     saved = save_sellersprite_import(engine, _imported_export(tmp_path))
 
     assert get_sellersprite_import(engine, saved["id"]) == saved
+
+
+def test_repository_lists_newest_sanitized_import_manifests(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'history.db'}")
+    run_migrations(engine)
+    saved = save_sellersprite_import(engine, _imported_export(tmp_path))
+
+    rows = list_sellersprite_imports(engine, limit=999)
+
+    assert rows == [{
+        "id": saved["id"], "asin": "B00Q7OAN50", "artifact_type": "csv",
+        "file_sha256": saved["file_sha256"], "observed_at": saved["observed_at"],
+        "imported_at": saved["imported_at"], "row_count": 1, "status": "imported",
+        "error_code": None,
+    }]
+    assert "source_file" not in rows[0]
+    assert "normalized_payload" not in rows[0]
 
 
 def test_repository_rejects_estimated_manifest_status(tmp_path):

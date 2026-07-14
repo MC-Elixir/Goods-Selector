@@ -185,7 +185,9 @@ SELLERSPRITE_BROWSER_ENABLED=false
 含个人数据的截图。
 
 在用户已登录、明确批准，并且本机审查后的 locator profile 与下载目录映射均已
-验证后，才可以在本地 `.env` 填入实际值：
+验证后，优先通过正式 WebUI 的 SellerSprite 卡片保存配置。它将安全配置写入挂载的
+`data/sellersprite_browser_config.json`，重建容器后仍然可用；文件不保存 Windows
+绝对路径、cookie、账号或密钥。以下环境变量只作为非 UI 部署覆盖项：
 
 ```dotenv
 SELLERSPRITE_BROWSER_ENABLED=true
@@ -207,10 +209,10 @@ docker compose exec -T -e SELLERSPRITE_E2E=1 amazon-selector \
   pytest tests/e2e/test_sellersprite_extension.py -q -s
 ```
 
-如果结果是 `SELLERSPRITE_LOGIN_REQUIRED`、
-`SELLERSPRITE_PERMISSION_REQUIRED` 或 `CAPTCHA`，立即停止。它们是终止状态，不可
-自动重试或绕过；记录脱敏状态后将
-`SELLERSPRITE_BROWSER_ENABLED=false` 并重启容器。不得把这种状态当作 E2E 成功。
+每次导出在单次 CDP 附着生命周期内使用 `Browser.setDownloadBehavior` 配置下载目录，
+不会修改 Chrome 的永久下载偏好。若结果是 `SELLERSPRITE_LOGIN_REQUIRED`、
+`SELLERSPRITE_PERMISSION_REQUIRED`、`SELLERSPRITE_QUOTA_EXCEEDED` 或 `CAPTCHA`，
+立即停止。它们是终止状态，不可自动重试或绕过；不得把这种状态当作 E2E 成功。
 
 ## 6. 运行选品
 

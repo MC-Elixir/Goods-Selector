@@ -29,6 +29,14 @@ def server_client():
     thread.start()
 
     class Client:
+        def get_json(self, path: str) -> tuple[int, dict]:
+            request = Request(f"http://127.0.0.1:{httpd.server_port}{path}", method="GET")
+            try:
+                with urlopen(request, timeout=2) as response:
+                    return response.status, json.loads(response.read().decode("utf-8"))
+            except HTTPError as exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
+
         def post_json(self, path: str, payload: object) -> tuple[int, dict]:
             request = Request(
                 f"http://127.0.0.1:{httpd.server_port}{path}",
@@ -57,6 +65,49 @@ def test_sellersprite_reverse_keyword_endpoint_rejects_invalid_asin(server_clien
 
     assert status == HTTPStatus.BAD_REQUEST
     assert "ASIN" in payload["error"]
+
+
+def test_sellersprite_import_history_endpoint_returns_sanitized_rows(monkeypatch, server_client):
+    monkeypatch.setattr(server, "list_sellersprite_imports", lambda *_args, **_kwargs: [{
+        "id": "9d8d4859-53ef-4f93-9354-e8b7508490f0", "asin": "B00Q7OAN50",
+        "artifact_type": "xlsx", "file_sha256": "a" * 64, "observed_at": "2026-07-14T00:00:00+00:00",
+        "imported_at": "2026-07-14T00:01:00+00:00", "row_count": 1109, "status": "imported", "error_code": None,
+    }])
+
+    status, payload = server_client.get_json("/api/sellersprite/imports?limit=999")
+
+    assert status == HTTPStatus.OK
+    assert payload["items"][0]["row_count"] == 1109
+    assert "source_file" not in str(payload)
+
+
+def test_sellersprite_browser_config_endpoint_requires_boolean_and_returns_safe_status(monkeypatch, server_client):
+    calls = []
+    monkeypatch.setattr(server, "configure_sellersprite_browser", lambda **kwargs: calls.append(kwargs) or {
+        "enabled": True, "status": "ready", "locator_profile_configured": True,
+        "download_dir_configured": True, "host_download_dir_configured": True,
+    })
+
+    status, payload = server_client.post_json("/api/sellersprite/browser-config", {
+        "locator_profile_path": "/app/data/live-locators.json",
+        "download_dir": "/app/data/imports/sellersprite",
+        "host_download_dir": "C:/Users/dell/Downloads",
+        "enabled": True,
+    })
+
+    assert status == HTTPStatus.OK
+    assert payload["status"] == "ready"
+    assert calls == [{
+        "locator_profile_path": "/app/data/live-locators.json",
+        "download_dir": "/app/data/imports/sellersprite",
+        "host_download_dir": "C:/Users/dell/Downloads",
+        "enabled": True,
+    }]
+    assert "C:/Users/dell/Downloads" not in str(payload)
+
+    invalid_status, invalid_payload = server_client.post_json("/api/sellersprite/browser-config", {"enabled": "true"})
+    assert invalid_status == HTTPStatus.BAD_REQUEST
+    assert invalid_payload == {"error": "enabled must be a boolean"}
 
 
 @pytest.mark.parametrize("asin", [1234567890, True, ["B00Q7OAN50"], {"asin": "B00Q7OAN50"}])

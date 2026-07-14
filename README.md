@@ -87,8 +87,11 @@ profile 内容到仓库。常态配置保持：
 SELLERSPRITE_BROWSER_ENABLED=false
 ```
 
-在用户明确批准且上述记录完成后，才在本地 `.env` 中设置真实路径与 CDP 入口；
-以下名称是配置项，不是可直接照抄的 profile 或宿主机路径：
+在用户明确批准且上述记录完成后，可在正式 WebUI 的 SellerSprite 卡片中保存本机
+配置。它会写入 Docker 数据卷中的
+`data/sellersprite_browser_config.json`，因此容器重建不会丢失。这个文件只保留
+容器内路径与“宿主机下载目录已确认”标记，不保留 Windows 绝对路径。环境变量仍可
+作为非 UI 部署的覆盖项：
 
 ```dotenv
 SELLERSPRITE_BROWSER_ENABLED=true
@@ -98,10 +101,13 @@ SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR=<your-separately-controlled-windows-direc
 BU_CDP_HTTP=http://host.docker.internal:9222
 ```
 
-现场验证只允许在用户显式设置 `SELLERSPRITE_E2E=1` 后运行；该变量是一次性
-用户批准，不是日常开关。遇到 `SELLERSPRITE_LOGIN_REQUIRED`、
-`SELLERSPRITE_PERMISSION_REQUIRED` 或 `CAPTCHA` 时，这些都是终止状态：停止，
-把 `SELLERSPRITE_BROWSER_ENABLED` 设回 `false`，不要重试、绕过或伪造成功。
+导出前，服务只在当前 CDP 附着的 Chrome 生命周期内调用
+`Browser.setDownloadBehavior`，将文件写入项目控制的容器下载目录；不会修改 Chrome
+首选项、注册表、cookie、账号或扩展权限。现场验证只允许在用户显式设置
+`SELLERSPRITE_E2E=1` 后运行；该变量是一次性用户批准，不是日常开关。遇到
+`SELLERSPRITE_LOGIN_REQUIRED`、`SELLERSPRITE_PERMISSION_REQUIRED`、
+`SELLERSPRITE_QUOTA_EXCEEDED` 或 `CAPTCHA` 时，这些都是终止状态：停止并在 Chrome
+中处理，不能重试、绕过或伪造成功。
 
 ## Docker
 

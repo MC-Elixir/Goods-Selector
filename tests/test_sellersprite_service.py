@@ -197,7 +197,8 @@ def test_absent_profile_never_constructs_or_guesses_browser_selector(fake_depend
     assert session.opened == []
 
 
-def test_disabled_browser_setting_blocks_even_injected_runnable_session(monkeypatch):
+def test_disabled_browser_setting_blocks_even_injected_runnable_session(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.sellersprite_service.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(settings, "sellersprite_browser_enabled", False)
     session = FakeSession()
     dependencies = SellerSpriteDependencies(

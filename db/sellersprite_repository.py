@@ -17,6 +17,10 @@ _IMPORT_COLUMNS = (
     "observed_at, imported_at, row_count, headers_json, normalized_payload_json, "
     "quality_summary_json, schema_version, status, error_code, diagnostic"
 )
+_PUBLIC_HISTORY_COLUMNS = (
+    "id, asin, artifact_type, file_sha256, observed_at, imported_at, "
+    "row_count, status, error_code"
+)
 
 
 def save_sellersprite_import(
@@ -131,6 +135,22 @@ def get_sellersprite_import(engine: Engine, import_id: str) -> dict[str, Any] | 
     if row is None:
         return None
     return _decode_manifest(dict(row))
+
+
+def list_sellersprite_imports(engine: Engine, *, limit: int = 20) -> list[dict[str, Any]]:
+    """Return newest immutable manifest metadata without exports or raw rows."""
+    safe_limit = max(1, min(int(limit), 50))
+    with engine.connect() as connection:
+        if not _has_table(connection, "sellersprite_imports"):
+            return []
+        rows = connection.execute(
+            text(
+                f"SELECT {_PUBLIC_HISTORY_COLUMNS} FROM sellersprite_imports "
+                "ORDER BY imported_at DESC, id DESC LIMIT :limit"
+            ),
+            {"limit": safe_limit},
+        ).mappings().all()
+    return [dict(row) for row in rows]
 
 
 def _has_table(connection: Any, table_name: str) -> bool:

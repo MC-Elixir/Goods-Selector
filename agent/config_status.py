@@ -15,6 +15,10 @@ from agent.seller_sprite_diagnostics import (
     load_seller_sprite_diagnostic,
     save_seller_sprite_diagnostic,
 )
+from agent.sellersprite_browser_config import (
+    configure_sellersprite_browser as _persist_sellersprite_browser_config,
+    load_sellersprite_browser_config,
+)
 from config.settings import PROJECT_ROOT, settings
 
 
@@ -26,6 +30,12 @@ def get_config_status() -> dict[str, Any]:
         settings.alibaba_app_key
         and settings.alibaba_app_secret
         and settings.alibaba_access_token
+    )
+    browser_config = load_sellersprite_browser_config(PROJECT_ROOT, settings)
+    browser_ready = bool(
+        browser_config.enabled
+        and browser_config.locator_profile_path
+        and browser_config.download_dir
     )
     return {
         "seller_sprite": {
@@ -70,22 +80,35 @@ def get_config_status() -> dict[str, Any]:
             "cdp_ws_configured": bool((os.getenv("BU_CDP_WS") or "").strip()),
         },
         "seller_sprite_browser": {
-            "enabled": bool(settings.sellersprite_browser_enabled),
-            "locator_profile_configured": bool(
-                str(settings.sellersprite_browser_locator_profile_path or "").strip()
-            ),
-            "download_dir_configured": bool(
-                str(settings.sellersprite_browser_download_dir or "").strip()
-            ),
-            "host_download_dir_configured": bool(
-                str(settings.sellersprite_browser_host_download_dir or "").strip()
-            ),
+            "enabled": browser_config.enabled,
+            "status": "ready" if browser_ready else "disabled" if not browser_config.enabled else "unavailable",
+            "locator_profile_configured": bool(browser_config.locator_profile_path),
+            "download_dir_configured": bool(browser_config.download_dir),
+            "host_download_dir_configured": bool(browser_config.host_download_dir),
             "page_timeout_seconds": int(settings.sellersprite_browser_page_timeout_seconds),
             "export_timeout_seconds": int(settings.sellersprite_browser_export_timeout_seconds),
             "min_interval_seconds": int(settings.sellersprite_browser_min_interval_seconds),
             "max_retries": int(settings.sellersprite_browser_max_retries),
         },
     }
+
+
+def configure_sellersprite_browser(
+    *,
+    locator_profile_path: str,
+    download_dir: str,
+    host_download_dir: str,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Persist safe browser settings in the Docker-mounted data directory."""
+    _persist_sellersprite_browser_config(
+        PROJECT_ROOT,
+        locator_profile_path=locator_profile_path,
+        download_dir=download_dir,
+        host_download_dir=host_download_dir,
+        enabled=enabled,
+    )
+    return get_config_status()["seller_sprite_browser"]
 
 
 def configure_seller_sprite(api_key: str, base_url: str | None = None) -> dict[str, Any]:

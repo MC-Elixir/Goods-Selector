@@ -108,6 +108,9 @@ class FakeBrowser:
     def close(self) -> None:
         self.closed = True
 
+    def new_browser_cdp_session(self):
+        return self.cdp_session
+
 
 class FakePlaywright:
     def __init__(self, browser: FakeBrowser) -> None:
@@ -252,6 +255,48 @@ def test_adapter_snapshots_before_single_export_click_and_delegates_download(tmp
     assert page.filled == {"asin_input": "B00Q7OAN50"}
     assert observer.snapshots == [tmp_path]
     assert observer.waits == [(tmp_path, "snapshot", 17)]
+
+
+def test_adapter_sets_temporary_cdp_download_policy_before_snapshot_and_export(tmp_path):
+    artifact = object()
+    observer = FakeObserver(artifact)
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"ready", "reverse_keywords", "asin_input", "submit", "results_ready", "export_menu", "export"},
+    )
+    browser = FakeBrowser(page)
+    browser.cdp_session = type("Cdp", (), {"calls": [], "detached": False})()
+    browser.cdp_session.send = lambda method, params: browser.cdp_session.calls.append((method, params))
+    browser.cdp_session.detach = lambda: setattr(browser.cdp_session, "detached", True)
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(), download_dir=tmp_path, page=page, download_observer=observer,
+    )
+    session._browser = browser
+
+    assert session.export_sellersprite_reverse_keywords("B00Q7OAN50") is artifact
+
+    assert browser.cdp_session.calls == [("Browser.setDownloadBehavior", {
+        "behavior": "allow", "downloadPath": str(tmp_path), "eventsEnabled": True,
+    })]
+    assert browser.cdp_session.detached is True
+    assert observer.snapshots == [tmp_path]
+    assert page.clicked[-1] == "export"
+
+
+def test_adapter_stops_for_configured_quota_state_before_any_export_click(tmp_path):
+    profile = valid_profile().__class__(
+        **{**valid_profile().__dict__, "quota_required": "css=quota_required"}
+    )
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"ready", "quota_required", "reverse_keywords", "asin_input", "submit", "results_ready", "export_menu", "export"},
+    )
+    session = PlaywrightSellerSpriteSession(profile=profile, download_dir=tmp_path, page=page)
+
+    with pytest.raises(SellerSpriteWorkflowError, match="SELLERSPRITE_QUOTA_EXCEEDED"):
+        session.export_sellersprite_reverse_keywords("B00Q7OAN50")
+
+    assert page.clicked == []
 
 
 def test_adapter_cancellation_after_submit_prevents_results_snapshot_and_export(tmp_path):

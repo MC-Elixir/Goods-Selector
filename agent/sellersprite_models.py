@@ -104,6 +104,7 @@ class SellerSpriteLocatorProfile:
     results_ready: str
     export_menu: str
     export: str
+    quota_required: str = ""
 
     @classmethod
     def from_json(cls, path: Path) -> "SellerSpriteLocatorProfile":
@@ -127,4 +128,15 @@ class SellerSpriteLocatorProfile:
             ):
                 raise ValueError(f"locator '{name}' must use a supported locator syntax")
             locators[name] = value
-        return cls(**locators)
+        quota_required = payload.get("quota_required", "")
+        if not isinstance(quota_required, str):
+            raise ValueError("locator 'quota_required' must be a string when provided")
+        if quota_required:
+            prefix, separator, payload_value = quota_required.partition("=")
+            if (
+                not separator
+                or prefix not in _SUPPORTED_LOCATOR_PREFIXES
+                or not payload_value.strip()
+            ):
+                raise ValueError("locator 'quota_required' must use a supported locator syntax")
+        return cls(**locators, quota_required=quota_required)

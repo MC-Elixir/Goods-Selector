@@ -48,7 +48,8 @@ def test_seller_sprite_preflight_ok_after_successful_diagnostic(monkeypatch):
     assert "B0TEST1234" in check["detail"]
 
 
-def test_seller_sprite_browser_preflight_is_warning_when_disabled(monkeypatch):
+def test_seller_sprite_browser_preflight_is_warning_when_disabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(preflight, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(settings, "sellersprite_browser_enabled", False)
 
     check = preflight._check_seller_sprite_browser()
@@ -90,6 +91,31 @@ def test_seller_sprite_browser_preflight_is_independent_of_mjjl(monkeypatch, tmp
         "detail": "Chrome CDP, locator profile, and download directory verified",
         "level": "ok",
     }
+
+
+def test_seller_sprite_browser_preflight_uses_volume_backed_browser_configuration(monkeypatch, tmp_path):
+    profile = tmp_path / "data" / "locators.json"
+    profile.parent.mkdir()
+    profile.write_text(json.dumps({
+        "panel_open": "css=.panel-open", "ready": "css=.ready", "login_required": "css=.login",
+        "permission_required": "css=.permission", "captcha": "css=.captcha",
+        "reverse_keywords": "css=.reverse", "asin_input": "css=input",
+        "submit": "css=.submit", "results_ready": "css=.results", "export_menu": "css=.export-menu", "export": "css=.export",
+    }), encoding="utf-8")
+    (tmp_path / "data" / "sellersprite_browser_config.json").write_text(json.dumps({
+        "enabled": True,
+        "locator_profile_path": "/app/data/locators.json",
+        "download_dir": "/app/data/imports/sellersprite",
+        "host_download_dir": "configured",
+    }), encoding="utf-8")
+    monkeypatch.setattr(preflight, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(settings, "sellersprite_browser_enabled", False)
+    monkeypatch.setattr(preflight, "_resolve_cdp_ws", lambda: "ws://127.0.0.1:9222/devtools/browser/id")
+    monkeypatch.setattr(preflight, "_assert_cdp_websocket_reachable", lambda _value: None)
+
+    check = preflight._check_seller_sprite_browser()
+
+    assert check["level"] == "ok"
 
 
 def test_seller_sprite_browser_preflight_warns_when_raw_cdp_websocket_is_unreachable(monkeypatch, tmp_path):

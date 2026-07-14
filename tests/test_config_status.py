@@ -1,6 +1,10 @@
 """Sanitized configuration status tests."""
 from __future__ import annotations
 
+import json
+
+import agent.config_status as config_status_module
+import pytest
 from agent.config_status import (
     check_alibaba_pifatuan,
     check_seller_sprite_asin,
@@ -96,6 +100,7 @@ def test_browser_readiness_is_independent_of_mjjl_api_key(monkeypatch):
     browser = status["seller_sprite_browser"]
     assert browser == {
         "enabled": True,
+        "status": "ready",
         "locator_profile_configured": True,
         "download_dir_configured": True,
         "host_download_dir_configured": True,
@@ -107,6 +112,53 @@ def test_browser_readiness_is_independent_of_mjjl_api_key(monkeypatch):
     assert "/host/profile.json" not in str(browser)
     assert "/container/downloads" not in str(browser)
     assert "C:/Downloads" not in str(browser)
+
+
+def test_browser_configuration_helper_is_available_for_volume_backed_local_settings():
+    assert callable(getattr(config_status_module, "configure_sellersprite_browser", None))
+
+
+def test_browser_configuration_persists_only_project_local_safe_state(monkeypatch, tmp_path):
+    profile = tmp_path / "data" / "live-locators.json"
+    profile.parent.mkdir()
+    profile.write_text(json.dumps({
+        "panel_open": "css=#panel-open", "ready": "css=#panel",
+        "login_required": "css=#login", "permission_required": "css=#permission",
+        "captcha": "css=#captcha", "reverse_keywords": "css=#reverse",
+        "asin_input": "name=asin", "submit": "css=#submit",
+        "results_ready": "css=#results", "export_menu": "css=#menu",
+        "export": "css=#export",
+    }), encoding="utf-8")
+    monkeypatch.setattr(config_status_module, "PROJECT_ROOT", tmp_path)
+
+    result = config_status_module.configure_sellersprite_browser(
+        locator_profile_path="/app/data/live-locators.json",
+        download_dir="/app/data/imports/sellersprite",
+        host_download_dir="C:/Users/dell/Downloads",
+        enabled=True,
+    )
+
+    stored = json.loads((tmp_path / "data" / "sellersprite_browser_config.json").read_text(encoding="utf-8"))
+    assert stored == {
+        "download_dir": "/app/data/imports/sellersprite",
+        "enabled": True,
+        "host_download_dir": "configured",
+        "locator_profile_path": "/app/data/live-locators.json",
+    }
+    assert result["status"] == "ready"
+    assert "C:/Users/dell/Downloads" not in str(result)
+
+
+def test_browser_configuration_rejects_paths_escaping_the_data_volume(monkeypatch, tmp_path):
+    monkeypatch.setattr(config_status_module, "PROJECT_ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="below /app/data/"):
+        config_status_module.configure_sellersprite_browser(
+            locator_profile_path="/app/data/../outside.json",
+            download_dir="/app/data/imports/sellersprite",
+            host_download_dir="Chrome-managed",
+            enabled=True,
+        )
 
 
 def test_configure_seller_sprite_writes_env_without_returning_secret(monkeypatch, tmp_path):

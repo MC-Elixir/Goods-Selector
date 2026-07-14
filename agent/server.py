@@ -21,6 +21,7 @@ from agent.config_status import (
     check_seller_sprite_asin,
     configure_alibaba_supplier_search,
     configure_seller_sprite,
+    configure_sellersprite_browser,
     configure_vision_model,
     get_config_status,
 )
@@ -34,6 +35,8 @@ from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
 from agent.sellersprite_models import SellerSpriteResult
 from agent.sellersprite_policy import validate_sellersprite_asin
 from agent.sellersprite_service import run_reverse_keyword_export
+from db.sellersprite_repository import list_sellersprite_imports
+from db.session import engine as db_engine
 from config.settings import settings
 from crawlers.amazon_search import keyword_preview, normalize_keyword
 from matchers.imported_suppliers import import_alibaba_supplier_payload, list_imported_suppliers
@@ -106,6 +109,13 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             limit = int((qs.get("limit") or [200])[0] or 200)
             return self._json(list_imported_suppliers(limit=limit))
+        if parsed.path == "/api/sellersprite/imports":
+            raw_limit = (parse_qs(parsed.query).get("limit") or [20])[0]
+            try:
+                limit = int(raw_limit)
+            except (TypeError, ValueError):
+                return self._json({"error": "limit must be an integer"}, HTTPStatus.BAD_REQUEST)
+            return self._json({"items": list_sellersprite_imports(db_engine, limit=limit)})
         if parsed.path == "/api/prompt":
             return self._json({"system_prompt": AGENT_SYSTEM_PROMPT})
         if parsed.path.startswith("/api/exports/"):
@@ -143,6 +153,16 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 return self._json(payload, status)
             if parsed.path == "/api/sellersprite/reverse-keywords":
                 return self._json(_handle_sellersprite_reverse_keyword_request(body))
+            if parsed.path == "/api/sellersprite/browser-config":
+                enabled = body.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled must be a boolean")
+                return self._json(configure_sellersprite_browser(
+                    locator_profile_path=str(body.get("locator_profile_path") or ""),
+                    download_dir=str(body.get("download_dir") or ""),
+                    host_download_dir=str(body.get("host_download_dir") or ""),
+                    enabled=enabled,
+                ))
             if parsed.path == "/api/config/seller-sprite":
                 result = configure_seller_sprite(
                     str(body.get("key") or ""),

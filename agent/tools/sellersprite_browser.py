@@ -35,6 +35,7 @@ _HUMAN_TERMINAL_LOCATORS = (
     ("captcha", "CAPTCHA"),
     ("login_required", "SELLERSPRITE_LOGIN_REQUIRED"),
     ("permission_required", "SELLERSPRITE_PERMISSION_REQUIRED"),
+    ("quota_required", "SELLERSPRITE_QUOTA_EXCEEDED"),
 )
 _PROFILE_LOCATOR_NAMES = (
     "panel_open",
@@ -203,6 +204,9 @@ class PlaywrightSellerSpriteSession:
         self._ensure_not_cancelled()
 
         self._ensure_not_cancelled()
+        self._raise_if_human_terminal()
+        self._configure_download_behavior()
+        self._ensure_not_cancelled()
         self._click_required("export_menu")
         self._ensure_not_cancelled()
         try:
@@ -237,6 +241,30 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("DOWNLOAD_TIMEOUT") from exc
         self._ensure_not_cancelled()
         return artifact
+
+    def _configure_download_behavior(self) -> None:
+        """Allow downloads only for this attached Chrome CDP browser session."""
+        if self._browser is None:
+            # Unit-test adapters may inject a page without a real browser. A
+            # production session obtains ``_browser`` through CDP in __enter__.
+            return
+        try:
+            cdp_session = self._browser.new_browser_cdp_session()
+            try:
+                cdp_session.send(
+                    "Browser.setDownloadBehavior",
+                    {
+                        "behavior": "allow",
+                        "downloadPath": str(self.download_dir),
+                        "eventsEnabled": True,
+                    },
+                )
+            finally:
+                cdp_session.detach()
+        except SellerSpriteWorkflowError:
+            raise
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("DOWNLOAD_TIMEOUT") from exc
 
     def import_sellersprite_export(
         self,
@@ -281,6 +309,8 @@ class PlaywrightSellerSpriteSession:
 
     def _raise_if_human_terminal(self) -> None:
         for locator_name, error_code in _HUMAN_TERMINAL_LOCATORS:
+            if not getattr(self.profile, locator_name, ""):
+                continue
             if self._is_visible(locator_name):
                 raise SellerSpriteWorkflowError(error_code)
 
