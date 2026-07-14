@@ -214,6 +214,10 @@ docker compose exec -T -e SELLERSPRITE_E2E=1 amazon-selector \
 `SELLERSPRITE_PERMISSION_REQUIRED`、`SELLERSPRITE_QUOTA_EXCEEDED` 或 `CAPTCHA`，
 立即停止。它们是终止状态，不可自动重试或绕过；不得把这种状态当作 E2E 成功。
 
+权限不足与配额耗尽的 selector 不通过人为消耗额度、修改订阅或触发限制来采集；它们
+按**首次自然出现时补录**。届时保留提示页面，收集脱敏 DOM 证据，将审查后的 selector
+追加到 `data/` 中的本机 locator profile，并重新运行受控验证。
+
 ## 6. 运行选品
 
 通过 WebUI 按钮运行：

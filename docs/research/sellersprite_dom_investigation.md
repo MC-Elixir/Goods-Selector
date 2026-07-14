@@ -93,5 +93,7 @@ bypassed.
 Do not invent a permission or quota locator from normal-page text. The
 user-approved controlled export has proved the artifact, headers, import
 normalization, SQLite manifest, and automatic no-prompt download. Any
-unobserved permission or quota terminal-state locator remains a separate
-verification gate.
+unobserved permission or quota terminal-state locator is deferred to the
+**first natural appearance**. Do not exhaust quota, alter subscription, or
+otherwise induce that state merely to capture a selector; preserve the page
+and collect sanitized DOM evidence when it naturally occurs.

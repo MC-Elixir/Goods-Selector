@@ -109,6 +109,11 @@ BU_CDP_HTTP=http://host.docker.internal:9222
 `SELLERSPRITE_QUOTA_EXCEEDED` 或 `CAPTCHA` 时，这些都是终止状态：停止并在 Chrome
 中处理，不能重试、绕过或伪造成功。
 
+当前本机已验证登录、验证码和导出链路；“权限不足”与“配额耗尽”定位器采用
+**首次自然出现时补录**的策略。不得为了采集它们去消耗配额、改变订阅或诱发账号
+限制。提示首次出现时保留页面并记录脱敏 DOM 证据，再将审查后的 selector 写入本机
+locator profile；在此之前，系统只保留相应的人机交接码，不声称该 selector 已验证。
+
 ## Docker
 
 本项目支持 Docker 部署，**正式跑默认禁用 mock 供应商**（`alibaba_allow_mock_suppliers` 默认 False，compose 环境变量再次硬设 `false`）。
