@@ -8,6 +8,12 @@ from typing import Any
 
 from analyzers.profit_model import normalize_positive_number, normalize_price_tier
 from agent.provenance import trusted_evidence_value
+from domain.target_categories import (
+    TARGET_CATEGORY_IDS,
+    TargetCategoryProfile,
+    compare_target_profiles,
+    profile_from_supplier,
+)
 from matchers.brand_safety import brand_tokens, contains_brand_term
 from matchers.product_spec import ProductSpec, compare_specs, spec_from_supplier, spec_from_text
 from schemas.sourcing import AmazonProductUnderstanding, MatchEvidence
@@ -182,6 +188,7 @@ def build_match_evidence(
     understanding: AmazonProductUnderstanding,
     supplier: Any,
     visual: dict[str, Any] | None = None,
+    target_profile: TargetCategoryProfile | dict[str, Any] | None = None,
 ) -> MatchEvidence:
     raw = supplier.raw_data if isinstance(getattr(supplier, "raw_data", None), dict) else {}
     detail_value = raw.get("detail", {})
@@ -210,6 +217,18 @@ def build_match_evidence(
     spec = compare_specs(_target_spec(understanding), _supplier_spec(supplier, detail))
     hard_spec_conflicts = sorted(set(spec.conflicts) & HARD_SPEC_CONFLICTS)
 
+    if isinstance(target_profile, dict):
+        target_profile = TargetCategoryProfile.from_dict(target_profile)
+    candidate_profile_value = detail.get("category_profile")
+    candidate_profile = (
+        TargetCategoryProfile.from_dict(candidate_profile_value)
+        if isinstance(candidate_profile_value, dict)
+        else profile_from_supplier(supplier)
+    )
+    profile_match = None
+    if target_profile is not None and target_profile.category_id in TARGET_CATEGORY_IDS:
+        profile_match = compare_target_profiles(target_profile, candidate_profile)
+
     mismatch: list[str] = []
     if type_match == 0:
         mismatch.append("accessory_full_product_conflict")
@@ -220,10 +239,11 @@ def build_match_evidence(
     if _brand_exclusive(understanding, detail):
         mismatch.append("brand_exclusive_conflict")
     mismatch.extend(f"specification_conflict:{name}" for name in hard_spec_conflicts)
+    if profile_match is not None:
+        mismatch.extend(f"target_category_conflict:{name}" for name in profile_match.conflicts)
 
     states = {
         "function": function_match,
-        "package_quantity": pack_match,
         "product_type": type_match,
         "price": 1.0 if (
             trusted_detail("base_price_cny") is not None
@@ -231,8 +251,13 @@ def build_match_evidence(
         ) and _price_present(supplier, detail) else None,
         "moq": 1.0 if trusted_detail("moq") is not None and _moq_present(supplier, detail) else None,
     }
+    if understanding.package_quantity is not None:
+        states["package_quantity"] = pack_match
     missing = [name for name, value in states.items() if value is None]
     passed = [name for name, value in states.items() if value == 1.0]
+    if profile_match is not None:
+        missing.extend(f"target_category:{name}" for name in profile_match.missing)
+        passed.extend(f"target_category:{name}" for name in profile_match.matched)
 
     visual_is_match, visual_confidence, malformed_visual = _visual_evidence(supplier, visual)
     if visual_is_match is False:
@@ -243,14 +268,20 @@ def build_match_evidence(
         missing.append("visual")
 
     scores = [value for value in states.values() if value is not None]
-    scores.append(spec.score)
+    scores.append(profile_match.score if profile_match is not None else spec.score)
     confidence = mean(scores) if scores else 0.0
+    critical_evidence = {"function", "product_type", "price", "moq"}
+    if understanding.package_quantity is not None:
+        critical_evidence.add("package_quantity")
     if mismatch:
         decision = "reject"
     elif malformed_visual:
         decision = "manual_review"
         confidence = min(confidence, 0.49)
-    elif any(name in missing for name in CRITICAL_EVIDENCE):
+    elif profile_match is not None and profile_match.decision == "manual_review":
+        decision = "manual_review"
+        confidence = min(confidence, 0.49)
+    elif any(name in missing for name in critical_evidence):
         decision = "retry"
         confidence = min(confidence, 0.49)
     else:
@@ -263,10 +294,32 @@ def build_match_evidence(
     return MatchEvidence(
         amazon_ref=f"asin:{understanding.asin}",
         supplier_ref=f"offer:{supplier.alibaba_offer_id}",
+        category_match=(
+            1.0 if profile_match is not None and "category" in profile_match.matched
+            else 0.0 if profile_match is not None and "category" in profile_match.conflicts
+            else None
+        ),
         function_match=function_match,
+        material_match=(
+            1.0 if profile_match is not None and "materials" in profile_match.matched
+            else 0.0 if profile_match is not None and "materials" in profile_match.conflicts
+            else None
+        ),
+        shape_match=(
+            1.0 if profile_match is not None and "shape" in profile_match.matched
+            else 0.0 if profile_match is not None and "shape" in profile_match.conflicts
+            else None
+        ),
+        dimension_match=(
+            1.0 if profile_match is not None and any(
+                name in profile_match.matched for name in ("dimensions_cm", "canopy_diameter_cm", "pole_diameter_cm")
+            ) else 0.0 if profile_match is not None and any(
+                name in profile_match.conflicts for name in ("dimensions_cm", "canopy_diameter_cm", "pole_diameter_cm")
+            ) else None
+        ),
         package_quantity_match=pack_match,
         accessory_vs_full_product_match=type_match,
-        specification_similarity=spec.score,
+        specification_similarity=profile_match.score if profile_match is not None else spec.score,
         image_similarity=image_similarity,
         visual_is_match=visual_is_match,
         visual_confidence=visual_confidence,

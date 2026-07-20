@@ -13,7 +13,7 @@ from pipeline.orchestrator import run_pipeline
 from config.settings import settings
 
 
-def test_run_pipeline_caps_seller_sprite_market_calls(monkeypatch, tmp_path):
+def test_run_pipeline_caps_seller_sprite_browser_market_calls(monkeypatch, tmp_path):
     engine = create_engine(
         f"sqlite:///{tmp_path / 'pipeline.db'}",
         future=True,
@@ -50,18 +50,26 @@ def test_run_pipeline_caps_seller_sprite_market_calls(monkeypatch, tmp_path):
     )
     market_calls: list[tuple[str, str]] = []
 
-    class FakeMJJL:
-        _configured = True
+    class FakeBrowserDependencies:
+        browser_enabled = True
+        profile = object()
+        session_factory = object()
 
-        def __enter__(self):
-            return self
+        def __init__(self, **_kwargs):
+            pass
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def analyze_market(self, asin: str, marketplace: str, keyword: str | None = None):
-            market_calls.append((asin, marketplace))
-            return SimpleNamespace(source="fake")
+    def fake_browser_export(asin, *, sourcing_run_id=None, dependencies=None):
+        market_calls.append((asin, "US"))
+        return SimpleNamespace(
+            status="SUCCESS",
+            error_code=None,
+            data={
+                "row_count": 1,
+                "file_sha256": "a" * 64,
+                "manifest_id": f"manifest-{asin}",
+                "keyword_rows": [{"keyword": "test", "search_volume": 100}],
+            },
+        )
 
     monkeypatch.setattr("pipeline.orchestrator.session_scope", temp_session_scope)
     monkeypatch.setattr(settings, "mjjl_max_products_per_run", 2)
@@ -75,8 +83,12 @@ def test_run_pipeline_caps_seller_sprite_market_calls(monkeypatch, tmp_path):
         lambda product, best_supplier: SimpleNamespace(net_profit=10.0, profit_margin=0.4),
     )
     monkeypatch.setattr(
-        "analyzers.maijiajingling.MaijiajinglingClient",
-        lambda: FakeMJJL(),
+        "agent.sellersprite_service.SellerSpriteDependencies",
+        FakeBrowserDependencies,
+    )
+    monkeypatch.setattr(
+        "agent.sellersprite_service.run_reverse_keyword_export",
+        fake_browser_export,
     )
     monkeypatch.setattr(
         "pipeline.orchestrator.score_product",
@@ -88,7 +100,7 @@ def test_run_pipeline_caps_seller_sprite_market_calls(monkeypatch, tmp_path):
 
     with temp_session_scope() as session:
         run = session.get(RunLog, run_id)
-        assert run.api_calls["mjjl"] == 2
+        assert run.api_calls["sellersprite_browser_exports"] == 2
         assert run.api_calls["mjjl_skipped_cap"] == 3
 
     assert market_calls == [("ASIN0", "US"), ("ASIN1", "US")]

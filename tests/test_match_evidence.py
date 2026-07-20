@@ -359,3 +359,87 @@ def test_separate_exclusive_structure_marks_brand_specific_part():
     )
     assert result.decision == "reject"
     assert "brand_exclusive_conflict" in result.mismatch_reasons
+
+
+def test_target_category_diameter_conflict_precedes_generic_similarity():
+    product = ProductDTO(
+        asin="B000PATIO",
+        marketplace="US",
+        title="6 FT Beach Umbrella, Polyester Canopy",
+    )
+    target_profile = profile_from_product(product)
+    candidate_profile = profile_from_text("85cm 涤纶沙滩伞")
+    assert target_profile is not None and candidate_profile is not None
+    understanding = understanding_from_target_profile(product, target_profile)
+    supplier = _supplier({
+        "product_type": "full_product",
+        "function": "户外遮阳",
+        "category_profile": candidate_profile.to_dict(),
+    }, title_cn="85cm 涤纶沙滩伞")
+
+    result = build_match_evidence(
+        understanding,
+        supplier,
+        target_profile=target_profile,
+    )
+
+    assert result.decision == "reject"
+    assert result.dimension_match == 0.0
+    assert "target_category_conflict:canopy_diameter_cm" in result.mismatch_reasons
+
+
+def test_target_category_exact_single_product_does_not_require_invented_pack_count():
+    product = ProductDTO(
+        asin="B000PATIO",
+        marketplace="US",
+        title="9 FT Market Patio Umbrella, Polyester Canopy",
+    )
+    target_profile = profile_from_product(product)
+    candidate_profile = profile_from_text("274cm 涤纶户外中柱遮阳伞")
+    assert target_profile is not None and candidate_profile is not None
+    understanding = understanding_from_target_profile(product, target_profile)
+    assert understanding.package_quantity is None
+    supplier = _supplier({
+        "product_type": "full_product",
+        "function": "户外遮阳",
+        "category_profile": candidate_profile.to_dict(),
+    }, title_cn="274cm 涤纶户外中柱遮阳伞")
+
+    result = build_match_evidence(
+        understanding,
+        supplier,
+        target_profile=target_profile,
+    )
+
+    assert result.decision == "keep"
+    assert "package_quantity" not in result.missing_evidence
+    assert result.dimension_match == 1.0
+
+
+def test_target_category_missing_critical_supplier_parameter_requires_review():
+    product = ProductDTO(
+        asin="B000HEATER",
+        marketplace="US",
+        title="48,000 BTU Propane Pyramid Patio Heater",
+    )
+    target_profile = profile_from_product(product)
+    candidate_profile = profile_from_text("丙烷金字塔户外取暖器")
+    assert target_profile is not None and candidate_profile is not None
+    understanding = understanding_from_target_profile(product, target_profile)
+    supplier = _supplier({
+        "product_type": "full_product",
+        "function": "户外取暖",
+        "category_profile": candidate_profile.to_dict(),
+    }, title_cn="丙烷金字塔户外取暖器")
+
+    result = build_match_evidence(
+        understanding,
+        supplier,
+        target_profile=target_profile,
+    )
+
+    assert result.decision == "manual_review"
+    assert result.overall_confidence <= 0.49
+    assert "target_category:candidate.heat_output_btu" in result.missing_evidence
+from crawlers.amazon_bsr import ProductDTO
+from domain.target_categories import profile_from_product, profile_from_text, understanding_from_target_profile

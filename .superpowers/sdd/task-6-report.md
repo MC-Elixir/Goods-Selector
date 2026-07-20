@@ -1,116 +1,68 @@
-# Task 6 Report: Structured Amazon Product Understanding
+# Task 6 Report: SellerSprite reverse-keyword WebUI
 
 ## Status
 
-Implemented and verified.
+Implemented a dedicated, bounded SellerSprite reverse-keyword export card in
+the Settings view. The existing generic Browser Assistant remains unchanged,
+including its separate raw diagnostic output for the 1688 workflow.
 
-## RED
+## RED evidence
 
-Command:
+Before the UI implementation, the new static test failed as expected:
 
-```bash
-TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_product_understanding.py -v
+```text
+3 failed in 0.03s
 ```
 
-Observed expected collection failure: `ModuleNotFoundError: No module named 'matchers.product_understanding'`.
+The failures showed the missing dedicated form, result renderer, bounded row
+rendering, and translated human-action status keys.
 
-## GREEN
+## Implementation
 
-Focused command:
+- Added `#sellerSpriteReverseKeywordForm`, `#sellerSpriteReverseKeywordStatus`,
+  and `#sellerSpriteReverseKeywordResults` for one Amazon US ASIN.
+- The form POSTs only `{ asin }` to the Task 5 API endpoint, disables its
+  submit button while running, and uses a generic translated request failure
+  message instead of exposing exception content.
+- Results render at most 20 escaped rows with keyword, search volume (or
+  lower bound), purchase rate (or lower bound), competing products (or lower
+  bound), and trend. Missing values are shown as `-`; raw payloads, source
+  paths, cookies, manifests, and JSON diagnostics are never rendered.
+- Added explicit translated outcome messages for human action, login,
+  captcha, permission, disabled/unavailable browser automation, cancellation,
+  and other failures. Existing rows are re-rendered after a language toggle.
+- Added card/table styling with horizontal overflow for narrow screens.
 
-```bash
-TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_product_understanding.py -v
-```
+## GREEN evidence
 
-Result: `6 passed`.
-
-Compatibility command:
-
-```bash
-TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_product_understanding.py tests/test_vision_matcher.py tests/test_matcher_keywords.py -v
-```
-
-Result: `36 passed`.
-
-## Full Suite
-
-Command:
-
-```bash
-TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q --disable-warnings
-```
-
-Result: `505 passed, 5 skipped, 210 warnings in 358.68s` (exit code 0).
-
-## Files
-
-- `matchers/product_understanding.py`: payload adapter, image collection, strict canonical schema validation, and deterministic brand exclusion.
-- `matchers/vision_analyzer.py`: provider-neutral structured product analysis for PPIO and Anthropic, all-image request construction, strict JSON parsing, real backend metadata, and isolated content-addressed caching.
-- `tests/test_product_understanding.py`: all-text/all-image input, deduplication and cap, brand exclusion, fail-closed validation, backend metadata, and cache identity coverage.
-- `.superpowers/sdd/task-6-report.md`: this report.
-
-## Self-check
-
-- `VisionAnalyzer.analyze()` remains unchanged and its legacy tests pass.
-- No real external API was invoked; provider clients and image downloads are mocked in new tests.
-- The structured prompt requests every `AmazonProductUnderstanding` field and explicitly covers replacement/consumable/full product classification, package quantity, visible-only dimensions, and uncertainty.
-- Pydantic `AmazonProductUnderstanding.model_validate()` is the fail-closed schema boundary.
-- Brand is retained in `excluded_brand_tokens` and deterministically removed from supplier keyword copy.
-- Structured cache keys use the prompt version, provider, model, canonical text JSON, and the SHA-256 hash of every downloaded image. The `apu_` key namespace cannot collide with the legacy `va_` single-image key.
-- Diff scope contains only Task 6 implementation, tests, and this report.
-
-## Concerns
-
-- Image downloads remain sequential, matching the existing analyzer's simple synchronous runtime model. This is intentionally not expanded into a concurrency refactor for Task 6.
-- Existing suite warnings were not changed as part of this task.
-
-## Review Fix Follow-up
-
-### RED
-
-Added review regressions for explicit semantic-field presence, strict types, extra fields,
-prompt-content cache identity, layered safe errors, multi-token/alias brand cleaning, and
-parsed URL validation.
-
-Command:
+Focused source-mounted Docker run:
 
 ```bash
-TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_product_understanding.py -v
+docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -e LOG_DIR=/app/data/logs \
+  -v "$PWD:/app:ro" -v "$TEST_DATA:/app/data" -w /app \
+  --entrypoint pytest amazon-selector:dev \
+  tests/test_webui_sellersprite_static.py \
+  tests/test_webui_keyword_chat_static.py tests/test_agent_server.py \
+  -q -s -p no:cacheprovider
 ```
 
-Result before implementation: `13 failed, 6 passed`. A separate traceback-safety RED
-also failed because a provider secret remained visible through exception chaining.
+Result: `30 passed in 7.32s`.
 
-### GREEN and compatibility
+`git diff --check` is clean.
 
-Command:
+## Files changed
 
-```bash
-TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_product_understanding.py tests/test_vision_matcher.py tests/test_matcher_keywords.py -v
-```
+- `webui/index.html`
+- `webui/app.js`
+- `webui/styles.css`
+- `tests/test_webui_sellersprite_static.py`
 
-Result: `49 passed`.
+## Self-review
 
-### Full suite
-
-Command:
-
-```bash
-TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/ -q --disable-warnings
-```
-
-Result: `518 passed, 5 skipped, 210 warnings in 229.67s` (exit code 0).
-
-### Review-fix self-check
-
-- All semantic model fields must be explicitly present; only ASIN, original title, and
-  provider/model/prompt metadata are runtime-owned and overwritten at the boundary.
-- Final validation uses `model_validate(..., strict=True)` and continues to forbid extras.
-- The structured cache identity now includes the SHA-256 of the actual prompt content.
-- Stable safe codes distinguish `image_download_failure`, `provider_failure`,
-  `json_parse_failure`, and `schema_validation`; suppressed exception chaining prevents
-  raw responses and API keys from appearing in rendered tracebacks.
-- Supplier-facing generic/supply-chain names are cleaned with the full product brand,
-  reasonable brand words, and all model-provided exclusion aliases; contaminated supplier
-  keyword entries are removed while exclusion evidence is retained.
-- Image URLs require an HTTP(S) scheme and non-empty network location after parsing.
+- Confirmed the card is Amazon-US-only and has no mock data or mock control.
+- Confirmed all user-visible card text has English and Chinese translations.
+- Confirmed result values are escaped at rendering time and numeric values are
+  accepted only when finite numbers.
+- Confirmed no SellerSprite-specific raw JSON rendering or untrusted exception
+  text was added; the generic Browser Assistant diagnostic is preserved.
+- Confirmed the shared SDD ledger and reports for prior tasks were not staged.

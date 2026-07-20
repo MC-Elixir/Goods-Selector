@@ -7,6 +7,7 @@ import mimetypes
 import os
 import re
 import uuid
+from datetime import date, datetime
 from io import StringIO
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -35,10 +36,12 @@ from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
 from agent.sellersprite_models import SellerSpriteResult
 from agent.sellersprite_policy import validate_sellersprite_asin
 from agent.sellersprite_service import run_reverse_keyword_export
+from agent.sellersprite_batch import run_reverse_keyword_batch
 from db.sellersprite_repository import list_sellersprite_imports
 from db.session import engine as db_engine
 from config.settings import settings
 from crawlers.amazon_search import keyword_preview, normalize_keyword
+from execution.models import LeaseLost
 from matchers.imported_suppliers import import_alibaba_supplier_payload, list_imported_suppliers
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +80,20 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             return self._json(keyword_preview(keyword))
         if parsed.path == "/api/jobs":
             return self._json({"jobs": self.runtime.list_jobs()})
+        run_nodes_match = re.fullmatch(r"/api/runs/(\d+)/nodes", parsed.path)
+        if run_nodes_match:
+            return self._json({
+                "run_id": int(run_nodes_match.group(1)),
+                "nodes": self.runtime.execution_nodes(int(run_nodes_match.group(1))),
+            })
+        run_attempts_match = re.fullmatch(
+            r"/api/runs/(\d+)/nodes/(\d+)/attempts", parsed.path
+        )
+        if run_attempts_match:
+            run_id = int(run_attempts_match.group(1))
+            node_id = int(run_attempts_match.group(2))
+            status, payload = _handle_execution_attempt_query(self.runtime, run_id, node_id)
+            return self._json(payload, status)
         if parsed.path == "/api/run-events":
             qs = parse_qs(parsed.query)
             run_id = (qs.get("run_id") or [None])[0]
@@ -136,7 +153,7 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 job = self.runtime.start_run(config)
                 return self._json({"job": job.to_dict()}, HTTPStatus.ACCEPTED)
             if parsed.path.startswith("/api/jobs/"):
-                status, payload = _handle_job_action(parsed.path, self.runtime)
+                status, payload = _handle_job_action(parsed.path, self.runtime, body)
                 return self._json(payload, status)
             if parsed.path == "/api/chat":
                 message = str(body.get("message") or "").strip()
@@ -153,6 +170,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 return self._json(payload, status)
             if parsed.path == "/api/sellersprite/reverse-keywords":
                 return self._json(_handle_sellersprite_reverse_keyword_request(body))
+            if parsed.path == "/api/sellersprite/reverse-keywords-batch":
+                return self._json(_handle_sellersprite_reverse_keyword_batch_request(body))
             if parsed.path == "/api/sellersprite/browser-config":
                 enabled = body.get("enabled")
                 if not isinstance(enabled, bool):
@@ -230,6 +249,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 return self._json(result)
         except KeyError:
             return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+        except LeaseLost as exc:
+            return self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
         except ValueError as exc:
             return self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
@@ -250,7 +271,9 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
         return data
 
     def _json(self, payload, status: HTTPStatus = HTTPStatus.OK) -> None:
-        data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        data = json.dumps(
+            payload, ensure_ascii=False, indent=2, default=_json_default
+        ).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
@@ -294,6 +317,14 @@ def run_server(host: str = "127.0.0.1", port: int = 8765) -> None:
     httpd.serve_forever()
 
 
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def reviewed_supplier_csv_fields() -> list[str]:
     return [
         "export_id", "asin", "product_title", "total_score", "profit_margin",
@@ -305,9 +336,33 @@ def reviewed_supplier_csv_fields() -> list[str]:
     ]
 
 
-def _handle_job_action(path: str, runtime: AgentRuntime) -> tuple[HTTPStatus, dict]:
+def _handle_job_action(
+    path: str,
+    runtime: AgentRuntime,
+    body: dict | None = None,
+) -> tuple[HTTPStatus, dict]:
     parts = [part for part in path.split("/") if part]
-    if len(parts) != 4 or parts[:2] != ["api", "jobs"]:
+    if parts[:2] != ["api", "jobs"]:
+        return HTTPStatus.NOT_FOUND, {"error": "not found"}
+    if len(parts) == 6 and parts[3] == "nodes":
+        job_id, raw_node_id, action = parts[2], parts[4], parts[5]
+        if action not in {"resume", "retry", "force-rerun"}:
+            return HTTPStatus.NOT_FOUND, {"error": "not found"}
+        try:
+            node_id = int(raw_node_id)
+        except ValueError:
+            raise ValueError("node_id must be an integer")
+        reason = str((body or {}).get("reason") or "").strip()
+        if not reason:
+            raise ValueError("reason is required")
+        resume_token = str((body or {}).get("resume_token") or "").strip()
+        if not resume_token:
+            raise ValueError("resume_token is required")
+        payload = runtime.operate_node(
+            job_id, node_id, action, reason=reason, resume_token=resume_token
+        )
+        return HTTPStatus.ACCEPTED, payload
+    if len(parts) != 4:
         return HTTPStatus.NOT_FOUND, {"error": "not found"}
     job_id, action = parts[2], parts[3]
     if action == "cancel":
@@ -316,6 +371,22 @@ def _handle_job_action(path: str, runtime: AgentRuntime) -> tuple[HTTPStatus, di
         job = runtime.retry_job(job_id)
         return HTTPStatus.ACCEPTED, {"job": job.to_dict()}
     return HTTPStatus.NOT_FOUND, {"error": "not found"}
+
+
+def _handle_execution_attempt_query(
+    runtime: AgentRuntime,
+    run_id: int,
+    node_id: int,
+) -> tuple[HTTPStatus, dict]:
+    try:
+        attempts = runtime.execution_attempts(int(run_id), int(node_id))
+    except KeyError:
+        return HTTPStatus.NOT_FOUND, {"error": "not found"}
+    return HTTPStatus.OK, {
+        "run_id": int(run_id),
+        "node_id": int(node_id),
+        "attempts": attempts,
+    }
 
 
 def _handle_browser_agent_request(body: dict) -> tuple[HTTPStatus, dict]:
@@ -340,6 +411,25 @@ def _handle_sellersprite_reverse_keyword_request(body: dict) -> dict:
     sourcing_run_id = _optional_sellersprite_sourcing_run_id(body.get("sourcing_run_id"))
     result = run_reverse_keyword_export(asin=asin, sourcing_run_id=sourcing_run_id)
     return _safe_sellersprite_result_payload(result)
+
+
+def _handle_sellersprite_reverse_keyword_batch_request(body: dict) -> dict:
+    raw_asins = body.get("asins")
+    if not isinstance(raw_asins, list):
+        raise ValueError("asins must be a JSON array")
+    sourcing_run_id = _optional_sellersprite_sourcing_run_id(body.get("sourcing_run_id"))
+    batch = run_reverse_keyword_batch(raw_asins, sourcing_run_id=sourcing_run_id)
+    return {
+        "results": [_safe_sellersprite_result_payload(result) for result in batch.results],
+        "summary": {
+            "requested_count": len(raw_asins),
+            "processed_count": len(batch.results),
+            "success_count": batch.success_count,
+            "human_required_count": batch.human_required_count,
+            "stopped": batch.stopped,
+            "stop_reason": batch.stop_reason,
+        },
+    }
 
 
 def _optional_sellersprite_sourcing_run_id(value: object) -> str | None:

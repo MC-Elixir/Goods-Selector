@@ -42,9 +42,16 @@ def load_sellersprite_browser_config(project_root: Path, settings: Any) -> Selle
         "SELLERSPRITE_BROWSER_DOWNLOAD_DIR",
         payload.get("download_dir", settings.sellersprite_browser_download_dir),
     )
+    # ``host_download_dir`` is deliberately persisted only as the sentinel
+    # ``configured`` because the actual host path may be machine-specific.
+    # BaseSettings still loads the real value from the project .env, so it
+    # must take precedence over that sentinel for host-side CLI runs.
+    settings_host_download_dir = str(
+        settings.sellersprite_browser_host_download_dir or ""
+    ).strip()
     host_download_dir = _env_text(
         "SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR",
-        payload.get("host_download_dir", settings.sellersprite_browser_host_download_dir),
+        settings_host_download_dir or payload.get("host_download_dir", ""),
     )
     return SellerSpriteBrowserConfig(
         enabled=enabled,

@@ -108,6 +108,42 @@ def test_legacy_dto_only_copies_extracted_values_and_retains_full_evidence():
     assert product.raw_data["field_evidence"]["price"]["status"] == "missing"
 
 
+def test_detail_hydrates_product_understanding_text_images_and_attributes():
+    fields = extract_amazon_detail(
+        FakePage(
+            texts={
+                "#productTitle": "9 FT Market Patio Umbrella",
+                "#productDescription": "Outdoor center-pole shade umbrella.",
+            },
+            attrs={
+                ("#altImages", "data-secondary-images"): '["https://img/side.jpg"]',
+            },
+            rows={
+                "Product Dimensions": "108 x 108 x 96 inches",
+                "Package Dimensions": "58 x 7 x 7 inches",
+                "Number of Items": "1",
+                "Material": "Polyester",
+            },
+            text_lists={"#feature-bullets li": ["9 FT canopy", "8 steel ribs"]},
+        ),
+        source_ref="artifact:patio-umbrella",
+    )
+    product = ProductDTO(asin="B000PATIO", marketplace="US", title="old")
+
+    apply_detail_evidence(product, fields)
+
+    assert product.raw_data["bullet_points"] == ["9 FT canopy", "8 steel ribs"]
+    assert product.raw_data["description"] == "Outdoor center-pole shade umbrella."
+    assert product.raw_data["secondary_images"] == ["https://img/side.jpg"]
+    assert product.raw_data["package_dimensions"] == (147.32, 17.78, 17.78)
+    assert product.raw_data["attributes"] == {
+        "material": "Polyester",
+        "package_quantity": 1,
+        "product_dimensions": (274.32, 274.32, 243.84),
+        "package_dimensions": (147.32, 17.78, 17.78),
+    }
+
+
 DETAIL_HTML = """
 <html><span id="productTitle">Adapter Product</span>
 <div id="corePrice_feature_div"><span class="a-offscreen">$18.50</span></div>

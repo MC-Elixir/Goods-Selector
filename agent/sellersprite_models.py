@@ -105,6 +105,9 @@ class SellerSpriteLocatorProfile:
     export_menu: str
     export: str
     quota_required: str = ""
+    # Responsive extension layouts hide the desktop footer actions behind an
+    # explicit overflow button. Empty keeps older locator profiles compatible.
+    export_overflow: str = ""
 
     @classmethod
     def from_json(cls, path: Path) -> "SellerSpriteLocatorProfile":
@@ -139,4 +142,19 @@ class SellerSpriteLocatorProfile:
                 or not payload_value.strip()
             ):
                 raise ValueError("locator 'quota_required' must use a supported locator syntax")
-        return cls(**locators, quota_required=quota_required)
+        export_overflow = payload.get("export_overflow", "")
+        if not isinstance(export_overflow, str):
+            raise ValueError("locator 'export_overflow' must be a string when provided")
+        if export_overflow:
+            prefix, separator, payload_value = export_overflow.partition("=")
+            if (
+                not separator
+                or prefix not in _SUPPORTED_LOCATOR_PREFIXES
+                or not payload_value.strip()
+            ):
+                raise ValueError("locator 'export_overflow' must use a supported locator syntax")
+        return cls(
+            **locators,
+            quota_required=quota_required,
+            export_overflow=export_overflow,
+        )

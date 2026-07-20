@@ -23,7 +23,7 @@ def _skip_runtime_result_summary(monkeypatch):
     )
 
 
-def _wait_until(predicate, timeout: float = 2.0) -> None:
+def _wait_until(predicate, timeout: float = 5.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if predicate():
@@ -64,6 +64,39 @@ def test_runtime_startup_marks_interrupted_runs_as_failed(monkeypatch, tmp_path)
         assert run.status == "failed"
         assert run.finished_at is not None
         assert run.error_message == "Interrupted by WebUI server restart"
+
+
+def test_runtime_startup_preserves_recoverable_run_before_first_node(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'early-recovery.db'}", future=True)
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+
+    @contextmanager
+    def temp_session_scope():
+        with session_local.begin() as session:
+            yield session
+
+    with temp_session_scope() as session:
+        session.add(RunLog(
+            marketplace="US",
+            started_at=datetime.utcnow(),
+            status="running",
+            api_calls={"recoverable_config": {
+                "category": "Home & Kitchen",
+                "source_mode": "category",
+                "marketplace": "US",
+                "limit": 1,
+            }},
+        ))
+
+    monkeypatch.setattr("agent.runner.session_scope", temp_session_scope)
+    AgentRuntime(job_store_path=tmp_path / "agent_jobs.json")
+
+    with temp_session_scope() as session:
+        run = session.query(RunLog).one()
+        assert run.status == "retry_wait"
+        assert run.finished_at is None
+        assert run.error_message is None
 
 
 def test_runtime_queues_jobs_and_runs_only_one_at_a_time(monkeypatch, tmp_path):
@@ -354,6 +387,73 @@ def test_runtime_marks_running_jobs_interrupted_on_restore(tmp_path):
     assert data["status"] == "failed"
     assert data["message"] == "Interrupted by server restart"
     assert data["events"][-1]["event"] == "interrupted"
+
+
+def test_runtime_requeues_persisted_retry_wait_job_after_restart(monkeypatch, tmp_path):
+    store = tmp_path / "agent_jobs.json"
+    monkeypatch.setattr(AgentRuntime, "_recover_interrupted_runs", lambda self: None)
+    monkeypatch.setattr(AgentRuntime, "_ensure_worker_locked", lambda self: None)
+    monkeypatch.setattr(AgentRuntime, "_restored_job_status", lambda self, job: "queued")
+
+    waiting = AgentJob(config=AgentRunConfig(category="Home & Kitchen", limit=1))
+    waiting.status = "retry_wait"
+    waiting.run_log_id = 321
+    runtime = AgentRuntime(job_store_path=store)
+    with runtime._lock:
+        runtime._jobs[waiting.id] = waiting
+        runtime._persist_jobs_locked()
+
+    restored = AgentRuntime(job_store_path=store)
+    data = restored.get_job(waiting.id)
+    assert data["status"] == "queued"
+    assert data["run_log_id"] == 321
+    assert data["events"][-1]["event"] == "resume_queued"
+    assert waiting.id in restored._queue
+
+
+def test_runtime_reconstructs_missing_job_from_sqlite_truth(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'sqlite-truth.db'}", future=True)
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+
+    @contextmanager
+    def temp_session_scope():
+        with session_local.begin() as session:
+            yield session
+
+    with temp_session_scope() as session:
+        run = RunLog(
+            category="Home & Kitchen",
+            marketplace="US",
+            status="retry_wait",
+            api_calls={
+                "recoverable_config": {
+                    "category": "Home & Kitchen",
+                    "source_mode": "category",
+                    "keyword": "",
+                    "marketplace": "US",
+                    "limit": 3,
+                    "allow_mock_suppliers": False,
+                }
+            },
+        )
+        session.add(run)
+        session.flush()
+        run_id = run.id
+
+    monkeypatch.setattr("agent.runner.session_scope", temp_session_scope)
+    monkeypatch.setattr(AgentRuntime, "_recover_interrupted_runs", lambda self: None)
+    monkeypatch.setattr(AgentRuntime, "_ensure_worker_locked", lambda self: None)
+    runtime = AgentRuntime(job_store_path=tmp_path / "missing-agent-jobs.json")
+    assert runtime.list_jobs() == []
+
+    runtime._restore_missing_sqlite_jobs()
+    jobs = runtime.list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0]["id"] == f"recovered-run-{run_id}"
+    assert jobs[0]["run_log_id"] == run_id
+    assert jobs[0]["status"] == "queued"
+    assert jobs[0]["config"]["no_mock"] is True
 
 
 def test_runtime_fails_job_when_required_market_data_missing(monkeypatch, tmp_path):

@@ -42,4 +42,7 @@ def test_enriched_keywords_prioritize_product_terms_before_pack_counts():
     )
 
     assert keywords[:3] == ["液体蚂蚁诱饵盒", "家用灭蚁药", "杀虫饵剂"]
-    assert "12件套" in keywords[3:]
+    assert "12件套" not in keywords
+    assert "12条装" not in keywords
+    assert "液体蚂蚁诱饵盒 12盒装" in keywords[3:]
+    assert "家用灭蚁药 12盒装" in keywords[3:]

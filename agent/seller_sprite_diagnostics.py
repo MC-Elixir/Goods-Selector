@@ -67,9 +67,20 @@ def save_seller_sprite_diagnostic(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def seller_sprite_market_data_guard() -> tuple[bool, str]:
-    """Return whether SellerSprite is ready for runs that require market data."""
+    """Return whether any configured SellerSprite source can supply market data.
+
+    The authenticated browser extension is the primary source.  The legacy API
+    diagnostic remains a fallback so an invalid retained API key cannot block a
+    healthy CDP workflow.
+    """
+    # Import lazily because preflight itself reads the sanitized API diagnostic.
+    from agent.preflight import check_seller_sprite_browser
+
+    browser = check_seller_sprite_browser()
+    if browser.get("level") == "ok":
+        return True, ""
     if not settings.mjjl_api_key:
-        return False, "SellerSprite API key missing"
+        return False, str(browser.get("detail") or "SellerSprite API key missing")
     diagnostic = load_seller_sprite_diagnostic()
     if diagnostic.get("has_market_evidence"):
         return True, ""

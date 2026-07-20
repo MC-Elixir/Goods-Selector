@@ -2,6 +2,7 @@ const state = {
   preflight: null,
   categories: [],
   jobs: [],
+  executionNodes: {},
   runs: [],
   results: [],
   manualQueue: [],
@@ -30,6 +31,8 @@ const I18N = {
     "actions.cancel": "Cancel",
     "actions.delete": "Delete",
     "actions.retry": "Retry",
+    "actions.resume": "Resume",
+    "actions.forceRerun": "Force rerun",
     "actions.runAgent": "Run Agent",
     "actions.viewAll": "View all",
     "brand.subtitle": "Agent Console",
@@ -290,6 +293,10 @@ const I18N = {
     "sidebar.footer": "v0.3 Agent Preview",
     "sidebar.systemStatus": "System Status",
     "status.failed": "failed",
+    "status.human_required": "human action",
+    "status.retry_wait": "retry wait",
+    "status.timed_out": "timed out",
+    "status.skipped": "skipped",
     "status.cancel_requested": "cancelling",
     "status.cancelled": "cancelled",
     "status.mock": "Mock",
@@ -323,6 +330,8 @@ const I18N = {
     "actions.cancel": "取消",
     "actions.delete": "删除",
     "actions.retry": "重试",
+    "actions.resume": "继续",
+    "actions.forceRerun": "强制重跑",
     "actions.runAgent": "运行 Agent",
     "actions.viewAll": "查看全部",
     "brand.subtitle": "Agent 控制台",
@@ -583,6 +592,10 @@ const I18N = {
     "sidebar.footer": "v0.3 Agent 预览版",
     "sidebar.systemStatus": "系统状态",
     "status.failed": "失败",
+    "status.human_required": "等待人工处理",
+    "status.retry_wait": "等待重试",
+    "status.timed_out": "已超时",
+    "status.skipped": "已跳过",
     "status.cancel_requested": "取消中",
     "status.cancelled": "已取消",
     "status.mock": "Mock",
@@ -735,6 +748,16 @@ async function refreshPreflight() {
 async function refreshJobs() {
   const data = await getJson("/api/jobs");
   state.jobs = data.jobs || [];
+  const runIds = [...new Set(state.jobs.map((job) => job.run_log_id).filter(Boolean))];
+  const nodeResults = await Promise.all(runIds.map(async (runId) => {
+    try {
+      const payload = await getJson(`/api/runs/${encodeURIComponent(runId)}/nodes`);
+      return [String(runId), payload.nodes || []];
+    } catch (_error) {
+      return [String(runId), []];
+    }
+  }));
+  state.executionNodes = Object.fromEntries(nodeResults);
   renderJobs();
 }
 
@@ -1329,6 +1352,7 @@ function renderJobs() {
       ? `<p class="job-summary">${escapeHtml(job.result_summary.summary.split("\n").slice(0, 3).join(" "))}</p>`
       : "";
     const events = jobEventTimeline(job);
+    const nodes = executionNodeList(job);
     row.innerHTML = `
       <span class="job-dot"></span>
       <div>
@@ -1336,6 +1360,7 @@ function renderJobs() {
         <span>${escapeHtml(meta)}${job.queue_position ? ` · #${Number(job.queue_position)}` : ""}${job.error ? ` · ${escapeHtml(jobMessageLabel(job.error))}` : ""}</span>
         ${summary}
         ${events}
+        ${nodes}
       </div>
       <div class="job-actions">
         <span class="badge ${job.status === "success" ? "ok" : job.status === "failed" || job.status === "cancelled" ? "err" : "warn"}">${escapeHtml(statusLabel(job.status))}</span>
@@ -1361,6 +1386,49 @@ function renderJobs() {
       }
     });
   });
+  $$(".node-action").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const reason = window.prompt(`${button.textContent}: reason / 原因`);
+      if (!reason || !reason.trim()) return;
+      button.disabled = true;
+      try {
+        await postJson(
+          `/api/jobs/${encodeURIComponent(button.dataset.jobId)}/nodes/${encodeURIComponent(button.dataset.nodeId)}/${button.dataset.action}`,
+          { reason: reason.trim(), resume_token: button.dataset.resumeToken },
+        );
+        await refreshJobs();
+      } catch (error) {
+        button.textContent = error.message;
+      }
+    });
+  });
+}
+
+function executionNodeList(job) {
+  if (!job.run_log_id) return "";
+  const nodes = state.executionNodes[String(job.run_log_id)] || [];
+  if (!nodes.length) return "";
+  return `<ul class="execution-nodes">${nodes.map((node) => {
+    const scope = node.scope_type === "asin" ? node.scope_key : "run";
+    const human = node.human_action_required || {};
+    const detail = human.instructions || node.error_detail || node.error_code || "";
+    return `<li><div><span><code>${escapeHtml(scope)}</code> · ${escapeHtml(node.stage)} · <b>${escapeHtml(statusLabel(node.status))}</b> · #${Number(node.attempt_count || 0)}</span>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}</div>${nodeActionButton(job, node)}</li>`;
+  }).join("")}</ul>`;
+}
+
+function nodeActionButton(job, node) {
+  if (["queued", "running", "cancel_requested"].includes(job.status)) return "";
+  const token = escapeAttr(node.resume_token || "");
+  if (node.status === "human_required") {
+    return `<button class="link-button node-action" data-job-id="${escapeAttr(job.id)}" data-node-id="${Number(node.id)}" data-resume-token="${token}" data-action="resume">${escapeHtml(t("actions.resume"))}</button>`;
+  }
+  if (["failed", "timed_out"].includes(node.status)) {
+    return `<button class="link-button node-action" data-job-id="${escapeAttr(job.id)}" data-node-id="${Number(node.id)}" data-resume-token="${token}" data-action="retry">${escapeHtml(t("actions.retry"))}</button>`;
+  }
+  if (["succeeded", "skipped", "cancelled"].includes(node.status)) {
+    return `<button class="link-button node-action" data-job-id="${escapeAttr(job.id)}" data-node-id="${Number(node.id)}" data-resume-token="${token}" data-action="force-rerun">${escapeHtml(t("actions.forceRerun"))}</button>`;
+  }
+  return "";
 }
 
 function jobEventTimeline(job) {

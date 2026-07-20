@@ -93,6 +93,7 @@ class PlaywrightSellerSpriteSession:
         *,
         profile: SellerSpriteLocatorProfile,
         download_dir: Path | str,
+        browser_download_dir: Path | str | None = None,
         page_timeout_seconds: int = 45,
         export_timeout_seconds: int = 120,
         download_observer: Any | None = None,
@@ -105,6 +106,7 @@ class PlaywrightSellerSpriteSession:
     ) -> None:
         self.profile = profile
         self.download_dir = Path(download_dir)
+        self.browser_download_dir = str(browser_download_dir or download_dir)
         self.page_timeout_seconds = page_timeout_seconds
         self.export_timeout_seconds = export_timeout_seconds
         self._download_observer = download_observer or FilesystemDownloadObserver()
@@ -207,15 +209,45 @@ class PlaywrightSellerSpriteSession:
         self._fill_required("asin_input", asin)
         self._click_required("submit")
         self._raise_if_human_terminal()
-        if not self._is_visible("results_ready"):
+        if not self._wait_until_visible("results_ready"):
+            self._raise_if_human_terminal()
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._ensure_not_cancelled()
+        # SellerSprite renders the result marker before the table actions. In
+        # practice the export control can appear 1–2 minutes later, so using
+        # ``results_ready`` alone races the export click and is misclassified
+        # as extension-unavailable. Wait for the reviewed export locator too.
+        overflow_opened = False
+        if getattr(self.profile, "export_overflow", "") and self._is_visible("export_overflow"):
+            self._click_required("export_overflow")
+            overflow_opened = True
+        export_visible = self._wait_until_visible(
+            "export_menu",
+            timeout_seconds=max(
+                int(self.page_timeout_seconds),
+                int(self.export_timeout_seconds),
+            ),
+        )
+        if not export_visible and not overflow_opened and getattr(self.profile, "export_overflow", ""):
+            # The extension uses a compact responsive footer at the current
+            # CDP viewport. Open its explicit overflow menu, then re-check the
+            # reviewed export locator; no selector discovery is performed.
+            self._click_required("export_overflow")
+            export_visible = self._wait_until_visible(
+                "export_menu",
+                timeout_seconds=int(self.page_timeout_seconds),
+            )
+        if not export_visible:
+            self._raise_if_human_terminal()
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
 
         self._ensure_not_cancelled()
         self._raise_if_human_terminal()
         self._configure_download_behavior()
         self._ensure_not_cancelled()
-        self._click_required("export_menu")
+        direct_export = self.profile.export_menu == self.profile.export
+        if not direct_export:
+            self._click_required("export_menu")
         self._ensure_not_cancelled()
         try:
             snapshot = self._download_observer.snapshot(self.download_dir)
@@ -263,7 +295,7 @@ class PlaywrightSellerSpriteSession:
                     "Browser.setDownloadBehavior",
                     {
                         "behavior": "allow",
-                        "downloadPath": str(self.download_dir),
+                        "downloadPath": self.browser_download_dir,
                         "eventsEnabled": True,
                     },
                 )
@@ -288,7 +320,8 @@ class PlaywrightSellerSpriteSession:
 
     def _click_required(self, locator_name: str) -> None:
         self._ensure_not_cancelled()
-        if not self._is_visible(locator_name):
+        if not self._wait_until_visible(locator_name):
+            self._raise_if_human_terminal()
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._ensure_not_cancelled()
         try:
@@ -301,7 +334,8 @@ class PlaywrightSellerSpriteSession:
 
     def _fill_required(self, locator_name: str, value: str) -> None:
         self._ensure_not_cancelled()
-        if not self._is_visible(locator_name):
+        if not self._wait_until_visible(locator_name):
+            self._raise_if_human_terminal()
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._ensure_not_cancelled()
         try:
@@ -326,6 +360,32 @@ class PlaywrightSellerSpriteSession:
         self._ensure_not_cancelled()
         try:
             visible = bool(self._locator(locator_name).is_visible())
+        except SellerSpriteWorkflowError:
+            raise
+        except Exception:
+            return False
+        self._ensure_not_cancelled()
+        return visible
+
+    def _wait_until_visible(
+        self,
+        locator_name: str,
+        *,
+        timeout_seconds: int | None = None,
+    ) -> bool:
+        """Wait for one reviewed locator without discovering alternatives."""
+        self._ensure_not_cancelled()
+        try:
+            locator = self._locator(locator_name)
+            wait_for = getattr(locator, "wait_for", None)
+            if callable(wait_for):
+                wait_for(
+                    state="visible",
+                    timeout=(
+                        int(timeout_seconds or self.page_timeout_seconds) * 1000
+                    ),
+                )
+            visible = bool(locator.is_visible())
         except SellerSpriteWorkflowError:
             raise
         except Exception:

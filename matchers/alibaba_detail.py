@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, TypedDict
 from html import unescape
 
+from domain.target_categories import profile_from_text
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.product_spec import spec_from_text
 
@@ -38,6 +39,11 @@ _PARSED_DETAIL_KEYS = {
     "color",
     "risk_flags",
     "raw_text",
+    "function",
+    "product_type",
+    "package_quantity",
+    "category_profile",
+    "factory_evidence",
 }
 
 _REQUIRED_DETAIL_FIELDS = (
@@ -46,7 +52,8 @@ _REQUIRED_DETAIL_FIELDS = (
     "origin", "delivery_days", "customization", "custom_logo", "custom_packaging",
     "sample_available", "supplier_type", "supplier_years", "supplier_location",
     "transaction_volume", "specification_images", "detail_images", "certifications",
-    "return_dispute_terms", "risk_flags",
+    "return_dispute_terms", "risk_flags", "function", "product_type",
+    "package_quantity", "category_profile", "factory_evidence",
 )
 
 _BLOCK_MARKERS = (
@@ -85,8 +92,36 @@ def parse_1688_offer_detail(raw: str | dict[str, Any]) -> dict[str, Any]:
     data = raw if isinstance(raw, dict) else {}
     text = _detail_text(raw)
     spec = spec_from_text(text)
+    category_profile = profile_from_text(text)
     price_tiers = _price_tiers(data) or _price_tiers_from_text(text)
     dimensions = spec.dimensions_cm or _parse_dimensions(text)
+    supplier_type = _deep_first_value(data, {"companyType", "supplierType", "businessType"})
+    supplier_years = _first_int(data, "companyYears", "supplierYears", "yearsInBusiness")
+    supplier_location = _deep_first_value(data, {"companyAddress", "supplierLocation", "location"})
+    transaction_volume = _deep_first_value(data, {"transactionVolume", "tradeVolume", "transactions"})
+    customization = _first_present(data, "supportCustom", "customization", "isCustomized")
+    package_quantity = spec.pack_count
+    if category_profile and category_profile.numeric.get("piece_count") is not None:
+        package_quantity = int(category_profile.numeric["piece_count"])
+    product_type = None
+    function = None
+    if category_profile:
+        product_type = "full_product" if category_profile.relation == "full_product" else category_profile.relation
+        function = {
+            "outdoor_storage": "户外储物",
+            "patio_heater": "户外取暖",
+            "patio_furniture_sets": "户外坐卧",
+            "patio_umbrellas_shade": "户外遮阳",
+        }[category_profile.category_id]
+    factory_evidence = {
+        key: value for key, value in {
+            "supplier_type": supplier_type,
+            "supplier_years": supplier_years,
+            "supplier_location": supplier_location,
+            "transaction_volume": transaction_volume,
+            "customization": customization,
+        }.items() if value not in (None, "", [], {})
+    } or None
     detail: dict[str, Any] = {
         "moq": _coalesce(_first_int(data, "minOrderQuantity", "minOrder", "moq", "beginAmount"), _moq_from_text(text)),
         "base_price_cny": _coalesce(_first_price(price_tiers), _first_float(data, "price", "priceCny", "minPrice")),
@@ -100,19 +135,24 @@ def parse_1688_offer_detail(raw: str | dict[str, Any]) -> dict[str, Any]:
         "specification": _attribute_value(data, "规格", "型号", "specification", "spec"),
         "package_details": _attribute_value(data, "包装", "包装方式", "package", "packing"),
         "origin": _attribute_value(data, "产地", "原产地", "origin"),
-        "customization": _first_present(data, "supportCustom", "customization", "isCustomized"),
+        "customization": customization,
         "custom_logo": _first_present(data, "customLogo", "logoCustomization"),
         "custom_packaging": _first_present(data, "customPackaging", "packagingCustomization"),
         "sample_available": _first_present(data, "sampleAvailable", "supportSample"),
-        "supplier_type": _deep_first_value(data, {"companyType", "supplierType", "businessType"}),
-        "supplier_years": _first_int(data, "companyYears", "supplierYears", "yearsInBusiness"),
-        "supplier_location": _deep_first_value(data, {"companyAddress", "supplierLocation", "location"}),
-        "transaction_volume": _deep_first_value(data, {"transactionVolume", "tradeVolume", "transactions"}),
+        "supplier_type": supplier_type,
+        "supplier_years": supplier_years,
+        "supplier_location": supplier_location,
+        "transaction_volume": transaction_volume,
         "specification_images": _string_list(_deep_first_value(data, {"skuImages", "specificationImages"})),
         "detail_images": _string_list(_deep_first_value(data, {"detailImageUrls", "detailImages", "imageUrls"})),
         "certifications": _string_list(_deep_first_value(data, {"certifications", "certificateList", "certificates"})),
         "return_dispute_terms": _deep_first_value(data, {"returnPolicy", "disputeTerms", "afterSalePolicy"}),
         "risk_flags": _risk_flags(text, spec.risk_flags),
+        "function": function,
+        "product_type": product_type,
+        "package_quantity": package_quantity,
+        "category_profile": category_profile.to_dict() if category_profile else None,
+        "factory_evidence": factory_evidence,
         "raw_text": text,
     }
     return _with_provenance(detail, raw)
@@ -208,6 +248,25 @@ def apply_1688_detail_to_supplier(supplier: SupplierDTO, raw: str | dict[str, An
         detail = dict(raw)
     else:
         detail = parse_1688_offer_detail(raw)
+    if not isinstance(detail.get("category_profile"), dict):
+        profile = profile_from_text(str(detail.get("raw_text") or ""))
+        if profile:
+            detail["category_profile"] = profile.to_dict()
+            detail.setdefault("product_type", "full_product" if profile.relation == "full_product" else profile.relation)
+            detail.setdefault("function", {
+                "outdoor_storage": "户外储物",
+                "patio_heater": "户外取暖",
+                "patio_furniture_sets": "户外坐卧",
+                "patio_umbrellas_shade": "户外遮阳",
+            }[profile.category_id])
+            if profile.numeric.get("piece_count") is not None:
+                detail.setdefault("package_quantity", int(profile.numeric["piece_count"]))
+    if not isinstance(detail.get("factory_evidence"), dict):
+        detail["factory_evidence"] = {
+            key: detail.get(key)
+            for key in ("supplier_type", "supplier_years", "supplier_location", "transaction_volume", "customization")
+            if detail.get(key) not in (None, "", [], {})
+        } or None
     if detail.get("moq") is not None:
         supplier.moq = supplier.moq or detail["moq"]
     if detail.get("base_price_cny") is not None:
@@ -224,13 +283,31 @@ def apply_1688_detail_to_supplier(supplier: SupplierDTO, raw: str | dict[str, An
         supplier.material = supplier.material or detail["material"]
     if detail.get("color"):
         supplier.color = supplier.color or detail["color"]
+    factory_flag = _factory_flag(detail.get("supplier_type"))
+    if supplier.is_factory is None and factory_flag is not None:
+        supplier.is_factory = factory_flag
     supplier.raw_data.setdefault("detail", {}).update(detail)
+    factory_evidence = detail.get("factory_evidence")
+    if isinstance(factory_evidence, dict):
+        supplier.raw_data["factory_evidence"] = dict(factory_evidence)
+    factory_fields = ("supplier_type", "supplier_years", "supplier_location", "transaction_volume", "customization")
+    known_factory_fields = sum(detail.get(name) not in (None, "", [], {}) for name in factory_fields)
+    supplier.raw_data["supplier_evidence_completeness"] = round(known_factory_fields / len(factory_fields), 4)
     if detail.get("risk_flags"):
         supplier.raw_data["risk_flags"] = list(dict.fromkeys([
             *(supplier.raw_data.get("risk_flags") or []),
             *detail["risk_flags"],
         ]))
     return supplier
+
+
+def _factory_flag(value: Any) -> bool | None:
+    text = str(value or "").casefold()
+    if any(term in text for term in ("生产厂家", "生产企业", "制造商", "manufacturer", "factory", "工厂")):
+        return True
+    if any(term in text for term in ("贸易", "经销", "批发商", "trading", "distributor")):
+        return False
+    return None
 
 
 def _raise_if_blocked(html: str) -> None:

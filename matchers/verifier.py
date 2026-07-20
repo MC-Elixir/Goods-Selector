@@ -26,6 +26,7 @@ from typing import Optional
 from loguru import logger
 
 from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
+from domain.target_categories import compare_target_profiles, profile_from_product, profile_from_supplier
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.product_spec import compare_specs, spec_from_product, spec_from_supplier
 from pydantic import ValidationError
@@ -110,9 +111,15 @@ class Alibaba1688Verifier:
         rejected: list[SupplierDTO] = []
         target_spec = spec_from_product(product, analysis)
         target_spec_payload = _spec_payload(target_spec)
+        target_category_profile = profile_from_product(product)
 
         for sup in suppliers:
             original_method = (sup.match_verification_method or "").lower()
+            spec_match = compare_specs(target_spec, spec_from_supplier(sup))
+            target_category_match = (
+                compare_target_profiles(target_category_profile, profile_from_supplier(sup))
+                if target_category_profile is not None else None
+            )
             if original_method != "mock" and not _title_is_relevant(sup, analysis, kw):
                 sup.match_quality_score = 0.0
                 sup.match_verification_method = "heuristic"
@@ -121,31 +128,59 @@ class Alibaba1688Verifier:
                     "score": 0.0,
                     "matched": [],
                     "missing": [],
-                    "conflicts": ["title_relevance"],
+                    "conflicts": ["title_relevance", *spec_match.conflicts],
                 }
                 _update_supplier_rank_scores(sup)
                 rejected.append(sup)
                 continue
             heuristic_score = self._compute_match_quality(sup, product, analysis, kw)
-            spec_match = compare_specs(target_spec, spec_from_supplier(sup))
             sup.raw_data["target_spec"] = target_spec_payload
             sup.raw_data["spec_match"] = {
-                "score": spec_match.score,
-                "matched": spec_match.matched,
-                "missing": spec_match.missing,
-                "conflicts": spec_match.conflicts,
+                "score": target_category_match.score if target_category_match is not None else spec_match.score,
+                "matched": [
+                    *spec_match.matched,
+                    *([f"target_category:{name}" for name in target_category_match.matched] if target_category_match else []),
+                ],
+                "missing": [
+                    *spec_match.missing,
+                    *([f"target_category:{name}" for name in target_category_match.missing] if target_category_match else []),
+                ],
+                "conflicts": [
+                    *spec_match.conflicts,
+                    *([f"target_category:{name}" for name in target_category_match.conflicts] if target_category_match else []),
+                ],
             }
+            if target_category_profile is not None:
+                sup.raw_data["target_category_profile"] = target_category_profile.to_dict()
+                sup.raw_data["target_category_match"] = target_category_match.to_dict()
             visual_score = self._visual_score(sup, product)
             sup.raw_data["visual_match"] = {
                 "score": visual_score,
-                "source": "image_similarity" if sup.image_similarity is not None else "availability",
+                "source": "image_similarity" if sup.image_similarity is not None else "missing",
             }
-            score = 0.55 * heuristic_score + 0.30 * spec_match.score + 0.15 * visual_score
+            # A known product-family conflict is a semantic hard gate. Business
+            # popularity, matching pack count, or image availability must not
+            # rescue cookware for a pest-control product.
+            if "category" in spec_match.conflicts or (
+                target_category_match is not None and target_category_match.decision == "reject"
+            ):
+                sup.match_quality_score = 0.0
+                sup.match_verification_method = "heuristic_rejected"
+                _update_supplier_rank_scores(sup)
+                rejected.append(sup)
+                continue
+            decision_spec_score = target_category_match.score if target_category_match is not None else spec_match.score
+            score = 0.55 * heuristic_score + 0.30 * decision_spec_score + 0.15 * visual_score
             if spec_match.conflicts:
                 score *= max(0.45, 1 - 0.15 * len(spec_match.conflicts))
+            if target_category_match is not None and target_category_match.decision == "manual_review":
+                score = min(score, 0.49)
             sup.match_quality_score = round(score, 4)
             _update_supplier_rank_scores(sup)
-            sup.match_verification_method = "heuristic"
+            sup.match_verification_method = (
+                "manual_review" if target_category_match is not None and target_category_match.decision == "manual_review"
+                else "heuristic"
+            )
             results.append(sup)
 
         results.sort(key=_supplier_sort_key, reverse=True)
@@ -164,8 +199,9 @@ class Alibaba1688Verifier:
     def _compute_match_quality(self, supplier, product, analysis, keywords):
         attr_score = self._attribute_score(supplier, analysis)
         title_score = self._title_score(supplier, analysis, keywords)
-        search_score = self._search_relevance(supplier, keywords)
-        return 0.35 * attr_score + 0.45 * title_score + 0.20 * search_score
+        # Sales is supplier/business evidence, not semantic relevance. It is
+        # ranked separately by _supplier_quality_score after the match gate.
+        return 0.40 * attr_score + 0.60 * title_score
 
     def _attribute_score(self, supplier, analysis):
         if analysis is None:
@@ -216,13 +252,8 @@ class Alibaba1688Verifier:
     def _visual_score(self, supplier, product) -> float:
         if supplier.image_similarity is not None:
             return _clamp(float(supplier.image_similarity))
-        product_has_image = bool(getattr(product, "main_image_url", None))
-        supplier_has_image = bool(getattr(supplier, "offer_image_url", None))
-        if product_has_image and supplier_has_image:
-            return 0.55
-        if product_has_image or supplier_has_image:
-            return 0.35
-        return SCORE_DEFAULT
+        # Image availability is not image similarity evidence.
+        return 0.0
 
 
 def _spec_payload(spec) -> dict:
@@ -730,7 +761,7 @@ def _keyword_title_score(offer_title: str, keywords: list[str]) -> float:
         return 0.0
     best = 0.0
     for kw in keywords:
-        kw = (kw or "").strip()
+        kw = _semantic_keyword(kw)
         if not kw:
             continue
         if kw in offer_title:
@@ -745,11 +776,27 @@ def _keyword_title_score(offer_title: str, keywords: list[str]) -> float:
     return best
 
 
+def _semantic_keyword(keyword: str) -> str:
+    """Remove quantity/unit-only modifiers before title relevance scoring."""
+    value = str(keyword or "").strip()
+    value = re.sub(
+        r"(?:^|\s)\d+(?:\.\d+)?\s*(?:ml|l|oz|g|kg|cm|mm|英寸|件套|条装|盒装|只装|个装|支装|片装)(?:\s|$)",
+        " ",
+        value,
+        flags=re.I,
+    ).strip()
+    if value in {"大容量", "小容量", "多尺寸规格"}:
+        return ""
+    return value
+
+
 def _update_supplier_rank_scores(supplier: SupplierDTO) -> None:
     quality_score = _supplier_quality_score(supplier)
     business_score = _supplier_business_score(supplier)
     supplier.raw_data["supplier_quality_score"] = quality_score
     supplier.raw_data["supplier_business_score"] = business_score
+    supplier.raw_data["supplier_quality_evidence_completeness"] = _supplier_quality_completeness(supplier)
+    supplier.raw_data["supplier_business_evidence_completeness"] = _supplier_business_completeness(supplier)
     supplier.raw_data["supplier_candidate_score"] = _candidate_score(
         match_score=supplier.match_quality_score,
         supplier_quality_score=quality_score,
@@ -769,28 +816,59 @@ def _supplier_sort_key(supplier: SupplierDTO) -> tuple[float, float, float]:
 def _candidate_score(
     *,
     match_score: float | None,
-    supplier_quality_score: float,
-    business_score: float,
+    supplier_quality_score: float | None,
+    business_score: float | None,
 ) -> float:
     match = _clamp(float(match_score or 0.0))
-    return round(0.65 * match + 0.25 * supplier_quality_score + 0.10 * business_score, 4)
-
-
-def _supplier_quality_score(supplier: SupplierDTO) -> float:
-    sales_score = _sales_score(supplier.monthly_sales)
-    repeat_score = _repeat_score(supplier.repeat_buyer_rate)
-    factory_score = 1.0 if supplier.is_factory is True else 0.45 if supplier.is_factory is False else 0.65
-    delivery_score = _delivery_score(supplier.delivery_days)
     return round(
-        _clamp(0.35 * sales_score + 0.30 * repeat_score + 0.25 * factory_score + 0.10 * delivery_score),
+        0.65 * match
+        + 0.25 * float(supplier_quality_score or 0.0)
+        + 0.10 * float(business_score or 0.0),
         4,
     )
 
 
-def _supplier_business_score(supplier: SupplierDTO) -> float:
-    moq_score = _moq_score(supplier.moq)
-    price_score = _price_score(supplier.base_price_cny)
-    return round(_clamp(0.65 * moq_score + 0.35 * price_score), 4)
+def _supplier_quality_score(supplier: SupplierDTO) -> float | None:
+    parts: list[tuple[float, float]] = []
+    if supplier.monthly_sales is not None:
+        parts.append((0.35, _sales_score(supplier.monthly_sales)))
+    if supplier.repeat_buyer_rate is not None:
+        parts.append((0.30, _repeat_score(supplier.repeat_buyer_rate)))
+    if supplier.is_factory is not None:
+        parts.append((0.25, 1.0 if supplier.is_factory is True else 0.45))
+    if supplier.delivery_days is not None:
+        parts.append((0.10, _delivery_score(supplier.delivery_days)))
+    if not parts:
+        return None
+    weight = sum(item[0] for item in parts)
+    return round(_clamp(sum(w * score for w, score in parts) / weight), 4)
+
+
+def _supplier_business_score(supplier: SupplierDTO) -> float | None:
+    parts: list[tuple[float, float]] = []
+    if supplier.moq is not None:
+        parts.append((0.65, _moq_score(supplier.moq)))
+    if supplier.base_price_cny is not None:
+        parts.append((0.35, _price_score(supplier.base_price_cny)))
+    if not parts:
+        return None
+    weight = sum(item[0] for item in parts)
+    return round(_clamp(sum(w * score for w, score in parts) / weight), 4)
+
+
+def _supplier_quality_completeness(supplier: SupplierDTO) -> float:
+    weights = (
+        (0.35, supplier.monthly_sales),
+        (0.30, supplier.repeat_buyer_rate),
+        (0.25, supplier.is_factory),
+        (0.10, supplier.delivery_days),
+    )
+    return round(sum(weight for weight, value in weights if value is not None), 4)
+
+
+def _supplier_business_completeness(supplier: SupplierDTO) -> float:
+    weights = ((0.65, supplier.moq), (0.35, supplier.base_price_cny))
+    return round(sum(weight for weight, value in weights if value is not None), 4)
 
 
 def _sales_score(value: int | None) -> float:

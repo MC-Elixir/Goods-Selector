@@ -54,6 +54,10 @@ def test_seller_sprite_market_data_guard_requires_successful_diagnostic(monkeypa
     monkeypatch.setattr(seller_sprite_diagnostics, "_DIAGNOSTIC_FILE", path)
     monkeypatch.setattr(settings, "mjjl_api_key", "secret-value")
     monkeypatch.setattr(settings, "mjjl_api_base", "https://api.sellersprite.com/v1")
+    monkeypatch.setattr(
+        "agent.preflight.check_seller_sprite_browser",
+        lambda: {"level": "warning", "detail": "browser unavailable"},
+    )
 
     ready, reason = seller_sprite_diagnostics.seller_sprite_market_data_guard()
     assert ready is False
@@ -80,5 +84,25 @@ def test_seller_sprite_market_data_guard_requires_successful_diagnostic(monkeypa
         "error": None,
     })
     ready, reason = seller_sprite_diagnostics.seller_sprite_market_data_guard()
+    assert ready is True
+    assert reason == ""
+
+
+def test_market_data_guard_prefers_ready_browser_over_invalid_retained_api_key(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "agent.preflight.check_seller_sprite_browser",
+        lambda: {
+            "key": "seller_sprite_browser",
+            "label": "SellerSprite browser ready",
+            "detail": "Chrome CDP ready",
+            "level": "ok",
+        },
+    )
+    monkeypatch.setattr(seller_sprite_diagnostics.settings, "mjjl_api_key", "retained-invalid-key")
+
+    ready, reason = seller_sprite_diagnostics.seller_sprite_market_data_guard()
+
     assert ready is True
     assert reason == ""

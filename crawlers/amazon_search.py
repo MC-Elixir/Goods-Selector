@@ -13,6 +13,7 @@ from scrapling.parser import Adaptor
 
 from crawlers._amazon_cookies import load_cookies
 from crawlers.amazon_bsr import ProductDTO
+from domain.target_categories import profile_from_product, profile_from_text, target_query_matches_product
 from schemas.sourcing import EvidenceStatus, FieldEvidence
 
 
@@ -59,6 +60,34 @@ def apply_detail_evidence(
     dimensions = fields.get("product_dimensions")
     if dimensions is not None and dimensions.status in allowed and dimensions.value:
         product.length_cm, product.width_cm, product.height_cm = dimensions.value
+
+    # Product understanding consumes the compact raw-data envelope, while the
+    # full provenance remains under ``field_evidence``. Hydrate every rich field
+    # from decision-grade evidence so bullets, secondary images, and structured
+    # attributes are not silently lost between crawl and supplier matching.
+    rich_fields = (
+        "bullet_points",
+        "description",
+        "secondary_images",
+        "package_dimensions",
+        "package_quantity",
+        "material",
+        "a_plus",
+        "availability",
+        "seller",
+        "fulfillment",
+    )
+    for name in rich_fields:
+        item = fields.get(name)
+        if item is not None and item.status in allowed and item.value is not None:
+            raw[name] = item.value
+
+    attributes = raw.get("attributes") if isinstance(raw.get("attributes"), dict) else {}
+    raw["attributes"] = attributes
+    for name in ("material", "package_quantity", "product_dimensions", "package_dimensions"):
+        item = fields.get(name)
+        if item is not None and item.status in allowed and item.value is not None:
+            attributes[name] = item.value
     return product
 
 
@@ -244,6 +273,7 @@ def search_amazon_products(keyword: str, marketplace: str = "US", limit: int = 1
         )
     if normalized.warning:
         logger.warning(normalized.warning)
+    target_query_profile = profile_from_text(normalized.normalized)
 
     from scrapling.fetchers import StealthySession
     from crawlers.amazon_scrapling import AmazonScraplingScraper
@@ -317,11 +347,20 @@ def search_amazon_products(keyword: str, marketplace: str = "US", limit: int = 1
                     "source_rank": result.source_rank,
                     "source_sponsored": result.sponsored,
                 })
-                if is_keyword_relevant_title(normalized.normalized, product.title):
+                title_relevant = is_keyword_relevant_title(normalized.normalized, product.title)
+                intent_relevant = (
+                    target_query_profile is None
+                    or target_query_matches_product(normalized.normalized, product)
+                )
+                product_profile = profile_from_product(product) if intent_relevant else None
+                if product_profile is not None:
+                    raw["target_category_profile"] = product_profile.to_dict()
+                if title_relevant and intent_relevant:
                     products.append(product)
                 else:
+                    reason = "title anchors" if not title_relevant else "target category intent"
                     logger.info(
-                        f"[amazon-search] skip off-query title asin={result.asin} title={product.title[:80]!r}"
+                        f"[amazon-search] skip off-query {reason} asin={result.asin} title={product.title[:80]!r}"
                     )
             except Exception as exc:
                 logger.warning(f"[amazon-search] detail failed asin={result.asin}: {exc}")

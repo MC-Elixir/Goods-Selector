@@ -118,6 +118,11 @@ class Settings(BaseSettings):
     sellersprite_browser_min_interval_seconds: int = Field(default=5, ge=1, le=60)
     sellersprite_browser_max_retries: int = Field(default=1, ge=0, le=1)
 
+    # Chrome DevTools connection. Declaring these fields makes pydantic-settings
+    # load them from the project .env for host-side CLI runs as well as Docker.
+    bu_cdp_http: str = ""
+    bu_cdp_ws: str = ""
+
     # ---------- 行为开关 ----------
     enable_api_cache: bool = True
     enable_llm_verification: bool = False  # 启用 LLM 视觉验证（对比 Amazon 和 1688 图片）
@@ -131,6 +136,9 @@ class Settings(BaseSettings):
     alibaba_detail_enrich_limit: int = 2
     alibaba_detail_cache_ttl_seconds: int = 604800
     alibaba_block_cooldown_seconds: int = 900
+    # Browser/plugin sourcing is the production path.  Keep the legacy Open
+    # Platform clients available for explicit diagnostics only.
+    enable_alibaba_open_api_matcher: bool = False
     alibaba_allow_mock_suppliers: bool = False  # formal runs: mock off by default; smoke-run --allow-mock opts in
     pipeline_crawl_timeout_seconds: float = 300.0
     pipeline_match_timeout_seconds: float = 900.0

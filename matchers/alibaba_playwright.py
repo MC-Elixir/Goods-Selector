@@ -185,20 +185,23 @@ class Alibaba1688PlaywrightMatcher:
         self.headless = headless
         self.page_wait = page_wait
         self._proxy = _system_proxy()
+        self.last_query_attempts: list[dict] = []
 
     def search_by_image(
         self,
         image_url: str,
         keywords: Optional[list[str]] = None,
         limit: int = 10,
+        *,
+        exhaustive: bool = False,
     ) -> list[SupplierDTO]:
         if keywords:
             logger.info("[1688-img] imageAddress 图搜不稳定，使用视觉关键词搜索")
-            return self.search_by_keyword(keywords, limit=limit)
+            return self.search_by_keyword(keywords, limit=limit, exhaustive=exhaustive)
 
         if not _profile_has_cookies():
             logger.info("[1688-img] 无登录 Profile，直接使用关键词搜索")
-            return self.search_by_keyword(keywords or [], limit=limit)
+            return self.search_by_keyword(keywords or [], limit=limit, exhaustive=exhaustive)
 
         try:
             results = self._image_search(image_url, limit)
@@ -209,21 +212,26 @@ class Alibaba1688PlaywrightMatcher:
         except Exception as e:
             logger.warning(f"[1688-img] 图搜失败: {e}，降级关键词搜索")
 
-        return self.search_by_keyword(keywords or [], limit=limit)
+        return self.search_by_keyword(keywords or [], limit=limit, exhaustive=exhaustive)
 
     def search_by_keyword(
         self,
         keywords: list[str],
         limit: int = 10,
+        *,
+        exhaustive: bool = False,
     ) -> list[SupplierDTO]:
         if not keywords:
+            self.last_query_attempts = []
             return []
 
         seen_ids: set[str] = set()
         results: list[SupplierDTO] = []
+        self.last_query_attempts = []
 
+        per_query_limit = max(1, min(limit, 5)) if exhaustive else limit
         for kw in keywords:
-            if len(results) >= limit:
+            if not exhaustive and len(results) >= limit:
                 break
             try:
                 with _playwright_context(self.headless, self._proxy) as ctx:
@@ -243,13 +251,44 @@ class Alibaba1688PlaywrightMatcher:
                     if "login" in page_url.lower() or "passport" in page_url.lower():
                         logger.warning("[1688-kw] 跳转登录页，Session 过期")
                         continue
-                    batch = self._parse_playwright_page(page, limit - len(results))
+                    remaining = per_query_limit if exhaustive else limit - len(results)
+                    batch = self._parse_playwright_page(page, remaining)
                     for dto in batch:
+                        raw = dto.raw_data if isinstance(dto.raw_data, dict) else {}
+                        dto.raw_data = raw
+                        queries = raw.setdefault("search_queries", [])
+                        if kw not in queries:
+                            queries.append(kw)
+                        raw["search_backend"] = "alibaba_playwright_keyword"
                         if dto.alibaba_offer_id not in seen_ids:
                             seen_ids.add(dto.alibaba_offer_id)
                             results.append(dto)
+                        else:
+                            existing = next(
+                                item for item in results
+                                if item.alibaba_offer_id == dto.alibaba_offer_id
+                            )
+                            existing_raw = existing.raw_data if isinstance(existing.raw_data, dict) else {}
+                            existing.raw_data = existing_raw
+                            existing_queries = existing_raw.setdefault("search_queries", [])
+                            if kw not in existing_queries:
+                                existing_queries.append(kw)
                     logger.info(f"[1688-kw] '{kw}' → {len(batch)} 条")
+                    self.last_query_attempts.append({
+                        "query": kw,
+                        "status": "completed",
+                        "result_count": len(batch),
+                        "error": None,
+                        "backend": "alibaba_playwright_keyword",
+                    })
             except Exception as e:
+                self.last_query_attempts.append({
+                    "query": kw,
+                    "status": "failed",
+                    "result_count": None,
+                    "error": str(e)[:200],
+                    "backend": "alibaba_playwright_keyword",
+                })
                 logger.warning(f"[1688-kw] '{kw}' 失败: {e}")
 
         results.sort(key=lambda d: d.monthly_sales or 0, reverse=True)
@@ -278,8 +317,11 @@ class Alibaba1688PlaywrightMatcher:
                 logger.warning("[1688-img] 跳转登录页，Session 过期")
                 return []
             results = self._parse_playwright_page(page, limit)
-        for dto in results:
-            dto.image_similarity = 0.85
+        for rank, dto in enumerate(results, 1):
+            raw = dto.raw_data if isinstance(dto.raw_data, dict) else {}
+            dto.raw_data = raw
+            raw["search_backend"] = "alibaba_playwright_image"
+            raw["image_search_rank"] = rank
         return results
 
     def _parse_scrapling_page(self, page, limit: int) -> list[SupplierDTO]:

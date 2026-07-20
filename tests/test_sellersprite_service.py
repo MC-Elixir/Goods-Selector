@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +14,76 @@ from agent.sellersprite_service import (
 from agent.tools.sellersprite_browser import SellerSpriteWorkflowError
 from agent.tools.sellersprite_importer import SellerSpriteImportError
 from config.settings import settings
+
+
+def test_dependencies_map_container_download_path_for_host_cli(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.sellersprite_service.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "agent.sellersprite_service.load_sellersprite_browser_config",
+        lambda *_args: SimpleNamespace(
+            enabled=True,
+            locator_profile_path="",
+            download_dir="/app/data/imports/sellersprite",
+        ),
+    )
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        session_factory=lambda: FakeSession(),
+        browser_enabled=True,
+    )
+
+    assert dependencies.download_dir == tmp_path / "data" / "imports" / "sellersprite"
+    expected = "\\\\wsl.localhost\\Ubuntu" + str(dependencies.download_dir).replace("/", "\\")
+    assert dependencies.browser_download_dir == expected
+
+
+def test_dependencies_use_explicit_windows_host_download_dir_in_wsl(monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    monkeypatch.setattr(
+        "agent.sellersprite_service.load_sellersprite_browser_config",
+        lambda *_args: SimpleNamespace(
+            enabled=True,
+            locator_profile_path="",
+            download_dir="/app/data/imports/sellersprite",
+            host_download_dir="/mnt/c/Users/dell/Downloads",
+        ),
+    )
+
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        session_factory=lambda: FakeSession(),
+        browser_enabled=True,
+    )
+
+    assert dependencies.download_dir == Path("/mnt/c/Users/dell/Downloads")
+    assert dependencies.browser_download_dir == "C:\\Users\\dell\\Downloads"
+
+
+def test_dotenv_host_download_dir_overrides_persisted_config_sentinel(
+    monkeypatch, tmp_path
+):
+    from agent.sellersprite_browser_config import load_sellersprite_browser_config
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "sellersprite_browser_config.json").write_text(
+        '{"enabled":true,"locator_profile_path":"/app/data/locators.json",'
+        '"download_dir":"/app/data/imports/sellersprite",'
+        '"host_download_dir":"configured"}',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR", raising=False)
+
+    class Settings:
+        sellersprite_browser_enabled = True
+        sellersprite_browser_locator_profile_path = ""
+        sellersprite_browser_download_dir = ""
+        sellersprite_browser_host_download_dir = "/mnt/c/Users/dell/Downloads"
+
+    config = load_sellersprite_browser_config(tmp_path, Settings())
+
+    assert config.host_download_dir == "/mnt/c/Users/dell/Downloads"
 
 
 def valid_profile() -> SellerSpriteLocatorProfile:

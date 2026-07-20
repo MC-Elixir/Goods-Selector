@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from agent import browser_agent
+from config.settings import settings
 
 
 def test_browser_agent_rejects_disallowed_domain():
@@ -113,6 +114,7 @@ def test_browser_agent_resolves_current_cdp_ws_from_http_endpoint(monkeypatch):
         return Response(json.dumps(payload).encode("utf-8"))
 
     monkeypatch.setattr(browser_agent.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(browser_agent, "_running_in_wsl", lambda: False)
     monkeypatch.setattr(
         browser_agent.socket,
         "getaddrinfo",
@@ -124,6 +126,31 @@ def test_browser_agent_resolves_current_cdp_ws_from_http_endpoint(monkeypatch):
     assert (
         browser_agent._resolve_cdp_ws()
         == "ws://192.168.65.254:9222/devtools/browser/fresh-browser-id"
+    )
+
+
+def test_browser_agent_uses_settings_loaded_cdp_http_when_process_env_is_absent(monkeypatch):
+    monkeypatch.delenv("BU_CDP_HTTP", raising=False)
+    monkeypatch.delenv("BU_CDP_WS", raising=False)
+    monkeypatch.setattr(settings, "bu_cdp_http", "http://127.0.0.1:9222")
+    monkeypatch.setattr(settings, "bu_cdp_ws", "")
+    monkeypatch.setattr(
+        browser_agent,
+        "_resolve_cdp_ws_from_http",
+        lambda value, *, timeout_seconds: f"resolved:{value}:{timeout_seconds}",
+    )
+
+    assert browser_agent._resolve_cdp_ws() == "resolved:http://127.0.0.1:9222:5"
+
+
+def test_browser_agent_process_ws_overrides_dotenv_http(monkeypatch):
+    monkeypatch.delenv("BU_CDP_HTTP", raising=False)
+    monkeypatch.setenv("BU_CDP_WS", "ws://127.0.0.1:9222/devtools/browser/explicit")
+    monkeypatch.setattr(settings, "bu_cdp_http", "http://host.docker.internal:9222")
+
+    assert (
+        browser_agent._resolve_cdp_ws()
+        == "ws://127.0.0.1:9222/devtools/browser/explicit"
     )
 
 
@@ -145,6 +172,7 @@ def test_browser_agent_prefers_http_resolution_over_stale_ws(monkeypatch):
         return Response(json.dumps(payload).encode("utf-8"))
 
     monkeypatch.setattr(browser_agent.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(browser_agent, "_running_in_wsl", lambda: False)
     monkeypatch.setattr(
         browser_agent.socket,
         "getaddrinfo",
@@ -156,6 +184,18 @@ def test_browser_agent_prefers_http_resolution_over_stale_ws(monkeypatch):
     assert (
         browser_agent._resolve_cdp_ws()
         == "ws://192.168.65.254:9222/devtools/browser/fresh-browser-id"
+    )
+
+
+def test_cdp_websocket_uses_windows_loopback_inside_wsl(monkeypatch):
+    monkeypatch.setattr(browser_agent, "_running_in_wsl", lambda: True)
+
+    assert (
+        browser_agent._normalize_cdp_ws_host(
+            "ws://127.0.0.1:9222/devtools/browser/current",
+            "http://host.docker.internal:9222",
+        )
+        == "ws://127.0.0.1:9222/devtools/browser/current"
     )
 
 

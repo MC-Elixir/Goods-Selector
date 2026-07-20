@@ -21,7 +21,7 @@ def run_preflight() -> dict[str, Any]:
     checks = [
         _check_ppio(),
         _check_seller_sprite(),
-        _check_seller_sprite_browser(),
+        check_seller_sprite_browser(),
         _check_alibaba_open(),
         _check_amazon_cookies(),
         _check_1688_cookies(),
@@ -111,6 +111,11 @@ def _check_seller_sprite_browser() -> dict[str, Any]:
     )
 
 
+def check_seller_sprite_browser() -> dict[str, Any]:
+    """Public browser readiness result used by market-data gates."""
+    return _check_seller_sprite_browser()
+
+
 def _assert_sellersprite_download_dir_writable(raw_path: str | None = None) -> None:
     raw_path = str(raw_path if raw_path is not None else settings.sellersprite_browser_download_dir or "").strip()
     if not raw_path:
@@ -147,6 +152,12 @@ def _assert_cdp_websocket_reachable(value: object, *, timeout_seconds: float = 2
 
 
 def _check_alibaba_open() -> dict[str, Any]:
+    if not settings.enable_alibaba_open_api_matcher:
+        return _ok(
+            "alibaba_open",
+            "1688 Open Platform disabled",
+            "Browser sourcing is the active production path",
+        )
     if settings.alibaba_app_key and settings.alibaba_app_secret and settings.alibaba_access_token:
         diagnostic = load_alibaba_open_diagnostic()
         if diagnostic.get("has_supplier_evidence"):

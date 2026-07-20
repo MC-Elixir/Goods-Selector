@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from datetime import datetime
 from http import HTTPStatus
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -16,6 +17,8 @@ from agent.server import (
     AgentRequestHandler,
     _handle_browser_agent_request,
     _config_from_body,
+    _handle_execution_attempt_query,
+    _json_default,
     _handle_job_action,
     _market_data_guard_error,
     reviewed_supplier_csv_fields,
@@ -354,6 +357,64 @@ def test_handle_job_action_rejects_unknown_action():
 
     assert status == HTTPStatus.NOT_FOUND
     assert payload == {"error": "not found"}
+
+
+def test_handle_node_action_requires_reason_and_routes_to_runtime():
+    calls = []
+
+    class Runtime:
+        def operate_node(self, job_id, node_id, action, *, reason, resume_token):
+            calls.append((job_id, node_id, action, reason, resume_token))
+            return {"job": {"id": job_id, "status": "queued"}, "node": {"id": node_id}}
+
+    path = "/api/jobs/job-1/nodes/42/retry"
+    with pytest.raises(ValueError, match="reason is required"):
+        _handle_job_action(path, Runtime(), {})
+    with pytest.raises(ValueError, match="resume_token is required"):
+        _handle_job_action(path, Runtime(), {"reason": "credentials restored"})
+
+    status, payload = _handle_job_action(path, Runtime(), {
+        "reason": "credentials restored",
+        "resume_token": "token-v1",
+    })
+    assert status == HTTPStatus.ACCEPTED
+    assert payload["node"]["id"] == 42
+    assert calls == [("job-1", 42, "retry", "credentials restored", "token-v1")]
+
+
+def test_handle_node_action_rejects_unknown_operation():
+    status, payload = _handle_job_action(
+        "/api/jobs/job-1/nodes/42/delete", object(), {"reason": "no"}
+    )
+    assert status == HTTPStatus.NOT_FOUND
+    assert payload == {"error": "not found"}
+
+
+def test_execution_attempt_query_is_scoped_to_run_and_node():
+    class Runtime:
+        def execution_attempts(self, run_id, node_id):
+            if (run_id, node_id) != (7, 42):
+                raise KeyError(node_id)
+            return [{"attempt_no": 1, "status": "failed"}]
+
+    status, payload = _handle_execution_attempt_query(Runtime(), 7, 42)
+    assert status == HTTPStatus.OK
+    assert payload == {
+        "run_id": 7,
+        "node_id": 42,
+        "attempts": [{"attempt_no": 1, "status": "failed"}],
+    }
+    status, payload = _handle_execution_attempt_query(Runtime(), 8, 42)
+    assert status == HTTPStatus.NOT_FOUND
+    assert payload == {"error": "not found"}
+
+
+def test_execution_api_datetime_payloads_are_json_serializable():
+    encoded = json.dumps(
+        {"heartbeat_at": datetime(2026, 7, 15, 12, 30, 0)},
+        default=_json_default,
+    )
+    assert '"heartbeat_at": "2026-07-15T12:30:00"' in encoded
 
 
 def test_handle_browser_agent_request_routes_task(monkeypatch):

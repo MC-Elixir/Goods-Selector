@@ -150,6 +150,7 @@ def test_seller_sprite_browser_preflight_warns_when_raw_cdp_websocket_is_unreach
 
 
 def test_alibaba_open_preflight_ok_after_successful_diagnostic(monkeypatch):
+    monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", True)
     monkeypatch.setattr(settings, "alibaba_app_key", "app-key")
     monkeypatch.setattr(settings, "alibaba_app_secret", "app-secret")
     monkeypatch.setattr(settings, "alibaba_access_token", "access-token")
@@ -164,6 +165,15 @@ def test_alibaba_open_preflight_ok_after_successful_diagnostic(monkeypatch):
     assert check["level"] == "ok"
     assert check["label"] == "1688 pifatuan check passed"
     assert "2 suppliers" in check["detail"]
+
+
+def test_alibaba_open_preflight_reports_browser_only_default(monkeypatch):
+    monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", False)
+
+    check = preflight._check_alibaba_open()
+
+    assert check["level"] == "ok"
+    assert check["label"] == "1688 Open Platform disabled"
 
 
 def test_1688_cookie_missing_is_warning_when_open_platform_verified(monkeypatch, tmp_path):

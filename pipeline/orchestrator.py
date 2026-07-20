@@ -93,7 +93,7 @@ class PipelineRecord:
 # 主流水线
 # ============================================================
 
-def run_pipeline(
+def _run_pipeline_legacy(
     category: str,
     source_mode: str = "category",
     keyword: str | None = None,
@@ -212,7 +212,7 @@ def run_pipeline(
             _persist_suppliers_for_product(p, sups)
             records.append(PipelineRecord(product=p, suppliers=sups))
 
-        api_calls["alibaba_text_search"] = len(products)
+        api_calls["supplier_match_attempts"] = len(products)
         api_calls["vision_analyzer"] = len(products)
         logger.info(f"[run #{run_id}] matched {matched} suppliers")
         _update_run(run_id, suppliers_matched=matched)
@@ -475,18 +475,29 @@ def _default_stage_timeouts() -> dict[str, float]:
     }
 
 
-def _call_match_suppliers(match_func: Callable, product: ProductDTO, cancel_check: CancelCheck | None) -> list[SupplierDTO]:
+def _call_match_suppliers(
+    match_func: Callable,
+    product: ProductDTO,
+    cancel_check: CancelCheck | None,
+    market_keywords: list[str] | None = None,
+) -> list[SupplierDTO]:
     try:
         params = inspect.signature(match_func).parameters
-        accepts_cancel = "cancel_check" in params or any(
+        accepts_kwargs = any(
             param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
         )
+        accepts_cancel = "cancel_check" in params or accepts_kwargs
+        accepts_market_keywords = "market_keywords" in params or accepts_kwargs
     except (TypeError, ValueError):
         accepts_cancel = False
+        accepts_market_keywords = False
     try:
+        kwargs = {}
         if accepts_cancel:
-            return match_func(product, cancel_check=cancel_check)
-        return match_func(product)
+            kwargs["cancel_check"] = cancel_check
+        if accepts_market_keywords:
+            kwargs["market_keywords"] = market_keywords or []
+        return match_func(product, **kwargs)
     except CancellationRequested as exc:
         raise PipelineCancelled(str(exc)) from exc
 
@@ -920,3 +931,113 @@ def _review_fallback_records(records: list[PipelineRecord], top_n: int = 5) -> l
     )
     deduped, _removed = _dedupe_records_by_asin(reviewable)
     return deduped[:top_n]
+
+
+# Public compatibility entry. The implementation lives outside this legacy
+# business module so recoverability does not turn orchestrator.py into a state
+# machine. Imports are intentionally late to keep existing monkeypatch points
+# and avoid circular imports while pipeline/recoverable.py uses the helpers
+# above as the unchanged business adapter.
+def run_pipeline(
+    category: str,
+    source_mode: str = "category",
+    keyword: str | None = None,
+    limit: int = 100,
+    marketplace: str = "US",
+    pipeline_version: str = "0.3.0",
+    top_n: int = 20,
+    export: bool = True,
+    export_review_on_empty: bool = False,
+    progress_callback: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+    stage_timeouts: dict[str, float] | None = None,
+) -> int:
+    from pipeline.recoverable import run_recoverable_pipeline
+
+    return run_recoverable_pipeline(
+        category=category,
+        source_mode=source_mode,
+        keyword=keyword,
+        limit=limit,
+        marketplace=marketplace,
+        pipeline_version=pipeline_version,
+        top_n=top_n,
+        export=export,
+        export_review_on_empty=export_review_on_empty,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+        stage_timeouts=stage_timeouts,
+    )
+
+
+def resume_pipeline(
+    run_id: int,
+    *,
+    progress_callback: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+) -> int:
+    from pipeline.recoverable import resume_recoverable_pipeline
+
+    return resume_recoverable_pipeline(
+        run_id,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+    )
+
+
+def retry_node(run_id: int, asin: str, stage: str, *, reason: str = "manual retry") -> dict:
+    """Move one failed ASIN node back to pending without creating a new Run."""
+    from execution.repository import ExecutionRepository
+
+    repository = ExecutionRepository(session_context=session_scope)
+    node = repository.find_node(
+        int(run_id), scope_type="asin", scope_key=str(asin), stage=str(stage)
+    )
+    if node is None:
+        raise KeyError((run_id, asin, stage))
+    repository.retry_node(
+        int(node["id"]), reason=reason,
+        expected_resume_token=node.get("resume_token"),
+    )
+    repository.update_run_status(int(run_id))
+    return repository.get_node(int(node["id"]))
+
+
+def force_rerun_node(
+    run_id: int,
+    asin: str,
+    stage: str,
+    reason: str,
+) -> dict:
+    """Invalidate one terminal ASIN node; a non-empty audit reason is mandatory."""
+    from execution.repository import ExecutionRepository
+
+    if not str(reason).strip():
+        raise ValueError("force rerun reason is required")
+    repository = ExecutionRepository(session_context=session_scope)
+    node = repository.find_node(
+        int(run_id), scope_type="asin", scope_key=str(asin), stage=str(stage)
+    )
+    if node is None:
+        raise KeyError((run_id, asin, stage))
+    repository.force_rerun(
+        int(node["id"]), reason=str(reason),
+        expected_resume_token=node.get("resume_token"),
+    )
+    repository.update_run_status(int(run_id))
+    return repository.get_node(int(node["id"]))
+
+
+def execution_nodes(run_id: int) -> list[dict]:
+    from execution.repository import ExecutionRepository
+    return ExecutionRepository(session_context=session_scope).list_nodes(int(run_id))
+
+
+def execution_attempts(run_id: int, node_id: int) -> list[dict]:
+    from execution.repository import ExecutionRepository
+
+    repository = ExecutionRepository(session_context=session_scope)
+    node = repository.get_node(int(node_id))
+    if node is None or int(node["run_id"]) != int(run_id):
+        raise KeyError(node_id)
+    return repository.list_attempts(int(node_id))

@@ -168,10 +168,19 @@ class BrowserUseCliProvider:
 
 
 def _resolve_cdp_ws(timeout_seconds: int = 5) -> str:
-    cdp_http = (os.getenv("BU_CDP_HTTP") or "").strip().rstrip("/")
+    process_http = (os.getenv("BU_CDP_HTTP") or "").strip().rstrip("/")
+    process_ws = (os.getenv("BU_CDP_WS") or "").strip()
+    # Explicit process variables outrank values loaded from the project .env.
+    # Within the same source, HTTP remains preferred because it resolves the
+    # current browser websocket rather than reusing a stale browser id.
+    if process_http:
+        return _resolve_cdp_ws_from_http(process_http, timeout_seconds=timeout_seconds)
+    if process_ws:
+        return process_ws
+    cdp_http = (settings.bu_cdp_http or "").strip().rstrip("/")
     if cdp_http:
         return _resolve_cdp_ws_from_http(cdp_http, timeout_seconds=timeout_seconds)
-    return (os.getenv("BU_CDP_WS") or "").strip()
+    return (settings.bu_cdp_ws or "").strip()
 
 
 def _resolve_cdp_ws_from_http(cdp_http: str, *, timeout_seconds: int) -> str:
@@ -221,6 +230,11 @@ def _cdp_websocket_netloc(cdp_http: str) -> str:
     port = parts.port or (443 if parts.scheme == "https" else 80)
     if host.lower() in {"localhost", "127.0.0.1", "::1"}:
         return parts.netloc
+    # Docker reaches Windows through host.docker.internal. WSL2 mirrored
+    # networking reaches the same Windows listener through loopback; resolving
+    # host.docker.internal there can yield an unreachable virtual-adapter IP.
+    if host.lower() == "host.docker.internal" and _running_in_wsl():
+        return f"127.0.0.1:{port}"
     try:
         candidates = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError:
@@ -232,6 +246,14 @@ def _cdp_websocket_netloc(cdp_http: str) -> str:
         if family == socket.AF_INET6:
             return f"[{sockaddr[0]}]:{port}"
     return parts.netloc
+
+
+def _running_in_wsl() -> bool:
+    try:
+        release = Path("/proc/sys/kernel/osrelease").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return "microsoft" in release.casefold() or "wsl" in release.casefold()
 
 
 def _build_task(

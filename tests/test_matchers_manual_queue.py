@@ -36,7 +36,44 @@ def _common_no_network(monkeypatch):
     monkeypatch.setattr(settings, "alibaba_app_key", "")
     monkeypatch.setattr(settings, "alibaba_app_secret", "")
     monkeypatch.setattr(settings, "alibaba_access_token", "")
+    monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", False)
     monkeypatch.setattr(settings, "alibaba_allow_mock_suppliers", True)
+
+
+def test_terro_query_plan_uses_supply_language_and_never_quantity_alone():
+    product = ProductDTO(
+        asin="B00E4GACB8",
+        marketplace="US",
+        title="TERRO Liquid Ant Killer Bait Stations, 12 Count",
+        category="Home & Kitchen",
+    )
+
+    dimensions = matchers._extract_dimensional_keywords(product.title)
+    seller_terms = matchers._supply_chain_keywords(["ant traps indoor"])
+    queries = matchers._build_enriched_keywords(
+        dimensions,
+        [*seller_terms, *matchers._title_fallback_keywords(product.title)],
+    )
+
+    assert any("灭蚁" in query for query in queries)
+    assert "12件套" not in queries
+    assert "12条装" not in queries
+    assert all(not matchers._is_spec_only_keyword(query) for query in queries)
+
+
+def test_bedding_fallback_does_not_turn_solid_into_lid_or_kitchen_query():
+    title = (
+        "Amazon Basics Lightweight Super Soft, Wrinkle-Free, Breathable Luxury "
+        "Microfiber 4 Piece Bed Sheet Set with 14-Inch Deep Pockets, Full, Dark Gray, Solid"
+    )
+    fallback = matchers._title_fallback_keywords(title)
+    queries = matchers._build_enriched_keywords(
+        matchers._extract_dimensional_keywords(title), fallback
+    )
+
+    assert "带盖" not in fallback
+    assert "床品套件" in queries
+    assert all("带盖" not in query for query in queries)
 
 
 def test_match_suppliers_enqueues_when_circuit_is_open(monkeypatch):
@@ -199,6 +236,7 @@ def test_match_suppliers_prefers_pifatuan_when_open_platform_token_exists(monkey
     monkeypatch.setattr(settings, "alibaba_app_key", "app")
     monkeypatch.setattr(settings, "alibaba_app_secret", "secret")
     monkeypatch.setattr(settings, "alibaba_access_token", "token")
+    monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", True)
     monkeypatch.setattr(matchers, "AlibabaPifatuanSearch", lambda: FakePifatuan())
     monkeypatch.setattr(matchers, "Alibaba1688TextSearch", lambda: FailTextSearch())
     monkeypatch.setattr(matchers, "Alibaba1688Verifier", lambda: FakeVerifier())
@@ -232,6 +270,7 @@ def test_unrelated_imported_suppliers_do_not_block_open_platform(monkeypatch):
     monkeypatch.setattr(settings, "alibaba_app_key", "app")
     monkeypatch.setattr(settings, "alibaba_app_secret", "secret")
     monkeypatch.setattr(settings, "alibaba_access_token", "token")
+    monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", True)
     monkeypatch.setattr(matchers, "AlibabaPifatuanSearch", lambda: FakePifatuan())
     monkeypatch.setattr(matchers, "Alibaba1688Verifier", lambda: FakeVerifier())
 
@@ -266,6 +305,7 @@ def test_match_suppliers_enriches_top_suppliers_with_cached_detail(monkeypatch):
     monkeypatch.setattr(settings, "alibaba_app_key", "app")
     monkeypatch.setattr(settings, "alibaba_app_secret", "secret")
     monkeypatch.setattr(settings, "alibaba_access_token", "token")
+    monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", True)
     monkeypatch.setattr(settings, "alibaba_detail_enrich_limit", 2, raising=False)
     monkeypatch.setattr(matchers, "AlibabaPifatuanSearch", lambda: FakePifatuan())
     monkeypatch.setattr(matchers, "Alibaba1688Verifier", lambda: FakeVerifier())
@@ -319,6 +359,7 @@ def test_match_suppliers_detail_enrichment_is_bounded(monkeypatch):
     monkeypatch.setattr(settings, "alibaba_app_key", "app")
     monkeypatch.setattr(settings, "alibaba_app_secret", "secret")
     monkeypatch.setattr(settings, "alibaba_access_token", "token")
+    monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", True)
     monkeypatch.setattr(settings, "alibaba_detail_enrich_limit", 2, raising=False)
     monkeypatch.setattr(matchers, "AlibabaPifatuanSearch", lambda: FakePifatuan())
     monkeypatch.setattr(matchers, "Alibaba1688Verifier", lambda: FakeVerifier())
@@ -360,6 +401,7 @@ def test_invalid_detail_is_neither_applied_nor_cached(monkeypatch):
     monkeypatch.setattr(settings, "alibaba_app_key", "app")
     monkeypatch.setattr(settings, "alibaba_app_secret", "secret")
     monkeypatch.setattr(settings, "alibaba_access_token", "token")
+    monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", True)
     monkeypatch.setattr(settings, "alibaba_detail_enrich_limit", 1, raising=False)
     monkeypatch.setattr(matchers, "AlibabaPifatuanSearch", lambda: FakePifatuan())
     monkeypatch.setattr(matchers, "Alibaba1688Verifier", lambda: FakeVerifier())

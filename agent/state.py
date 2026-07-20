@@ -7,7 +7,10 @@ from typing import Any, Literal
 from uuid import uuid4
 
 
-JobStatus = Literal["queued", "running", "success", "failed", "cancel_requested", "cancelled"]
+JobStatus = Literal[
+    "queued", "running", "success", "failed", "retry_wait",
+    "human_required", "cancel_requested", "cancelled",
+]
 SourceMode = Literal["category", "keyword"]
 
 

@@ -37,6 +37,18 @@ def test_webui_exposes_job_cancel_and_retry_actions():
     assert "job-action" in app
 
 
+def test_webui_exposes_recoverable_node_status_and_operations():
+    app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "webui" / "styles.css").read_text(encoding="utf-8")
+
+    assert "/api/runs/${encodeURIComponent(runId)}/nodes" in app
+    assert "/nodes/${encodeURIComponent(button.dataset.nodeId)}/${button.dataset.action}" in app
+    assert 'data-action="resume"' in app
+    assert 'data-action="force-rerun"' in app
+    assert "window.prompt" in app
+    assert ".execution-nodes" in styles
+
+
 def test_webui_renders_recent_job_events():
     app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "webui" / "styles.css").read_text(encoding="utf-8")

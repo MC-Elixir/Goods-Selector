@@ -2,6 +2,37 @@
 
 本文件记录 Amazon Selector pipeline 的变更，格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased] — 2026-07-17
+
+### Added
+- ASIN/run 级持久化执行节点、不可变 attempt、租约/heartbeat/fencing、重试退避、人工继续、取消与强制重跑审计。
+- `resume_pipeline(run_id)`、`python main.py resume-run --run-id ...`，以及 WebUI 节点状态和带原因的恢复操作。
+- 业务快照 `result_key` 幂等提交；导出 artifact set 使用 manifest、SHA-256、原子 rename 和崩溃对账。
+
+### Changed
+- 兼容的 7 阶段 `run_pipeline` 入口改由可恢复协调器执行，原业务采集、匹配、利润、市场、评分、筛选与导出函数继续复用。
+- WebUI 重启时以 SQLite 为执行事实来源恢复原 `run_id`，不再把所有中断任务直接改成失败。
+- 阶段屏障会等待 `pending`、`running` 和 `retry_wait` 节点；要求导出时，只有完整
+  artifact set 已提交才能把 Run 汇总为成功。
+- SellerSprite 市场数据门禁改为 Chrome/CDP 插件优先；失效但保留的 API 密钥不再阻塞正式运行。
+- 1688 Open API 匹配默认关闭，正式路径直接使用浏览器搜索；遗留客户端仅保留显式诊断兼容。
+- SellerSprite Reverse-ASIN 浏览器证据前置到 1688 匹配之前，并把最多 20 条脱敏关键词候选保存在市场证据中供搜索计划使用。
+- SellerSprite v5 响应式布局适配：结果标记与导出控件分离等待，支持明确的溢出菜单和 portal 导出按钮；人工状态会立即停止后续 ASIN。
+- 1688 查询新增供应链表达转换；数量/容量仅作为品类词修饰语，不再以 `12件套` 等规格词独立搜索。
+- 匹配验证新增灭蚁、驱蚊、杀蟑、床品、餐厨和垃圾桶品类标准化与跨品类硬门禁；供应商销量只参与商业排序，不再冒充语义相关性。
+- 标题 fallback 使用 ASCII 词边界，修复 `solid` 被误识别为 `lid` 的问题；PPIO 模型名校正为当前 key 可见的 `qwen/qwen3.5-plus`。
+
+### Verified
+- 3-ASIN 故障注入证明 A/C 成功节点不重复调用，B 恢复后只执行 B 与受影响的 filter/export。
+- 真实 3-ASIN no-mock run #56 完成：SellerSprite 浏览器导出 3/3，审计样本市场数据与真实供应商证据覆盖率均为 100%。
+- TERRO `B00E4GACB8` 回归证明高销量 `12件套` 锅铲厨具被拒绝，灭蚁饵剂候选保留；本轮相关 42 个测试通过。真实复跑因 9222 与 8765 均不可达而未执行。
+- 真实 run #58 generation 2：3/3 SellerSprite 导出、3/3 1688 实时搜索、mock=0；TERRO 供应商全部为灭蚁/诱饵类，两个床品 ASIN 收敛为床品/床笠类，Excel/JSON 各 3 行。最终候选 0 是利润与物流证据门禁结果，不是运行失败。
+- 适配器与语义专项回归 134 passed；PPIO 单图调用返回 `NOT_ENOUGH_BALANCE`，因此视觉分析按设计降级，未伪造视觉证据。
+- 在真实 `data/amazon_selector.db` 副本上应用 `0004_recoverable_execution`：`integrity_check=ok`、无外键错误，原业务表行数保持一致。
+- 全量回归为 890 passed、6 skipped、0 failed；真实 no-mock run #55 得到 2 条真实
+  1688 货源、mock=0，三类 artifact manifest 全部 committed。SellerSprite 密钥无效
+  导致市场证据缺失，Docker Desktop engine 未运行导致镜像内验证未执行，均按环境限制保留。
+
 ## [0.2.2] — 2026-06-23
 
 放弃 1688 官方 API、仅用爬虫；并修复 Amazon 详情页爬取超时问题。

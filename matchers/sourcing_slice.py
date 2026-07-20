@@ -314,6 +314,331 @@ def _persist(result: SourcingSliceResult, engine: Any) -> None:
             })
 
 
+def serialize_sourcing_result(result: SourcingSliceResult) -> dict[str, Any]:
+    """Return a JSON-safe evidence payload suitable for snapshots and exports."""
+    recommendation = result.recommendation
+    return {
+        "schema_version": "target-sourcing-evidence-v1",
+        "run_ref": result.run_ref,
+        "asin": result.understanding.asin,
+        "iterations": result.iterations,
+        "understanding": result.understanding.model_dump(mode="json"),
+        "query_attempts": list(result.query_attempts),
+        "evaluated_matches": [item.model_dump(mode="json") for item in result.evaluated_matches],
+        "accepted_offer_ids": [
+            item.supplier_ref.removeprefix("offer:") for item in result.accepted_matches
+        ],
+        "rejected_offer_ids": [
+            item.supplier_ref.removeprefix("offer:") for item in result.rejected_matches
+        ],
+        "review_offer_ids": [
+            item.supplier_ref.removeprefix("offer:") for item in result.review_matches
+        ],
+        "detail_failures": list(result.detail_failures),
+        "visual_failures": list(result.visual_failures),
+        "recommendation": recommendation.model_dump(mode="json") if recommendation else None,
+    }
+
+
+def _not_started_attempt(query: Any) -> dict[str, Any]:
+    return {
+        "query": query.model_dump(mode="json"),
+        "result_count": None,
+        "relevant_count": None,
+        "hit_rate": None,
+        "result_refs": [],
+        "error_code": None,
+        "status": "not_started",
+        "backend": None,
+    }
+
+
+def evaluate_prefetched_suppliers(
+    product: Any,
+    suppliers: list[Any],
+    understanding: AmazonProductUnderstanding,
+    queries: list[Any],
+    run_ref: str,
+    *,
+    query_execution: list[dict[str, Any]] | None = None,
+) -> SourcingSliceResult:
+    """Apply strict evidence gates to candidates gathered by the formal matcher.
+
+    Per-query counts are recorded only when the active backend exposed an
+    execution trace. Unknown attempts remain ``not_started`` with null counts.
+    """
+    result = SourcingSliceResult(
+        run_ref=run_ref,
+        iterations=1,
+        understanding=understanding,
+    )
+    executions = {
+        str(item.get("query") or ""): item
+        for item in (query_execution or [])
+        if isinstance(item, dict) and str(item.get("query") or "")
+    }
+    for query in queries:
+        execution = executions.get(query.text)
+        if execution is None:
+            result.query_attempts.append(_not_started_attempt(query))
+            continue
+        if execution.get("status") != "completed":
+            attempt = _attempt(query, error_code="INTERNAL", completed=False)
+            attempt["backend"] = execution.get("backend")
+            attempt["diagnostic"] = str(execution.get("error") or "")[:200] or None
+            result.query_attempts.append(attempt)
+            continue
+        hits = [
+            supplier for supplier in suppliers
+            if query.text in (
+                (supplier.raw_data or {}).get("search_queries", [])
+                if isinstance(getattr(supplier, "raw_data", None), dict) else []
+            )
+        ]
+        relevant = [supplier for supplier in hits if _default_relevance(query, supplier)]
+        attempt = _attempt(
+            query,
+            hits=hits,
+            relevant_count=len(relevant),
+            error_code="NO_RESULTS" if not hits else None,
+        )
+        attempt["backend"] = execution.get("backend")
+        result.query_attempts.append(attempt)
+
+    raw_product = product.raw_data if isinstance(getattr(product, "raw_data", None), dict) else {}
+    target_profile = raw_product.get("target_category_profile")
+    for supplier in suppliers:
+        if _is_mock(supplier):
+            continue
+        raw_supplier = (
+            supplier.raw_data if isinstance(getattr(supplier, "raw_data", None), dict) else {}
+        )
+        visual = raw_supplier.get("visual_match")
+        if not isinstance(visual, dict) or "is_match" not in visual:
+            visual = None
+        match = build_match_evidence(
+            understanding,
+            supplier,
+            visual,
+            target_profile=target_profile,
+        )
+        raw_supplier["strict_match_evidence"] = match.model_dump(mode="json")
+        supplier.raw_data = raw_supplier
+        result.evaluated_matches.append(match)
+        if match.decision == "keep":
+            result.suppliers.append(supplier)
+            result.accepted_matches.append(match)
+        elif match.decision == "reject":
+            result.rejected_matches.append(match)
+        else:
+            result.review_matches.append(match)
+
+    best = max(
+        result.accepted_matches,
+        key=lambda item: item.overall_confidence,
+        default=None,
+    )
+    if best is not None:
+        status = RecommendationStatus.WATCHLIST
+    elif result.review_matches:
+        status = RecommendationStatus.NEEDS_MANUAL_REVIEW
+    elif result.rejected_matches:
+        status = RecommendationStatus.REJECT
+    else:
+        status = RecommendationStatus.INSUFFICIENT_DATA
+    rejection_reasons = list(dict.fromkeys(
+        reason
+        for item in result.rejected_matches
+        for reason in item.mismatch_reasons
+    ))
+    if not result.evaluated_matches:
+        rejection_reasons.append("no_real_supplier_evidence")
+    manual_tasks = list(dict.fromkeys([
+        *(
+            f"verify_{name}"
+            for item in result.review_matches
+            for name in item.missing_evidence
+        ),
+        *(["calculate_profit", "evaluate_market"] if best is not None else []),
+    ]))
+    amazon_complete = (
+        1.0
+        if isinstance(target_profile, dict) and not target_profile.get("missing_critical")
+        else 0.0
+    )
+    result.recommendation = RecommendationEvidence(
+        asin=understanding.asin,
+        supplier_offer_id=best.supplier_ref.removeprefix("offer:") if best else None,
+        status=status,
+        discovery_reason="Amazon US target-category candidate passed source discovery",
+        amazon_completeness=amazon_complete,
+        supplier_match_ref=best.supplier_ref if best else None,
+        confirmed_specs=best.passed_reasons if best else [],
+        unconfirmed_specs=best.missing_evidence if best else [],
+        confidence=best.overall_confidence if best else 0.0,
+        recommendation_reasons=["strict_supplier_match_passed"] if best else [],
+        rejection_reasons=rejection_reasons,
+        manual_verification_tasks=manual_tasks,
+    )
+    return result
+
+
+def _persist_serialized_on_connection(connection: Any, payload: dict[str, Any]) -> None:
+    run_ref = str(payload.get("run_ref") or "")
+    asin = str(payload.get("asin") or "")
+    if not run_ref or not asin:
+        raise ValueError("sourcing evidence requires run_ref and asin")
+    scope = {"run_ref": run_ref, "asin": asin}
+    connection.execute(text("DELETE FROM query_attempts WHERE run_ref=:run_ref AND asin=:asin"), scope)
+    connection.execute(text("DELETE FROM match_evidence WHERE run_ref=:run_ref AND asin=:asin"), scope)
+    connection.execute(text("DELETE FROM sourcing_recommendations WHERE run_ref=:run_ref AND asin=:asin"), scope)
+    for attempt in payload.get("query_attempts") or []:
+        query = attempt.get("query") or {}
+        status = attempt.get("status") or "not_started"
+        completed = status == "completed"
+        connection.execute(text("""INSERT INTO query_attempts (
+            run_ref, asin, query_id, query_type, query_text, reason,
+            excluded_brand_tokens_json, backend, result_count, relevant_count,
+            retry_of, status, artifact_ref
+        ) VALUES (:run_ref, :asin, :query_id, :query_type, :query_text, :reason,
+            :tokens, :backend, :result_count, :relevant_count,
+            :retry_of, :status, :artifact_ref)"""), {
+            "run_ref": run_ref,
+            "asin": asin,
+            "query_id": query.get("query_id"),
+            "query_type": query.get("query_type"),
+            "query_text": query.get("text"),
+            "reason": query.get("reason") or "target category deterministic query",
+            "tokens": json.dumps(query.get("excluded_brand_tokens") or [], ensure_ascii=False),
+            "backend": attempt.get("backend"),
+            "result_count": attempt.get("result_count") if completed else None,
+            "relevant_count": attempt.get("relevant_count") if completed else None,
+            "retry_of": query.get("retry_of"),
+            "status": status,
+            "artifact_ref": json.dumps({
+                "result_refs": attempt.get("result_refs") or [],
+                "hit_rate": attempt.get("hit_rate"),
+                "error_code": attempt.get("error_code"),
+                "diagnostic": attempt.get("diagnostic"),
+            }, ensure_ascii=False),
+        })
+    for match in payload.get("evaluated_matches") or []:
+        offer_id = str(match.get("supplier_ref") or "").removeprefix("offer:")
+        connection.execute(text("""INSERT INTO match_evidence
+            (run_ref, asin, offer_id, decision, overall_confidence, evidence_json)
+            VALUES (:run_ref, :asin, :offer_id, :decision, :confidence, :evidence)"""), {
+            "run_ref": run_ref,
+            "asin": asin,
+            "offer_id": offer_id,
+            "decision": match.get("decision"),
+            "confidence": match.get("overall_confidence"),
+            "evidence": json.dumps(match, ensure_ascii=False),
+        })
+    recommendation = payload.get("recommendation")
+    if isinstance(recommendation, dict):
+        connection.execute(text("""INSERT INTO sourcing_recommendations
+            (run_ref, asin, offer_id, status, evidence_json)
+            VALUES (:run_ref, :asin, :offer_id, :status, :evidence)"""), {
+            "run_ref": run_ref,
+            "asin": asin,
+            "offer_id": recommendation.get("supplier_offer_id"),
+            "status": recommendation.get("status"),
+            "evidence": json.dumps(recommendation, ensure_ascii=False),
+        })
+
+
+def persist_serialized_sourcing_evidence(payload: dict[str, Any], bind: Any) -> None:
+    """Persist a serialized evidence payload using a Session, Connection, or Engine."""
+    if hasattr(bind, "execute"):
+        _persist_serialized_on_connection(bind, payload)
+        return
+    with bind.begin() as connection:
+        _persist_serialized_on_connection(connection, payload)
+
+
+def finalize_record_sourcing_evidence(record: Any) -> dict[str, Any] | None:
+    """Fold downstream profit, market, and scoring evidence into the decision."""
+    product = getattr(record, "product", None)
+    raw = product.raw_data if isinstance(getattr(product, "raw_data", None), dict) else {}
+    payload = raw.get("sourcing_evidence")
+    if not isinstance(payload, dict):
+        return None
+    recommendation = payload.get("recommendation")
+    if not isinstance(recommendation, dict):
+        return payload
+    accepted = payload.get("accepted_offer_ids") or []
+    score = getattr(record, "score", None)
+    profit = getattr(record, "profit", None)
+    market = getattr(record, "market", None)
+
+    reasons = list(recommendation.get("rejection_reasons") or [])
+    tasks = list(recommendation.get("manual_verification_tasks") or [])
+    if accepted:
+        if score is None:
+            status = RecommendationStatus.NEEDS_MANUAL_REVIEW.value
+            tasks.append("complete_scoring_evidence")
+        elif not getattr(score, "passed_hard_filter", False):
+            status = RecommendationStatus.REJECT.value
+            reasons.extend(getattr(score, "rejection_reasons", None) or [])
+        elif profit is None or market is None:
+            status = RecommendationStatus.NEEDS_MANUAL_REVIEW.value
+            if profit is None:
+                tasks.append("calculate_profit")
+            if market is None:
+                tasks.append("evaluate_market")
+        else:
+            status = RecommendationStatus.RECOMMEND.value
+            recommendation["recommendation_reasons"] = list(dict.fromkeys([
+                *(recommendation.get("recommendation_reasons") or []),
+                "strict_supplier_match_passed",
+                "profit_market_and_hard_filters_passed",
+            ]))
+    else:
+        status = str(
+            recommendation.get("status") or RecommendationStatus.INSUFFICIENT_DATA.value
+        )
+
+    if profit is not None:
+        recommendation["purchase_cost_ref"] = f"offer:{accepted[0]}:price" if accepted else None
+        recommendation["profit_basis"] = {
+            "selling_price": getattr(profit, "selling_price", None),
+            "landed_cost": getattr(profit, "total_cost", None),
+            "profit_margin": getattr(profit, "profit_margin", None),
+            "refs": [f"pipeline:profit:{getattr(product, 'asin', '')}"],
+        }
+    if product is not None and all(
+        getattr(product, name, None) is not None
+        for name in ("weight_kg", "length_cm", "width_cm", "height_cm")
+    ):
+        recommendation["logistics_basis"] = {
+            name: getattr(product, name)
+            for name in ("weight_kg", "length_cm", "width_cm", "height_cm")
+        }
+        recommendation["logistics_basis"]["refs"] = [
+            f"amazon:detail:{getattr(product, 'asin', '')}"
+        ]
+    market_raw = (
+        market.raw_data if isinstance(getattr(market, "raw_data", None), dict) else {}
+    )
+    market_ref = market_raw.get("source_ref")
+    if market_ref:
+        if any(getattr(market, name, None) is not None for name in (
+            "search_volume_monthly", "monthly_purchases", "est_monthly_sales"
+        )):
+            recommendation["demand_evidence_refs"] = [str(market_ref)]
+        if any(getattr(market, name, None) is not None for name in (
+            "competing_listings", "top10_revenue_share"
+        )):
+            recommendation["competition_evidence_refs"] = [str(market_ref)]
+    recommendation["status"] = status
+    recommendation["rejection_reasons"] = list(dict.fromkeys(reasons))
+    recommendation["manual_verification_tasks"] = list(dict.fromkeys(tasks))
+    payload["recommendation"] = recommendation
+    raw["sourcing_evidence"] = payload
+    product.raw_data = raw
+    return payload
+
+
 def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: str,
                        allow_mock: bool = False) -> SourcingSliceResult:
     understanding = deps.understand(product)

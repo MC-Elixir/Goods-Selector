@@ -304,3 +304,48 @@ def test_final_url_identity_ignores_related_page_noise():
         page_url="https://detail.1688.com/offer/123.html",
     )
     assert result["moq"] == 20
+
+
+def test_target_category_detail_emits_decision_grade_profile_and_provenance():
+    detail = parse_1688_offer_detail({
+        "subject": "48000BTU 丙烷金字塔户外取暖器",
+        "beginAmount": 5,
+        "price": 680,
+        "companyType": "生产厂家",
+        "companyYears": 9,
+        "supportCustom": True,
+    })
+
+    assert detail["function"] == "户外取暖"
+    assert detail["product_type"] == "full_product"
+    assert detail["category_profile"]["category_id"] == "patio_heater"
+    assert detail["category_profile"]["subtype"] == "pyramid_heater"
+    assert detail["category_profile"]["numeric"]["heat_output_btu"] == 48000
+    assert detail["category_profile"]["attributes"]["fuel_type"] == "propane"
+    assert detail["factory_evidence"]["supplier_type"] == "生产厂家"
+    assert detail["provenance"]["product_type"]["status"] == "extracted"
+    assert detail["provenance"]["category_profile"]["status"] == "extracted"
+
+
+def test_target_detail_hydrates_factory_identity_without_inventing_unknowns():
+    supplier = SupplierDTO(alibaba_offer_id="heater-1", raw_data={})
+
+    apply_1688_detail_to_supplier(supplier, {
+        "raw_text": "48000BTU 丙烷金字塔户外取暖器",
+        "supplier_type": "生产厂家",
+        "supplier_years": 8,
+        "supplier_location": "浙江宁波",
+    })
+
+    assert supplier.is_factory is True
+    assert supplier.raw_data["factory_evidence"] == {
+        "supplier_type": "生产厂家",
+        "supplier_years": 8,
+        "supplier_location": "浙江宁波",
+    }
+    assert supplier.raw_data["supplier_evidence_completeness"] == 0.6
+
+    unknown = SupplierDTO(alibaba_offer_id="heater-2", raw_data={})
+    apply_1688_detail_to_supplier(unknown, {"raw_text": "户外取暖器"})
+    assert unknown.is_factory is None
+    assert unknown.raw_data["supplier_evidence_completeness"] == 0.0

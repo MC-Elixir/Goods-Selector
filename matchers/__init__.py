@@ -3,11 +3,11 @@
 ==============
 
 降级链（自动按顺序尝试）：
-  1. AlibabaPifatuanSearch                  1688 分销严选开放平台（需 app + token）
-  2. VisionAnalyzer → Alibaba1688TextSearch 视觉识别 + 1688 官方 API（需 key）
-  3. Alibaba1688ScraplingMatcher            Scrapling HTTP 路径（被 TMD 拦，默认禁用）
-  4. Alibaba1688PlaywrightMatcher           Playwright 兜底（图搜 + 关键词）
-  5. mock                                   单元测试 / 完全离线兜底
+  1. Alibaba1688ScraplingMatcher            Scrapling HTTP 路径（被 TMD 拦，默认禁用）
+  2. Alibaba1688PlaywrightMatcher           Playwright 主路径（图搜 + 关键词）
+  3. mock                                   单元测试 / 完全离线兜底
+
+遗留 Open Platform 客户端仅供显式诊断；生产匹配默认不会调用。
 
 匹配验证：
   搜索结果经 Verifier 启发式验证后过滤低匹配度货源。
@@ -80,11 +80,12 @@ def match_suppliers(
     top_k: int = 20,
     vision_api_key: Optional[str] = None,
     cancel_check: CancelCheck | None = None,
+    market_keywords: list[str] | None = None,
 ) -> list[SupplierDTO]:
     """Amazon 产品 → 1688 货源列表。
 
-    降级链（默认仅走 Playwright；官方 API 需配 key、Scrapling 需 settings.enable_scrapling_matcher=True）：
-      官方 API → Scrapling → Playwright（图搜 + 关键词）→ mock
+    降级链（默认仅走 Playwright；Scrapling 需 settings.enable_scrapling_matcher=True）：
+      Scrapling → Playwright（图搜 + 关键词）→ mock
     匹配验证：
       1. 启发式验证（默认）
       2. LLM 视觉验证（可选，通过 settings.enable_llm_verification 开启）
@@ -126,8 +127,14 @@ def match_suppliers(
             logger.warning(f"[match] vision 失败 ({product.asin}): {e}")
             keywords = _title_fallback_keywords(product.title)
 
-    # 合并规格关键词（前置，提高精准度）
-    enriched_keywords = _build_enriched_keywords(dim_keywords, keywords)
+    # SellerSprite Reverse-ASIN terms are translated into 1688 supply-chain
+    # language before visual/title fallbacks. Specifications are modifiers and
+    # are never issued as standalone searches.
+    seller_keywords = _supply_chain_keywords(market_keywords or [])
+    enriched_keywords = _build_enriched_keywords(
+        dim_keywords,
+        [*seller_keywords, *keywords],
+    )
     if analysis is not None:
         enriched_keywords = _build_enriched_keywords(
             enriched_keywords,
@@ -160,7 +167,13 @@ def match_suppliers(
             logger.info(f"[match] ASIN={product.asin} 使用导入的 1688 候选 {len(suppliers)} 条")
 
     real_search_blocked = False
-    if not suppliers and _cfg.alibaba_app_key and _cfg.alibaba_app_secret and _cfg.alibaba_access_token:
+    if (
+        not suppliers
+        and _cfg.enable_alibaba_open_api_matcher
+        and _cfg.alibaba_app_key
+        and _cfg.alibaba_app_secret
+        and _cfg.alibaba_access_token
+    ):
         _check_cancel(cancel_check, "1688 pifatuan search")
         if _pifatuan_search is None:
             _pifatuan_search = AlibabaPifatuanSearch()
@@ -173,7 +186,12 @@ def match_suppliers(
             logger.info(f"[match] 1688 分销严选 API 不可用 ({e})，尝试通用文字 API")
 
     # ── Step 2b: 1688 通用文字 API ─────────────────────────
-    if not suppliers and _cfg.alibaba_app_key and _cfg.alibaba_app_secret:
+    if (
+        not suppliers
+        and _cfg.enable_alibaba_open_api_matcher
+        and _cfg.alibaba_app_key
+        and _cfg.alibaba_app_secret
+    ):
         _check_cancel(cancel_check, "1688 text search")
         if _text_search is None:
             _text_search = Alibaba1688TextSearch()
@@ -185,7 +203,7 @@ def match_suppliers(
         except Exception as e:
             logger.info(f"[match] 1688 API 不可用 ({e})，尝试 Scrapling")
     else:
-        logger.debug(f"[match] ASIN={product.asin} 跳过 1688 API（未配置 key）")
+        logger.debug(f"[match] ASIN={product.asin} 跳过 1688 Open API（默认禁用）")
 
     # ── Step 2c: Scrapling 爬取（默认禁用：HTTP header cookies 被 1688 TMD 拦、0 结果；
     #        直接降级 Playwright。待修好后 settings.enable_scrapling_matcher=True） ──
@@ -263,6 +281,12 @@ def match_suppliers(
         analysis=analysis,
         search_keywords=enriched_keywords,
     )
+    for supplier in suppliers:
+        supplier.raw_data["search_query_plan"] = {
+            "queries": list(enriched_keywords),
+            "market_keywords": list(market_keywords or []),
+            "market_source": "sellersprite_browser_extension" if market_keywords else None,
+        }
 
     # ── Step 6: LLM 视觉验证（可选）─────────────────────────
     if getattr(_cfg, 'enable_llm_verification', False) and len(suppliers) > 1:
@@ -314,7 +338,7 @@ def _extract_dimensional_keywords(
 
     示例：
         "24oz Stainless Steel Water Bottle" → ["750ml", "大容量"]
-        "Pack of 6 Kitchen Towels"          → ["6条装", "6件套"]
+        "Pack of 6 Kitchen Towels"          → ["6条装"]
     """
     t = title or ""
     keywords: list[str] = []
@@ -340,15 +364,22 @@ def _extract_dimensional_keywords(
     # ── 数量词 ──────────────────────────────────────────
     # "Pack of 6", "6-Pack", "12 Count", "Set of 4"
     for m in re.finditer(
-        r"(?:pack\s+of|set\s+of|(\d+)\s*[- ]?pack|(\d+)\s*[- ]?count|(\d+)\s*[- ]?pcs)",
+        r"(?:pack\s+of\s*(\d+)|set\s+of\s*(\d+)|(\d+)\s*[- ]?pack|(\d+)\s*[- ]?count|(\d+)\s*[- ]?pcs|(\d+)\s*[- ]?pieces?(?:\s+set)?)",
         t, re.I,
     ):
         nums = [g for g in m.groups() if g]
         if nums:
             n = int(nums[0])
             if 1 <= n <= 100:
-                keywords.append(f"{n}件套")
-                keywords.append(f"{n}条装")
+                lowered = t.lower()
+                if any(term in lowered for term in ("bait station", "bait trap", "ant trap", "roach trap")):
+                    keywords.append(f"{n}盒装")
+                elif any(term in lowered for term in ("towel", "cloth", "wipe")):
+                    keywords.append(f"{n}条装")
+                elif "set of" in m.group(0).lower():
+                    keywords.append(f"{n}件套")
+                else:
+                    keywords.append(f"{n}个装")
 
     # ── 尺寸词（仅标记有尺寸概念）─────────────────────────
     # "10x10x5 inches", "12 inch", "30cm"
@@ -488,14 +519,76 @@ def _build_enriched_keywords(dim_keywords: list[str], vision_keywords: list[str]
     搜索召回优先使用品类/功能词，数量词只做辅助。像 "12 Count"
     这类 pack 规格如果排在最前，会把 1688 搜索带到厨具/套装等泛结果。
     """
-    seen: set[str] = set()
+    cores = _dedupe_keywords([
+        str(keyword or "").strip()
+        for keyword in vision_keywords
+        if not _is_spec_only_keyword(keyword)
+    ])
+    localized_cores = [core for core in cores if re.search(r"[\u4e00-\u9fff]", core)]
+    if localized_cores:
+        cores = localized_cores
+    modifiers = []
+    for keyword in dim_keywords:
+        value = str(keyword or "").strip()
+        if value and _is_spec_modifier(value) and value not in modifiers:
+            modifiers.append(value)
+
+    # A specification can narrow a semantic query, but never becomes the
+    # semantic anchor itself (e.g. "12件套" previously recalled cookware).
+    combined = [
+        f"{core} {modifier}"
+        for core in cores[:2]
+        for modifier in modifiers[:2]
+    ]
+    # Search the product family first, then its spec-qualified variants. This
+    # preserves broad same-family recall without ever searching a bare count.
+    return _dedupe_keywords([*cores, *combined])
+
+
+def _supply_chain_keywords(keywords: list[str]) -> list[str]:
+    """Translate consumer-facing Reverse-ASIN terms into 1688 expressions."""
     result: list[str] = []
-    for kw in vision_keywords + dim_keywords:
-        value = str(kw or "").strip()
-        if value and not _is_noisy_search_keyword(value) and value not in seen:
-            seen.add(value)
+    rules = (
+        (("ant trap", "ant bait", "ant killer", "bait station"), ("灭蚁饵剂", "蚂蚁诱饵盒")),
+        (("mosquito repellent", "mosquito killer", "mosquito trap"), ("驱蚊用品", "灭蚊器")),
+        (("cockroach bait", "roach bait", "roach killer"), ("杀蟑胶饵", "蟑螂诱饵盒")),
+        (("insulated water bottle", "vacuum bottle", "thermos"), ("保温杯",)),
+        (("storage box", "storage bin", "organizer box"), ("收纳盒",)),
+        (("sheet set", "bed sheet", "bed sheets", "bedding set", "duvet cover"), ("床品套件",)),
+        (("fitted sheet", "deep pocket", "sheet & pillowcase"), ("床笠",)),
+        (("cooling sheets", "cooling bed sheets"), ("凉感床品",)),
+        (("yoga mat", "exercise mat"), ("瑜伽垫",)),
+    )
+    for keyword in keywords:
+        value = str(keyword or "").strip()
+        lowered = value.lower()
+        translated = False
+        for needles, replacements in rules:
+            if any(needle in lowered for needle in needles):
+                result.extend(replacements)
+                translated = True
+                break
+        if re.search(r"[\u4e00-\u9fff]", value):
             result.append(value)
-    return result
+        elif not translated and value:
+            # Retain the vendor term as lower-priority evidence when no safe
+            # domain translation is known; do not invent a Chinese category.
+            result.append(value)
+    return _dedupe_keywords(result)
+
+
+def _is_spec_modifier(keyword: str) -> bool:
+    value = str(keyword or "").strip()
+    return bool(re.fullmatch(
+        r"\d+(?:\.\d+)?\s*(?:ml|l|oz|g|kg|cm|mm|英寸|件套|条装|盒装|只装|个装|支装|片装)",
+        value,
+        flags=re.I,
+    ))
+
+
+def _is_spec_only_keyword(keyword: str) -> bool:
+    value = str(keyword or "").strip()
+    return _is_spec_modifier(value) or value in {"大容量", "小容量", "多尺寸规格"}
 
 
 # ============================================================
@@ -535,6 +628,11 @@ def _title_fallback_keywords(title: str) -> list[str]:
     keywords: list[str] = []
 
     category_rules = (
+        ("灭蚁饵剂", ("ant killer", "ant bait", "ant trap", "bait station")),
+        ("驱蚊用品", ("mosquito repellent", "mosquito killer", "mosquito trap")),
+        ("杀蟑胶饵", ("cockroach bait", "roach bait", "roach killer")),
+        ("床品套件", ("sheet set", "bed sheet", "bed sheets", "bedding set", "fitted sheet", "duvet cover")),
+        ("床笠", ("deep pocket", "fitted sheet")),
         ("保温杯", ("insulated water bottle", "vacuum bottle", "thermos", "travel mug")),
         ("水杯", ("water bottle", "tumbler", "sports bottle", "drinking bottle", "bottle")),
         ("瑜伽垫", ("yoga mat", "exercise mat", "fitness mat")),
@@ -546,20 +644,20 @@ def _title_fallback_keywords(title: str) -> list[str]:
         ("毛巾", ("towel", "dish towel", "kitchen towel")),
     )
     for label, needles in category_rules:
-        if any(needle in lowered for needle in needles):
+        if any(_contains_fallback_term(lowered, needle) for needle in needles):
             keywords.append(label)
 
     material_prefix = ""
-    if any(term in lowered for term in ("stainless steel", "304 steel", "304 stainless")):
+    if any(_contains_fallback_term(lowered, term) for term in ("stainless steel", "304 steel", "304 stainless")):
         material_prefix = "不锈钢"
         keywords.append("不锈钢")
-    elif "silicone" in lowered:
+    elif _contains_fallback_term(lowered, "silicone"):
         material_prefix = "硅胶"
         keywords.append("硅胶")
-    elif any(term in lowered for term in ("plastic", "pp ", "abs ")):
+    elif any(_contains_fallback_term(lowered, term) for term in ("plastic", "pp", "abs")):
         material_prefix = "塑料"
         keywords.append("塑料")
-    elif any(term in lowered for term in ("aluminum", "aluminium")):
+    elif any(_contains_fallback_term(lowered, term) for term in ("aluminum", "aluminium")):
         material_prefix = "铝合金"
         keywords.append("铝合金")
 
@@ -577,7 +675,7 @@ def _title_fallback_keywords(title: str) -> list[str]:
         ("可机洗", ("machine washable",)),
     )
     for label, needles in feature_rules:
-        if any(needle in lowered for needle in needles):
+        if any(_contains_fallback_term(lowered, needle) for needle in needles):
             keywords.append(label)
 
     words = [w.strip(" ,;:/()[]") for w in raw.split() if w.strip(" ,;:/()[]")]
@@ -602,6 +700,13 @@ def _dedupe_keywords(keywords: list[str]) -> list[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+def _contains_fallback_term(text: str, term: str) -> bool:
+    """Match ASCII fallback terms as words, avoiding ``solid`` -> ``lid``."""
+    if re.search(r"[\u4e00-\u9fff]", term):
+        return term in text
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])", text))
 
 
 def _is_noisy_search_keyword(keyword: str) -> bool:

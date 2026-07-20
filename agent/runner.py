@@ -7,13 +7,13 @@ import os
 import json
 from collections import deque
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from config.settings import settings
 from db.init_db import init_db
-from db.models import RunLog
+from db.models import ArtifactManifest, ExecutionNode, RunLog
 from db.session import session_scope
 from agent.history import audit_export, latest_export_after
 from agent.manual_queue import manual_queue_summary
@@ -22,6 +22,7 @@ from agent.result_summarizer import summarize_run_result
 from agent.run_events import record_run_event
 from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
 from agent.state import AgentJob, AgentRunConfig
+from execution.repository import ExecutionRepository
 
 
 AGENT_SYSTEM_PROMPT = """\
@@ -53,9 +54,12 @@ class AgentRuntime:
         self._jobs: dict[str, AgentJob] = {}
         self._queue: deque[str] = deque()
         self._worker: threading.Thread | None = None
+        self._restore_from_sqlite = job_store_path is None
         self._job_store_path = Path(job_store_path) if job_store_path else settings.log_dir / "agent_jobs.json"
         self._recover_interrupted_runs()
         self._load_jobs()
+        if self._restore_from_sqlite:
+            self._restore_missing_sqlite_jobs()
 
     def preflight(self) -> dict[str, Any]:
         return run_preflight()
@@ -92,7 +96,17 @@ class AgentRuntime:
             else:
                 raise ValueError(f"cannot cancel job in status {job.status}")
             self._condition.notify_all()
-            return job.to_dict()
+            payload = job.to_dict()
+        if job.run_log_id and job.cancel_requested:
+            try:
+                repository = ExecutionRepository(session_context=session_scope)
+                repository.cancel_run(
+                    int(job.run_log_id), reason="cancel requested from AgentRuntime", actor_ref=job.id
+                )
+                repository.update_run_status(int(job.run_log_id))
+            except Exception:
+                pass
+        return payload
 
     def retry_job(self, job_id: str) -> AgentJob:
         with self._lock:
@@ -105,8 +119,79 @@ class AgentRuntime:
                 config=replace(original.config),
                 retry_of=original.id,
                 attempt=int(original.attempt or 1) + 1,
+                run_log_id=original.run_log_id,
             )
+        if original.run_log_id and self._prepare_recoverable_retry(int(original.run_log_id), job.id):
+            return self._enqueue_job(job)
+        job.run_log_id = None
         return self._enqueue_job(job)
+
+    def execution_nodes(self, run_id: int) -> list[dict[str, Any]]:
+        return ExecutionRepository(session_context=session_scope).list_nodes(int(run_id))
+
+    def execution_attempts(self, run_id: int, node_id: int) -> list[dict[str, Any]]:
+        repository = ExecutionRepository(session_context=session_scope)
+        node = repository.get_node(int(node_id))
+        if not node or int(node["run_id"]) != int(run_id):
+            raise KeyError(node_id)
+        return repository.list_attempts(int(node_id))
+
+    def operate_node(
+        self,
+        job_id: str,
+        node_id: int,
+        action: str,
+        *,
+        reason: str,
+        resume_token: str,
+    ) -> dict[str, Any]:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            if not job.run_log_id:
+                raise ValueError("job has no recoverable run")
+            if job.status in {"queued", "running", "cancel_requested"}:
+                raise ValueError(f"cannot resume node while job is {job.status}")
+            run_id = int(job.run_log_id)
+        repo = ExecutionRepository(session_context=session_scope)
+        node = repo.get_node(int(node_id))
+        if not node or int(node["run_id"]) != run_id:
+            raise KeyError(node_id)
+        if action == "resume":
+            repo.resume_human(
+                int(node_id), reason=reason, actor_ref=job_id,
+                expected_resume_token=resume_token,
+            )
+        elif action == "retry":
+            repo.retry_node(
+                int(node_id), reason=reason, actor_ref=job_id,
+                expected_resume_token=resume_token,
+            )
+        elif action == "force-rerun":
+            repo.force_rerun(
+                int(node_id), reason=reason, actor_ref=job_id,
+                expected_resume_token=resume_token,
+            )
+        else:
+            raise ValueError(f"unsupported node action: {action}")
+        with self._lock:
+            job.status = "queued"
+            job.cancel_requested = False
+            job.finished_at = None
+            job.error = None
+            job.message = f"Queued to {action} {node['scope_key']}:{node['stage']}"
+            self._add_event_locked(job, action.replace("-", "_"), job.message,
+                                   run_id=run_id, node_id=int(node_id),
+                                   asin=node["scope_key"] if node["scope_type"] == "asin" else None,
+                                   stage=node["stage"])
+            if job.id not in self._queue:
+                self._queue.append(job.id)
+            self._refresh_queue_positions_locked()
+            self._ensure_worker_locked()
+            self._persist_jobs_locked()
+            self._condition.notify_all()
+            return {"job": job.to_dict(), "node": repo.get_node(int(node_id))}
 
     def list_jobs(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -199,17 +284,24 @@ class AgentRuntime:
             if job.config.llm_verification is not None:
                 settings.enable_llm_verification = bool(job.config.llm_verification)
             try:
-                from pipeline.orchestrator import run_pipeline
-
-                run_log_id = run_pipeline(
-                    category=job.config.category,
-                    source_mode=job.config.source_mode,
-                    keyword=job.config.keyword,
-                    limit=job.config.limit,
-                    marketplace=job.config.marketplace,
-                    progress_callback=lambda event: self._handle_pipeline_progress(job_id, event),
-                    cancel_check=lambda: self._is_cancel_requested(job_id),
-                )
+                if job.run_log_id:
+                    from pipeline.orchestrator import resume_pipeline
+                    run_log_id = resume_pipeline(
+                        int(job.run_log_id),
+                        progress_callback=lambda event: self._handle_pipeline_progress(job_id, event),
+                        cancel_check=lambda: self._is_cancel_requested(job_id),
+                    )
+                else:
+                    from pipeline.orchestrator import run_pipeline
+                    run_log_id = run_pipeline(
+                        category=job.config.category,
+                        source_mode=job.config.source_mode,
+                        keyword=job.config.keyword,
+                        limit=job.config.limit,
+                        marketplace=job.config.marketplace,
+                        progress_callback=lambda event: self._handle_pipeline_progress(job_id, event),
+                        cancel_check=lambda: self._is_cancel_requested(job_id),
+                    )
             finally:
                 settings.alibaba_allow_mock_suppliers = previous_mock
                 settings.enable_llm_verification = previous_llm
@@ -218,7 +310,10 @@ class AgentRuntime:
                 self._mark_cancelled(job_id, "Cancelled after pipeline")
                 return
 
-            exports = latest_export_after(started)
+            with self._lock:
+                job.run_log_id = run_log_id
+                self._persist_jobs_locked()
+            exports = _exports_for_run(run_log_id, started)
             audit = audit_export(exports["json"]) if exports.get("json") else {}
             audit["manual_queue"] = manual_queue_summary()
             audit["supplier_evidence"] = _supplier_evidence_summary(audit)
@@ -229,13 +324,47 @@ class AgentRuntime:
                 audit=audit,
             )
 
+            run_status, run_error = _run_status(run_log_id)
+            retry_delay: float | None = None
             with self._lock:
                 job.run_log_id = run_log_id
                 job.finished_at = datetime.now(UTC)
                 job.exports = {k: str(v) for k, v in exports.items() if v}
                 job.audit = audit
                 job.result_summary = result_summary
-                if _no_candidates_passed(exports, audit) and (
+                if run_status == "human_required":
+                    job.status = "human_required"
+                    job.message = "Human action required"
+                    job.error = run_error or "Complete the required browser action, then resume the node"
+                    self._add_event_locked(job, "human_required", job.message)
+                elif run_status == "retry_wait":
+                    job.status = "retry_wait"
+                    job.message = "Run waiting for retry"
+                    job.error = run_error
+                    self._add_event_locked(job, "retry_wait", job.message)
+                    retry_delay = _retry_delay(run_log_id)
+                elif run_status == "running":
+                    job.status = "retry_wait"
+                    job.message = "Run still has a leased execution node"
+                    job.error = run_error or "Waiting for the current lease owner or stale recovery"
+                    self._add_event_locked(job, "retry_wait", job.message)
+                    retry_delay = _lease_delay(run_log_id)
+                elif run_status == "cancel_requested":
+                    job.status = "cancel_requested"
+                    job.message = "Cancellation waiting for running nodes"
+                    job.error = run_error
+                    self._add_event_locked(job, "cancel_requested", job.message)
+                elif run_status == "failed":
+                    job.status = "failed"
+                    job.message = "Run has failed execution nodes"
+                    job.error = run_error or "One or more execution nodes failed"
+                    self._add_event_locked(job, "failed", job.message)
+                elif run_status == "cancelled":
+                    job.status = "cancelled"
+                    job.message = "Run cancelled"
+                    job.error = run_error
+                    self._add_event_locked(job, "cancelled", job.message)
+                elif _no_candidates_passed(exports, audit) and (
                     job.config.require_supplier_evidence or job.config.require_market_data
                 ):
                     job.status = "failed"
@@ -257,6 +386,8 @@ class AgentRuntime:
                     job.message = "Run complete"
                     self._add_event_locked(job, "success", job.message)
                 self._persist_jobs_locked()
+            if retry_delay is not None:
+                self._schedule_retry(job_id, retry_delay)
         except Exception as exc:
             with self._lock:
                 if job.cancel_requested:
@@ -296,6 +427,11 @@ class AgentRuntime:
             event_payload = {k: v for k, v in event.items() if k not in {"stage", "message"}}
             if job.status != "cancel_requested":
                 job.message = message
+            if event.get("run_id") not in (None, ""):
+                try:
+                    job.run_log_id = int(event["run_id"])
+                except (TypeError, ValueError):
+                    pass
             self._add_event_locked(job, event_name, message, **event_payload)
             self._persist_jobs_locked()
 
@@ -358,18 +494,53 @@ class AgentRuntime:
                 job = _job_from_dict(raw)
             except Exception:
                 continue
-            if job.status in {"running", "cancel_requested"}:
-                job.status = "failed"
-                job.finished_at = datetime.now(UTC)
-                job.message = "Interrupted by server restart"
-                job.error = "WebUI process stopped while job was running"
-                self._add_event_locked(job, "interrupted", job.message)
+            if job.status in {"running", "cancel_requested", "retry_wait"}:
+                recovered_status = self._restored_job_status(job)
+                if recovered_status == "queued":
+                    job.status = "queued"
+                    job.finished_at = None
+                    job.cancel_requested = False
+                    job.message = "Queued to resume after server restart"
+                    job.error = None
+                    self._add_event_locked(job, "resume_queued", job.message)
+                else:
+                    job.status = recovered_status
+                    job.finished_at = datetime.now(UTC)
+                    if recovered_status == "success":
+                        job.message = "Run complete"
+                        job.error = None
+                        self._add_event_locked(job, "recovered_complete", job.message)
+                    elif recovered_status == "cancelled":
+                        job.message = "Run cancelled"
+                        job.error = None
+                        self._add_event_locked(job, "cancelled", job.message)
+                    elif recovered_status == "human_required":
+                        job.message = "Human action required"
+                        job.error = "Complete the required action and resume the node"
+                        self._add_event_locked(job, "human_required", job.message)
+                    elif recovered_status == "cancel_requested":
+                        job.message = "Cancellation waiting for running nodes"
+                        job.error = None
+                        self._add_event_locked(job, "cancel_requested", job.message)
+                    else:
+                        job.message = "Interrupted by server restart"
+                        job.error = "WebUI process stopped while job was running"
+                        self._add_event_locked(job, "interrupted", job.message)
             self._jobs[job.id] = job
+            if job.status == "cancel_requested" and job.run_log_id:
+                self._schedule_cancel_recovery(
+                    job.id,
+                    int(job.run_log_id),
+                    _lease_delay(int(job.run_log_id)),
+                )
         queue = payload.get("queue") if isinstance(payload, dict) else []
         self._queue = deque(
             job_id for job_id in queue
             if job_id in self._jobs and self._jobs[job_id].status == "queued"
         )
+        for job_id, job in self._jobs.items():
+            if job.status == "queued" and job_id not in self._queue:
+                self._queue.append(job_id)
         self._refresh_queue_positions_locked()
         if self._jobs:
             self._persist_jobs_locked()
@@ -377,18 +548,196 @@ class AgentRuntime:
             self._ensure_worker_locked()
 
     def _recover_interrupted_runs(self) -> None:
-        """Close runs left open when this single-process WebUI was restarted."""
+        """Recover leased nodes; only legacy open runs are forced to failed."""
         try:
+            repository = ExecutionRepository(session_context=session_scope)
+            repository.recover_stale(max_attempts=3, backoff_seconds=0)
+            repository.promote_due_retries()
             with session_scope() as session:
-                runs = session.query(RunLog).filter(RunLog.status == "running").all()
-                for run in runs:
-                    run.status = "failed"
-                    run.finished_at = datetime.now(UTC)
-                    run.error_message = "Interrupted by WebUI server restart"
+                run_ids = [
+                    run.id for run in session.query(RunLog).filter(
+                        RunLog.status.in_(["running", "cancel_requested", "retry_wait"])
+                    ).all()
+                ]
+            for run_id in run_ids:
+                nodes = repository.list_nodes(run_id)
+                if nodes:
+                    repository.update_run_status(run_id)
+                    continue
+                with session_scope() as session:
+                    run = session.get(RunLog, run_id)
+                    if run is not None:
+                        recoverable = (
+                            isinstance(run.api_calls, dict)
+                            and isinstance(run.api_calls.get("recoverable_config"), dict)
+                        )
+                        if recoverable:
+                            run.status = "retry_wait"
+                            run.finished_at = None
+                            run.error_message = None
+                        else:
+                            run.status = "failed"
+                            run.finished_at = datetime.now(UTC)
+                            run.error_message = "Interrupted by WebUI server restart"
         except Exception:
             # The database might not have been initialized yet. The Docker
             # entrypoint initializes it before serving, and a later startup can retry.
             return
+
+    def _restore_missing_sqlite_jobs(self) -> None:
+        """Rebuild active UI jobs from SQLite when JSON telemetry is absent."""
+        try:
+            with session_scope() as session:
+                runs = session.query(RunLog).filter(
+                    RunLog.status.in_([
+                        "running", "retry_wait", "human_required", "cancel_requested"
+                    ])
+                ).order_by(RunLog.id.asc()).all()
+                snapshots = [
+                    {
+                        "id": run.id,
+                        "status": run.status,
+                        "config": dict((run.api_calls or {}).get("recoverable_config") or {}),
+                        "error": run.error_message,
+                    }
+                    for run in runs
+                    if isinstance(run.api_calls, dict)
+                    and isinstance((run.api_calls or {}).get("recoverable_config"), dict)
+                ]
+        except Exception:
+            return
+        with self._lock:
+            known_run_ids = {
+                int(job.run_log_id) for job in self._jobs.values() if job.run_log_id
+            }
+            for snapshot in snapshots:
+                run_id = int(snapshot["id"])
+                if run_id in known_run_ids:
+                    continue
+                config = snapshot["config"]
+                job = AgentJob(
+                    id=f"recovered-run-{run_id}",
+                    run_log_id=run_id,
+                    config=AgentRunConfig(
+                        category=str(config.get("category") or ""),
+                        source_mode=str(config.get("source_mode") or "category"),
+                        keyword=str(config.get("keyword") or ""),
+                        marketplace=str(config.get("marketplace") or "US"),
+                        limit=int(config.get("limit") or 100),
+                        no_mock=not bool(config.get("allow_mock_suppliers", False)),
+                    ),
+                )
+                if snapshot["status"] == "human_required":
+                    job.status = "human_required"
+                    job.message = "Human action required"
+                    job.error = snapshot["error"]
+                elif snapshot["status"] == "cancel_requested":
+                    job.status = "cancel_requested"
+                    job.cancel_requested = True
+                    job.message = "Cancellation waiting for running nodes"
+                else:
+                    job.status = "queued"
+                    job.message = "Recovered from SQLite execution state"
+                    self._queue.append(job.id)
+                self._add_event_locked(job, "sqlite_recovered", job.message, run_id=run_id)
+                self._jobs[job.id] = job
+                if job.status == "cancel_requested":
+                    self._schedule_cancel_recovery(
+                        job.id, run_id, _lease_delay(run_id)
+                    )
+            self._refresh_queue_positions_locked()
+            if snapshots:
+                self._persist_jobs_locked()
+            if self._queue:
+                self._ensure_worker_locked()
+
+    def _restored_job_status(self, job: AgentJob) -> str:
+        if not job.run_log_id:
+            return "failed"
+        status, _error = _run_status(int(job.run_log_id))
+        if status in {"running", "retry_wait"}:
+            return "queued"
+        if status in {"human_required", "failed", "cancelled", "success", "cancel_requested"}:
+            return status
+        return "failed"
+
+    def _prepare_recoverable_retry(self, run_id: int, actor_ref: str) -> bool:
+        repository = ExecutionRepository(session_context=session_scope)
+        nodes = repository.list_nodes(run_id)
+        if not nodes:
+            return False
+        changed = False
+        for node in nodes:
+            if node["status"] in {"failed", "timed_out"}:
+                repository.retry_node(
+                    int(node["id"]), reason="whole-run retry requested", actor_ref=actor_ref,
+                    expected_resume_token=node.get("resume_token"),
+                )
+                changed = True
+            elif node["status"] == "cancelled":
+                repository.force_rerun(
+                    int(node["id"]), reason="whole-run retry after cancellation", actor_ref=actor_ref,
+                    expected_resume_token=node.get("resume_token"),
+                )
+                changed = True
+        return changed
+
+    def _schedule_retry(self, job_id: str, delay_seconds: float) -> None:
+        def requeue() -> None:
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if not job or job.status != "retry_wait":
+                    return
+                job.status = "queued"
+                job.finished_at = None
+                job.message = "Retry backoff elapsed; queued to resume"
+                self._add_event_locked(job, "retry_queued", job.message)
+                if job_id not in self._queue:
+                    self._queue.append(job_id)
+                self._refresh_queue_positions_locked()
+                self._ensure_worker_locked()
+                self._persist_jobs_locked()
+                self._condition.notify_all()
+
+        timer = threading.Timer(max(float(delay_seconds), 0.05), requeue)
+        timer.daemon = True
+        timer.start()
+
+    def _schedule_cancel_recovery(
+        self,
+        job_id: str,
+        run_id: int,
+        delay_seconds: float,
+    ) -> None:
+        def recover() -> None:
+            repository = ExecutionRepository(session_context=session_scope)
+            try:
+                repository.recover_stale(run_id=run_id, max_attempts=1, backoff_seconds=0)
+                repository.cancel_run(
+                    run_id,
+                    reason="complete cancellation after interrupted worker lease",
+                    actor_ref=job_id,
+                )
+                status = repository.update_run_status(run_id)
+            except Exception:
+                status = "cancel_requested"
+            if status == "cancel_requested":
+                self._schedule_cancel_recovery(job_id, run_id, _lease_delay(run_id))
+                return
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if not job or job.status != "cancel_requested":
+                    return
+                job.status = "cancelled"
+                job.finished_at = datetime.now(UTC)
+                job.message = "Run cancelled"
+                job.error = None
+                self._add_event_locked(job, "cancelled", job.message)
+                self._persist_jobs_locked()
+
+        timer = threading.Timer(max(float(delay_seconds), 0.05), recover)
+        timer.daemon = True
+        timer.start()
 
 
 def _preflight_error(preflight: dict[str, Any]) -> str:
@@ -422,6 +771,102 @@ def _no_candidates_passed(exports: dict[str, Any], audit: dict[str, Any]) -> boo
 def _runtime_allow_mock_suppliers(config: AgentRunConfig) -> bool:
     dev_flag = str(os.getenv("DEV_ALLOW_MOCK_SUPPLIERS") or "").strip().lower() in {"1", "true", "yes", "on"}
     return bool(dev_flag and not config.no_mock)
+
+
+def _exports_for_run(run_id: int, started: float) -> dict[str, Path]:
+    """Return only the newest fully committed artifact set for this run."""
+    try:
+        with session_scope() as session:
+            latest = (
+                session.query(ArtifactManifest)
+                .filter_by(run_id=int(run_id), status="committed")
+                .order_by(ArtifactManifest.id.desc())
+                .first()
+            )
+            if latest is None:
+                return latest_export_after(started)
+            rows = (
+                session.query(ArtifactManifest)
+                .filter_by(
+                    run_id=int(run_id),
+                    artifact_set_id=latest.artifact_set_id,
+                    status="committed",
+                )
+                .order_by(ArtifactManifest.id.asc())
+                .all()
+            )
+            exports: dict[str, Path] = {}
+            for row in rows:
+                path = Path(row.final_path)
+                if row.logical_name in {"excel", "json"}:
+                    exports[row.logical_name.replace("excel", "xlsx")] = path
+                elif row.artifact_type == "markdown":
+                    exports.setdefault("markdown", path)
+            return exports
+    except Exception:
+        # Legacy and mocked runs have no artifact manifests.
+        return latest_export_after(started)
+
+
+def _run_status(run_id: int) -> tuple[str, str | None]:
+    """Read durable run state; mocked/legacy runs without a row remain compatible."""
+    try:
+        with session_scope() as session:
+            run = session.get(RunLog, int(run_id))
+            if run is None:
+                return "success", None
+            error = run.error_message
+            if not error and run.status in {"failed", "human_required", "retry_wait"}:
+                node = (
+                    session.query(ExecutionNode)
+                    .filter(
+                        ExecutionNode.run_id == int(run_id),
+                        ExecutionNode.status.in_(["failed", "timed_out", "human_required", "retry_wait"]),
+                    )
+                    .order_by(ExecutionNode.id.asc())
+                    .first()
+                )
+                if node is not None:
+                    error = node.error_detail or node.error_code
+            return str(run.status or "success"), error
+    except Exception:
+        return "success", None
+
+
+def _retry_delay(run_id: int) -> float:
+    try:
+        with session_scope() as session:
+            dates = [
+                row[0]
+                for row in session.query(ExecutionNode.next_retry_at).filter_by(
+                    run_id=int(run_id), status="retry_wait"
+                ).all()
+                if row[0] is not None
+            ]
+        if not dates:
+            return 0.05
+        now = datetime.now(UTC).replace(tzinfo=None)
+        return max(min(dates) - now, timedelta()).total_seconds()
+    except Exception:
+        return 1.0
+
+
+def _lease_delay(run_id: int) -> float:
+    try:
+        with session_scope() as session:
+            dates = [
+                row[0]
+                for row in session.query(ExecutionNode.lease_expires_at).filter_by(
+                    run_id=int(run_id), status="running"
+                ).all()
+                if row[0] is not None
+            ]
+        if not dates:
+            return 0.05
+        now = datetime.now(UTC).replace(tzinfo=None)
+        return max(min(dates) - now, timedelta()).total_seconds() + 0.05
+    except Exception:
+        return 1.0
 
 
 def _job_from_dict(raw: dict[str, Any]) -> AgentJob:

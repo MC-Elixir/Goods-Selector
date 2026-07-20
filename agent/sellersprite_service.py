@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+import os
 from pathlib import Path
 import re
 from time import monotonic, sleep
@@ -64,6 +65,7 @@ class SellerSpriteDependencies:
     is_cancelled: Callable[[], bool] | None = None
     browser_enabled: bool | None = None
     download_dir: Path | str | None = None
+    browser_download_dir: Path | str | None = None
     page_timeout_seconds: int | None = None
     export_timeout_seconds: int | None = None
     min_interval_seconds: int | None = None
@@ -81,11 +83,32 @@ class SellerSpriteDependencies:
             if self.browser_enabled is None
             else bool(self.browser_enabled)
         )
-        self.download_dir = Path(
+        raw_download_dir = str(
             self.download_dir
             or browser_config.download_dir
             or settings.sellersprite_import_dir
         )
+        distro = (os.getenv("WSL_DISTRO_NAME") or "").strip()
+        host_download_dir = str(
+            getattr(browser_config, "host_download_dir", "") or ""
+        ).strip()
+        if distro and host_download_dir not in {"", "configured"}:
+            raw_download_dir = host_download_dir
+        self.download_dir = Path(
+            project_local_path(PROJECT_ROOT, raw_download_dir)
+            if raw_download_dir.startswith("/app/data/")
+            else raw_download_dir
+        )
+        if self.browser_download_dir is None:
+            if distro and raw_download_dir.startswith("/mnt/"):
+                self.browser_download_dir = _wsl_mounted_path_to_windows(raw_download_dir)
+            elif distro and raw_download_dir.startswith("/app/data/"):
+                windows_path = str(self.download_dir).replace("/", "\\")
+                self.browser_download_dir = (
+                    f"\\\\wsl.localhost\\{distro}{windows_path}"
+                )
+            else:
+                self.browser_download_dir = self.download_dir
         self.page_timeout_seconds = self.page_timeout_seconds or settings.sellersprite_browser_page_timeout_seconds
         self.export_timeout_seconds = self.export_timeout_seconds or settings.sellersprite_browser_export_timeout_seconds
         self.min_interval_seconds = self.min_interval_seconds if self.min_interval_seconds is not None else settings.sellersprite_browser_min_interval_seconds
@@ -110,6 +133,7 @@ class SellerSpriteDependencies:
         return PlaywrightSellerSpriteSession(
             profile=self.profile,
             download_dir=self.download_dir,
+            browser_download_dir=self.browser_download_dir,
             page_timeout_seconds=int(self.page_timeout_seconds),
             export_timeout_seconds=int(self.export_timeout_seconds),
             download_observer=self.download_observer,
@@ -309,3 +333,13 @@ def _is_safe_metric_number(value: object) -> bool:
         and not isinstance(value, bool)
         and isfinite(value)
     )
+
+
+def _wsl_mounted_path_to_windows(value: str) -> str:
+    path = Path(value)
+    parts = path.parts
+    if len(parts) < 4 or parts[1] != "mnt" or len(parts[2]) != 1:
+        return value
+    drive = parts[2].upper()
+    suffix = "\\".join(parts[3:])
+    return f"{drive}:\\{suffix}"

@@ -19,12 +19,15 @@ playwright install chromium          # Amazon / 1688 爬虫需要
 # 2. 配置环境变量（参考 .env 已有的模板，至少填 PPIO_API_KEY 用于视觉识别）
 #    首次跑前需登录拿 cookies（见下"登录"小节）
 
-# 3. 初始化数据库（SQLite，建 6 张表）
+# 3. 初始化数据库（SQLite，自动应用版本化迁移）
 python main.py init-db
 
 # 4. 跑完整流水线
 python main.py run --category "Home & Kitchen" --limit 10
 python main.py run --category "Toys & Games" --limit 10 --marketplace US
+
+# 如进程中断，可继续同一个 run_id（不会创建新 Run）
+python main.py resume-run --run-id 123
 
 # 5. 跑测试（纯单元测试，不联网、不需 API key）
 pytest tests/
@@ -49,6 +52,7 @@ WebUI 能做：
 - 查看和搜索历史候选商品：按 ASIN、标题、供应商搜索，并下载对应 Excel。
 - 保存/取消保存候选商品：保存状态写入 `data/agent_saved_items.json`。
 - Browser Assistant（可选）：在 Settings 中通过本地 `browser-use` 辅助检查 1688 登录态、诊断 Amazon/1688 页面、补采 1688 详情字段；不替换主 pipeline 爬虫。
+- 查看每个 Run/ASIN 的执行节点、attempt 与状态；对 `human_required`、失败或已完成节点分别执行继续、重试或带原因的强制重跑。
 
 Browser Assistant 默认只允许访问 `amazon.com`、`1688.com`、`detail.1688.com`、`s.1688.com`、`127.0.0.1`、`localhost`。Docker 镜像会把 `browser-use` 安装到独立的 `/opt/browser-agent` venv，避免影响主 pipeline 依赖。本地非 Docker 运行时如需启用：
 
@@ -108,6 +112,19 @@ BU_CDP_HTTP=http://host.docker.internal:9222
 `SELLERSPRITE_LOGIN_REQUIRED`、`SELLERSPRITE_PERMISSION_REQUIRED`、
 `SELLERSPRITE_QUOTA_EXCEEDED` 或 `CAPTCHA` 时，这些都是终止状态：停止并在 Chrome
 中处理，不能重试、绕过或伪造成功。
+
+正式可恢复 pipeline 的 market 阶段优先使用已启用的 Chrome/CDP 插件，自动逐 ASIN
+执行 Reverse ASIN 导出并将其作为关键词市场证据进入评分；保留的 SellerSprite API
+密钥不参与正式运行。浏览器导出只映射主关键词、月搜索量、购买量/率及
+对应商品数；ASIN 月销量、Top10 集中度、季节性和关键词难度等未提供字段保持
+`NULL`。小批量独立采集也可运行：
+
+```bash
+python3 main.py seller-sprite-batch --asin B00Q7OAN50 --asin B01M16WBW1
+```
+
+1688 Open Platform 匹配默认关闭（`ENABLE_ALIBABA_OPEN_API_MATCHER=false`）；即使
+本地仍保留旧凭据，正式匹配也会直接使用浏览器路径，不先发送失败的 API 请求。
 
 当前本机已验证登录、验证码和导出链路；“权限不足”与“配额耗尽”定位器采用
 **首次自然出现时补录**的策略。不得为了采集它们去消耗配额、改变订阅或诱发账号
@@ -185,21 +202,47 @@ main.py run --category --limit --marketplace
        7. report   reports/exporter.py          Excel / Markdown / JSON 导出
 ```
 
-**阶段失败策略**：Stage 1（爬取）失败则中止整次运行；其余阶段按产品逐个失败并继续——某产品匹配/利润/评分失败只是拿到空数据、被硬筛淘汰。
+**阶段失败策略**：各阶段按持久化屏障推进。临时错误进入有上限的 `retry_wait`，登录、
+验证码或权限问题进入 `human_required`，确定性失败保留为可审计终态；未知业务证据保持
+缺失值，不会被伪装成零值或成功结果。
+
+### ASIN 级恢复语义
+
+SQLite 的 `execution_nodes` 是执行状态事实来源，`execution_attempts` 保存每次尝试，
+`execution_operations` 审计继续/重试/强制重跑/取消操作。节点使用输入指纹、租约、
+heartbeat 和 fencing token：输入未变的成功节点会直接复用，失效 worker 不能写回。
+例如 A/B/C 中只有 B 的 match 失败，恢复时 A、C 不重跑；B 成功后仅继续 B 的下游，
+再因聚合输入变化重跑 filter/export。业务快照通过 `result_key` 幂等提交；导出文件集
+通过 `artifact_manifests`、SHA-256 和原子 rename 发布，残缺文件集不会显示为成功。
+
+WebUI 自动从 SQLite 恢复中断节点，并展示 `retry_wait`、`human_required`、
+`timed_out`、`skipped` 等状态。CLI 可显式执行：
+
+```bash
+python main.py resume-run --run-id <run_id>
+```
+
+本地 API 提供 `/api/runs/{run_id}/nodes` 和
+`/api/runs/{run_id}/nodes/{node_id}/attempts`；节点操作必须携带当前
+`resume_token`，过期页面不能覆盖较新的恢复操作。
+
+详细状态机、故障模型和验收矩阵见
+[ASIN 级可恢复执行基础设施设计](docs/superpowers/specs/2026-07-15-asin-recoverable-execution-design.md)。
 
 ## 目录结构
 
 ```
 amazon_selector/
-├── main.py                 # CLI 入口（init-db | run）
+├── main.py                 # CLI 入口（init-db | run | resume-run）
 ├── config/                 # settings.py(pydantic) + profit_params.yaml + scoring_weights.yaml
 ├── crawlers/               # Amazon BSR 采集（_amazon_extractors 共享选器 + scrapling/playwright 后端）
 ├── matchers/               # 1688 货源匹配（vision + playwright 爬虫 + verifier）
 ├── analyzers/              # profit_model / scorer / maijiajingling(卖家精灵)
 ├── pipeline/               # orchestrator(7阶段编排) + filters(排名)
 ├── reports/                # exporter(Excel/Markdown/JSON)
-├── db/                     # SQLAlchemy 6 表 + session
-├── tests/                  # pytest（181 passed）
+├── db/                     # SQLAlchemy 业务表、执行状态表、迁移与 session
+├── execution/              # 节点状态机、租约、重试、幂等提交与 artifact 对账
+├── tests/                  # pytest 自动化回归
 ├── data/                   # 缓存、cookies、导出文件、SQLite（.gitignore，不入库）
 ├── docs/                   # PRD / database_schema / scoring_spec / 选品参考
 ├── STATUS.md               # 当前状态 + 已知问题 + 下一轮计划

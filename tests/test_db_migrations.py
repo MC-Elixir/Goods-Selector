@@ -17,10 +17,14 @@ def test_migration_is_additive_idempotent_and_enables_foreign_keys(tmp_path):
         "0001_evidence_foundation",
         "0002_repair_evidence_semantics",
         "0003_sellersprite_browser_imports",
+        "0004_recoverable_execution",
     ]
     assert run_migrations(engine) == []
     names = set(inspect(engine).get_table_names())
     assert {"field_evidence", "query_attempts", "match_evidence", "sourcing_recommendations"} <= names
+    assert {
+        "execution_nodes", "execution_attempts", "execution_operations", "artifact_manifests"
+    } <= names
     evidence_index = next(
         index
         for index in inspect(engine).get_indexes("field_evidence")
@@ -313,6 +317,7 @@ def test_legacy_0001_database_is_repaired_without_losing_history(tmp_path):
     assert run_migrations(engine) == [
         "0002_repair_evidence_semantics",
         "0003_sellersprite_browser_imports",
+        "0004_recoverable_execution",
     ]
     assert run_migrations(engine) == []
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -202,6 +203,22 @@ def test_adapter_stops_for_human_terminal_state_without_clicking(tmp_path):
     assert page.clicked == []
 
 
+def test_adapter_reclassifies_login_that_appears_after_reverse_click(tmp_path):
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"ready", "reverse_keywords"},
+    )
+    page.on_click["reverse_keywords"] = lambda: page.visible_markers.add("login_required")
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        page=page,
+    )
+
+    with pytest.raises(SellerSpriteWorkflowError, match="SELLERSPRITE_LOGIN_REQUIRED"):
+        session.export_sellersprite_reverse_keywords("B00Q7OAN50")
+
+
 def test_adapter_opens_collapsed_panel_before_ready_check(tmp_path):
     page = FakePage(asin="B00Q7OAN50", visible_markers={"panel_open"})
     page.on_click["panel_open"] = lambda: page.visible_markers.add("ready")
@@ -273,6 +290,28 @@ def test_adapter_snapshots_before_single_export_click_and_delegates_download(tmp
     assert page.filled == {"asin_input": "B00Q7OAN50"}
     assert observer.snapshots == [tmp_path]
     assert observer.waits == [(tmp_path, "snapshot", 17)]
+
+
+def test_adapter_direct_export_mode_snapshots_before_only_click(tmp_path):
+    artifact = object()
+    observer = FakeObserver(artifact)
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"ready", "reverse_keywords", "asin_input", "submit", "results_ready", "export"},
+    )
+    profile = replace(valid_profile(), export_menu="css=export", export="css=export")
+    session = PlaywrightSellerSpriteSession(
+        profile=profile,
+        download_dir=tmp_path,
+        page=page,
+        download_observer=observer,
+    )
+
+    downloaded = session.export_sellersprite_reverse_keywords("B00Q7OAN50")
+
+    assert downloaded is artifact
+    assert page.clicked == ["reverse_keywords", "submit", "export"]
+    assert observer.snapshots == [tmp_path]
 
 
 def test_adapter_sets_temporary_cdp_download_policy_before_snapshot_and_export(tmp_path):

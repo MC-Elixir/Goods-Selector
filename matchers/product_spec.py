@@ -14,15 +14,30 @@ MATERIAL_ALIASES = {
     "棉": ("棉", "cotton"),
     "聚酯纤维": ("聚酯", "涤纶", "polyester", "化纤", "微纤维", "microfiber", "microfibre"),
     "记忆棉": ("记忆棉", "memory foam"),
+    "树脂": ("树脂", "resin"),
+    "钢": ("钢", "碳钢", "铁艺", "steel", "carbon steel", "powder coated steel"),
+    "藤编": ("藤编", "藤条", "pe藤", "wicker", "rattan", "pe rattan"),
+    "木": ("木", "实木", "柚木", "相思木", "wood", "teak", "acacia"),
+    "腈纶": ("腈纶", "acrylic", "solution-dyed acrylic"),
+    "烯烃布": ("烯烃布", "olefin"),
 }
 
 CATEGORY_ALIASES = {
+    "灭蚁用品": ("灭蚁", "蚂蚁药", "蚂蚁诱饵", "ant killer", "ant bait", "ant trap", "bait station"),
+    "驱蚊用品": ("驱蚊", "灭蚊", "蚊香", "mosquito repellent", "mosquito killer", "mosquito trap"),
+    "杀蟑用品": ("杀蟑", "蟑螂药", "蟑螂诱饵", "cockroach bait", "roach bait", "roach killer"),
+    "餐厨用品": ("厨具", "锅铲", "烹饪工具", "硅胶铲", "厨房工具", "碗", "餐盒", "饭盒", "保鲜盒", "餐具", "锅", "cookware", "spatula", "cooking utensil"),
+    "垃圾桶": ("垃圾桶", "垃圾箱", "trash can", "garbage bin", "waste bin"),
     "床品套件": ("床品套件", "四件套", "三件套", "床单", "被套", "sheet set", "bed sheet", "bedding set", "duvet cover"),
     "枕头": ("枕头", "枕", "pillow"),
     "保温杯": ("保温杯", "水杯", "water bottle", "tumbler"),
     "收纳盒": ("收纳盒", "收纳", "storage box", "organizer"),
     "瑜伽垫": ("瑜伽垫", "yoga mat"),
     "手机支架": ("手机支架", "phone stand"),
+    "户外储物": ("户外储物", "庭院储物", "deck box", "outdoor storage", "storage shed", "outdoor cabinet", "storage bench"),
+    "户外取暖器": ("户外取暖器", "露台取暖器", "patio heater", "outdoor heater", "propane heater"),
+    "户外家具套装": ("户外家具", "庭院家具", "户外桌椅", "outdoor furniture set", "patio furniture", "conversation set", "outdoor dining set"),
+    "户外遮阳": ("遮阳伞", "沙滩伞", "遮阳帆", "patio umbrella", "market umbrella", "cantilever umbrella", "beach umbrella", "shade sail"),
 }
 
 COLOR_ALIASES = {
@@ -66,15 +81,25 @@ class SpecMatchResult:
 
 
 def spec_from_product(product, analysis=None) -> ProductSpec:
+    raw = getattr(product, "raw_data", None)
+    raw = raw if isinstance(raw, dict) else {}
     text = " ".join(
         str(v or "") for v in (
             getattr(product, "title", None),
             getattr(product, "category", None),
             getattr(product, "brand", None),
+            " ".join(_flatten_attribute_values(raw.get("bullet_points"))),
+            raw.get("description"),
+            " ".join(_flatten_attribute_values(raw.get("attributes"))),
         )
     )
     spec = spec_from_text(text)
-    spec.category = getattr(analysis, "category_zh", None) or spec.category or getattr(product, "category", None)
+    analysis_category = getattr(analysis, "category_zh", None)
+    spec.category = (
+        _canonical_category(analysis_category)
+        or spec.category
+        or _canonical_category(getattr(product, "category", None))
+    )
     if analysis is not None:
         spec.material = getattr(analysis, "material", None) or spec.material
         spec.color = getattr(analysis, "color", None) or spec.color
@@ -132,6 +157,9 @@ def _supplier_raw_spec_text(raw: dict[str, Any]) -> str:
         child = raw.get(parent_key)
         if isinstance(child, dict):
             parts.extend(_flatten_attribute_values(child))
+    detail = raw.get("detail")
+    if isinstance(detail, dict):
+        parts.extend(_flatten_attribute_values(detail))
     return " ".join(_dedupe([p for p in parts if p]))
 
 
@@ -271,6 +299,15 @@ def _find_alias(raw: str, normalized: str, aliases: dict[str, tuple[str, ...]]) 
 def _infer_category(text: str) -> Optional[str]:
     lowered = text.lower()
     rules = (
+        ("户外取暖器", ("patio heater", "outdoor heater", "propane heater", "露台取暖器", "户外取暖器", "燃气取暖器")),
+        ("户外家具套装", ("patio furniture", "outdoor furniture set", "outdoor conversation set", "outdoor dining set", "户外家具", "庭院家具", "户外桌椅")),
+        ("户外遮阳", ("patio umbrella", "market umbrella", "cantilever umbrella", "offset umbrella", "beach umbrella", "shade sail", "遮阳伞", "沙滩伞", "遮阳帆")),
+        ("户外储物", ("outdoor storage", "deck box", "storage shed", "outdoor cabinet", "storage bench", "户外储物", "庭院储物", "储物棚")),
+        ("灭蚁用品", ("ant killer", "ant bait", "ant trap", "bait station", "灭蚁", "蚂蚁药", "蚂蚁诱饵")),
+        ("驱蚊用品", ("mosquito repellent", "mosquito killer", "mosquito trap", "驱蚊", "灭蚊", "蚊香")),
+        ("杀蟑用品", ("cockroach bait", "roach bait", "roach killer", "杀蟑", "蟑螂药", "蟑螂诱饵")),
+        ("餐厨用品", ("cookware", "spatula", "cooking utensil", "锅铲", "硅胶铲", "厨房工具", "厨具", "碗", "餐盒", "饭盒", "保鲜盒", "餐具", "锅")),
+        ("垃圾桶", ("垃圾桶", "垃圾箱", "trash can", "garbage bin", "waste bin")),
         ("枕头", ("pillow", "枕")),
         ("床品套件", ("sheet set", "bed sheet", "bed sheets", "bedding set", "duvet cover", "床单", "床品", "四件套", "三件套", "被套")),
         ("保温杯", ("water bottle", "tumbler", "保温杯", "水杯")),
@@ -284,30 +321,45 @@ def _infer_category(text: str) -> Optional[str]:
     return None
 
 
+def _canonical_category(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    raw = str(value)
+    lowered = raw.lower()
+    return _find_alias(raw, lowered, CATEGORY_ALIASES)
+
+
 def _parse_dimensions(text: Any) -> tuple[float, float, float] | None:
     if not text:
         return None
     s = str(text).lower().replace("×", "x").replace("*", "x")
-    m = re.search(r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*(cm|厘米|in|inch|英寸)?", s)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*(cm|厘米|m|米|in|inch|inches|英寸|ft|feet|foot|英尺)?", s)
     if not m:
         return None
     values = [float(m.group(i)) for i in (1, 2, 3)]
     unit = m.group(4) or "cm"
     if unit in {"in", "inch", "英寸"}:
         values = [v * 2.54 for v in values]
+    elif unit in {"ft", "feet", "foot", "英尺"}:
+        values = [v * 30.48 for v in values]
+    elif unit in {"m", "米"}:
+        values = [v * 100 for v in values]
     return tuple(round(v, 2) for v in values)  # type: ignore[return-value]
 
 
 def _parse_weight_g(raw: str, normalized: str) -> Optional[float]:
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(kg|公斤|千克)", normalized)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(kg\b|公斤|千克)", normalized)
     if m:
         return round(float(m.group(1)) * 1000, 1)
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(g|克)", normalized)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(lb\b|lbs\b|pound\b|pounds\b)", normalized)
     if m:
-        return round(float(m.group(1)), 1)
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(oz|ounce)", normalized)
+        return round(float(m.group(1)) * 453.59237, 1)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(oz\b|ounce\b|ounces\b)", normalized)
     if m:
         return round(float(m.group(1)) * 28.3495, 1)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(g\b|克)", normalized)
+    if m:
+        return round(float(m.group(1)), 1)
     return None
 
 
@@ -321,6 +373,9 @@ def _parse_capacity_ml(raw: str, normalized: str) -> Optional[float]:
     m = re.search(r"(\d+(?:\.\d+)?)\s*(oz|盎司)", normalized)
     if m:
         return round(float(m.group(1)) * 29.5735, 1)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:us\s*)?(gallon|gallons|加仑)", normalized)
+    if m:
+        return round(float(m.group(1)) * 3785.411784, 1)
     return None
 
 
@@ -329,14 +384,14 @@ def _parse_pack_count(raw: str, normalized: str) -> Optional[int]:
         r"(\d+)\s*[- ]?(?:pack|pcs|pieces|piece|count|ct)",
         r"(\d+)\s*[- ]?piece\s+set",
         r"(\d+)\s*[- ]?pc\s+set",
-        r"(\d+)\s*(?:件套|只装|个装|支装|片装|套装)",
+        r"(\d+)\s*(?:件套|条装|盒装|只装|个装|支装|片装|套装)",
         r"(?:pack of|set of)\s*(\d+)",
     )
     for pattern in patterns:
         m = re.search(pattern, normalized)
         if m:
             return int(m.group(1))
-    m = re.search(r"([一二两三四五六七八九十])\s*(?:件套|只装|个装|支装|片装|套装)", raw)
+    m = re.search(r"([一二两三四五六七八九十])\s*(?:件套|条装|盒装|只装|个装|支装|片装|套装)", raw)
     if m:
         return _chinese_digit(m.group(1))
     return None
@@ -359,6 +414,12 @@ def _extract_features(raw: str, normalized: str) -> list[str]:
         "防皱": ("wrinkle free", "wrinkle-free", "防皱"),
         "磨毛": ("磨毛", "brushed"),
         "纯色": ("solid color", "solid", "纯色"),
+        "耐候": ("weather resistant", "weather-resistant", "耐候"),
+        "防紫外线": ("uv resistant", "uv-resistant", "防紫外线", "抗uv"),
+        "可上锁": ("lockable", "可上锁"),
+        "倾斜": ("tilt", "倾斜"),
+        "手摇": ("crank", "手摇", "摇把"),
+        "倾倒保护": ("tip-over", "tip over", "倾倒保护"),
     }.items():
         if any((v in normalized if _is_ascii(v) else v in raw) for v in values):
             features.append(label)

@@ -78,3 +78,21 @@ Base: 37372f9
 - Complete for feature scope `658faed..39e1d66` (Tasks 1–13 plus evidence hardening; excludes the pre-existing/user commit at the base).
 - Initial review found five evidence-reliability issues; commits `f88fb65` and `39e1d66` fixed all findings.
 - Final verdict: **READY**. Final full suite: **696 passed, 5 skipped**.
+
+---
+
+# SDD Progress Ledger — SellerSprite Browser Automation MVP
+
+Plan: docs/superpowers/plans/2026-07-12-sellersprite-browser-mvp.md
+Branch: dev0.1 (in-place execution after no worktree response)
+Base: 2a5cbf5
+
+## Tasks
+
+- Task 1: complete (commits 2a5cbf5..6b20926, review approved; full 745 passed, 5 skipped) — Typed contract, policy, and configuration
+- Task 2: complete (commits b4bf4fd..d8953b1, final review approved; focused 72 passed) — Download observation and SellerSprite export import
+- Task 3: complete (commit 6d4e0a7, review approved; focused 13 passed) — Additive import-manifest persistence
+- Task 4: complete (commits 622a41c..f4c9368, final review approved; Task 1–4 union 114 passed) — Deterministic CDP browser adapter and workflow
+- Task 5: complete (commits cb5b927..f1bfd16, final review approved; Task 1–5 union 162 passed) — Preflight, configuration status, and HTTP API
+- Task 6: complete (commits 26e931e..01cbc04, final review approved; focused 32 passed) — Focused SellerSprite WebUI
+- Task 7: external live-session gate pending (commits 1174d1f..b582662; offline review/remediation complete; full 827 passed, 6 skipped; Docker WebUI verified) — Phase 0 DOM investigation, controlled E2E, deployment, and final verification

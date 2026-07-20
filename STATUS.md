@@ -1,16 +1,29 @@
 # Amazon Selector — Pipeline Status
 
-**Snapshot date**: 2026-07-12
+**Snapshot date**: 2026-07-17
 **Pipeline mode**: deterministic 7-stage compatibility mode（Phase 3 `--mode agent` 尚未实现）
 
-**Phase 1–2 verification**: 数据证据、12 类去品牌查询、1688 详情页阻断识别、
-结构化 MatchEvidence、双图验证和保守推荐门禁已加入。完整实测见
-`docs/audits/2026-07-10-phase1-phase2-results.md`。当前真实 E2E 被 SellerSprite
-无效密钥在市场证据门禁处阻断；这不是质量成功，也没有人工 reviewed benchmark
-标签可用于声称匹配准确率提升。
+**Recoverable execution**: 7 阶段业务入口保持兼容，但调用层现已具备 run/ASIN 节点、
+attempt、输入指纹、租约与 fencing、自动退避恢复、人工继续、幂等业务结果和原子
+artifact set。SQLite 是恢复事实来源；CLI 使用 `resume-run --run-id`，WebUI 可查看并
+操作节点。设计与验收矩阵见
+`docs/superpowers/specs/2026-07-15-asin-recoverable-execution-design.md`。
 
-**Pipeline version**: 0.2.2 compatibility baseline
-**Last full E2E run**: [run #6] success — 5 Amazon products → 1/3 candidates 拿到真实 1688 offer（B01M16WBW1 → offer 780485617589；64 个新 cookies 首请求有效，后续 TMD 拦截降级 mock）。Excel/Markdown/JSON 导出正常。
+**Current verification**: 2026-07-17 的 run #58 generation 2 完成 3 个 Amazon 商品，
+SellerSprite 浏览器导出 3/3、1688 实时搜索 3/3、mock=0。TERRO 结果全部为灭蚁/诱饵
+类供应商，两个床品 ASIN 收敛为床品/床笠类；没有再出现锅铲、餐盒、垃圾桶跨品类结果。
+最终候选为 0，原因是成本尺寸/物流证据与利润评分门禁，不是流水线失败。
+
+**Pipeline version**: 0.3.0 recoverable compatibility mode
+**Last controlled E2E run**: [run #58 generation 2] success — 3 Amazon products；
+SellerSprite 浏览器导出 3/3，1688 实时搜索 3/3，真实供应商证据覆盖率 100%，mock=0。
+导出文件：[candidates_run_58_g2.xlsx](data/exports/candidates_run_58_g2.xlsx)。
+
+**Regression**: SellerSprite、可恢复链路、查询计划和语义门禁专项 134 passed；此前
+基线为 907 passed、6 skipped。PPIO 单图调用返回 `NOT_ENOUGH_BALANCE`，因此真实 run
+使用 SellerSprite/标题 fallback 并保留视觉缺失证据。
+真实 SQLite 迁移副本 `integrity_check=ok`、`foreign_key_check` 为空。当前 WSL 无 Docker
+命令且 Windows 9222/8765 端口不可达，镜像内和真实浏览器复验均待环境恢复。
 
 **0.2.2（2026-06-23）**：放弃 1688 官方 API、仅用爬虫 —— 清空 `.env` 三个 `ALIBABA_*` key（官方 API 自动跳过）；新增 `enable_scrapling_matcher` 开关默认禁用被 TMD 拦的 Scrapling 死路径，直接降级 Playwright。主路径现为 Playwright 单路（详见 §4.1/§4.2 与 `CHANGELOG.md`）。
 
@@ -37,9 +50,9 @@
 | 1 | crawl | `crawlers/amazon_scrapling.py` | ✅ **Production** | StealthySession 后端，prodDetTable 2026 选器，cookies + diskcache 24h 缓存 |
 | 2 | match | `matchers/alibaba_playwright.py` | ✅ **Production** | DynamicFetcher + browser context cookies，拿到真实 1688 货源（offer 782455318629 类）|
 | 2 | match (alt) | `matchers/alibaba_scrapling.py` | ⚠️ 退化 | HTTP header cookies 被 TMD 拦，0 结果（不阻塞，Playwright 兜底）|
-| 2 | match (alt) | `matchers/alibaba_text_search.py` | ⚠️ 退化 | 1688 官方 API 需 app_key；当前用占位，无数据（400 Bad Request，URL 路由已修）|
+| 2 | match (legacy) | `matchers/alibaba_text_search.py` | ⏸️ **Disabled** | 1688 Open API 仅保留诊断兼容；正式匹配默认不调用 |
 | 3 | profit | `analyzers/profit_model.py` | ✅ **Production** | 6 个 calc_* 函数 + predict_profit，从 CNY 采购价到 USD 净利润 |
-| 4 | market | `analyzers/maijiajingling.py` | ⚠️ 配置即用 | `analyze_market()` 编排 4 接口：ASIN 详情(3) → BSR 预测(26) → 竞品(1) → 关键词选品(10)；**需 `MJJL_API_KEY`**，无 key 静默跳过。0.2.1 起关键词搜索量/机会指数喂入 demand 维度，销量与搜索量不再混用 |
+| 4 | market | `agent/sellersprite_service.py` | ✅ **Production** | 已登录 Chrome/CDP 插件逐 ASIN 导出 Reverse ASIN；保留的 API 密钥不参与正式运行 |
 | 5 | score | `analyzers/scorer.py` | ✅ **Production** | 6 维度 score_* 纯函数 + score_product + apply_hard_filters；`test_weights_sum_to_one` 强制权重和 = 1.0 |
 | 6 | filter | `pipeline/filters.py` | ✅ **Production** | rank_candidates 按 total_score + net_profit 排序 |
 | 7 | report | `reports/exporter.py` | ✅ **Production** | Excel (openpyxl) + Markdown (jinja2) + JSON 三种格式 |

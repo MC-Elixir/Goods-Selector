@@ -736,6 +736,42 @@ select:focus {
   list-style: none;
 }
 
+.execution-nodes {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 10px;
+  max-height: 220px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+}
+
+.execution-nodes li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.execution-nodes li > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.execution-nodes small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.execution-nodes code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .job-events li {
   display: grid;
   grid-template-columns: minmax(70px, 110px) 1fr;

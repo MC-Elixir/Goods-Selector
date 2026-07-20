@@ -198,3 +198,44 @@ def test_spec_from_product_uses_product_dimensions_and_analysis():
     assert spec.weight_g == 800
     assert spec.dimensions_cm == (50.0, 30.0, 10.0)
     assert "可机洗" in spec.features
+
+
+def test_spec_from_text_supports_target_outdoor_categories_and_units():
+    storage = spec_from_text("120 Gallon Resin Outdoor Deck Box, 45 x 24 x 25 inches, 35 pounds")
+    heater = spec_from_text("48,000 BTU Propane Pyramid Patio Heater, powder coated steel")
+    furniture = spec_from_text("5 Piece PE Rattan Outdoor Conversation Patio Furniture Set")
+    umbrella = spec_from_text("9 FT Market Patio Umbrella, Polyester Canopy")
+
+    assert storage.category == "户外储物"
+    assert storage.material == "树脂"
+    assert storage.capacity_ml == 454249.4
+    assert storage.dimensions_cm == (114.3, 60.96, 63.5)
+    assert storage.weight_g == 15875.7
+    assert heater.category == "户外取暖器"
+    assert heater.material == "钢"
+    assert furniture.category == "户外家具套装"
+    assert furniture.material == "藤编"
+    assert umbrella.category == "户外遮阳"
+
+
+def test_spec_from_product_consumes_hydrated_amazon_evidence():
+    product = SimpleNamespace(
+        title="Outdoor Patio Furniture",
+        category="Patio",
+        brand=None,
+        weight_kg=None,
+        length_cm=None,
+        width_cm=None,
+        height_cm=None,
+        raw_data={
+            "bullet_points": ["5 Piece Outdoor Conversation Set"],
+            "description": "PE rattan sofa chairs and table",
+            "attributes": {"Material": "PE rattan"},
+        },
+    )
+
+    spec = spec_from_product(product)
+
+    assert spec.category == "户外家具套装"
+    assert spec.material == "藤编"
+    assert spec.pack_count == 5

@@ -14,7 +14,7 @@ from loguru import logger
 
 from config.settings import PROJECT_ROOT
 from db.init_db import init_db as _init_db
-from pipeline.orchestrator import run_pipeline
+from pipeline.orchestrator import resume_pipeline, run_pipeline
 
 
 @click.group()
@@ -36,6 +36,14 @@ def run_cmd(category: str, limit: int, marketplace: str):
     """跑一次完整选品流水线。"""
     run_id = run_pipeline(category=category, limit=limit, marketplace=marketplace)
     logger.info(f"完成，RunLog id = {run_id}")
+
+
+@cli.command("resume-run")
+@click.option("--run-id", required=True, type=click.IntRange(1), help="要恢复的 RunLog id")
+def resume_run_cmd(run_id: int):
+    """从 SQLite 执行节点恢复同一个 sourcing run。"""
+    resumed_id = resume_pipeline(run_id)
+    logger.info(f"恢复执行完成，RunLog id = {resumed_id}")
 
 
 @cli.command("smoke-run")
@@ -110,6 +118,41 @@ def seller_sprite_asin_check_cmd(asin: str, marketplace: str):
     payload = check_seller_sprite_asin(asin, marketplace)
     click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     if not payload["configured"] or payload["error"] or not payload["has_market_evidence"]:
+        raise click.exceptions.Exit(2)
+
+
+@cli.command("seller-sprite-batch")
+@click.option("--asin", "asins", multiple=True, required=True, help="Amazon US ASIN；可重复传入，最多 20 个")
+def seller_sprite_batch_cmd(asins: tuple[str, ...]):
+    """通过已登录 Chrome 的 SellerSprite 插件批量导出反查关键词。"""
+    from agent.sellersprite_batch import run_reverse_keyword_batch
+
+    try:
+        batch = run_reverse_keyword_batch(list(asins))
+    except ValueError as exc:
+        click.echo(json.dumps({"status": "INVALID_REQUEST", "error": str(exc)}, ensure_ascii=False, indent=2))
+        raise click.exceptions.Exit(2)
+    payload = {
+        "results": [
+            {
+                "asin": result.context.asin,
+                "status": result.status,
+                "error_code": result.error_code,
+                "row_count": result.data.get("row_count") if result.status == "SUCCESS" else None,
+                "manifest_id": result.data.get("manifest_id") if result.status == "SUCCESS" else None,
+            }
+            for result in batch.results
+        ],
+        "summary": {
+            "processed_count": len(batch.results),
+            "success_count": batch.success_count,
+            "human_required_count": batch.human_required_count,
+            "stopped": batch.stopped,
+            "stop_reason": batch.stop_reason,
+        },
+    }
+    click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    if batch.stopped or batch.success_count != len(batch.results):
         raise click.exceptions.Exit(2)
 
 

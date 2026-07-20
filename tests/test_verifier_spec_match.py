@@ -87,6 +87,74 @@ def test_all_low_quality_suppliers_are_not_reintroduced():
     assert supplier.match_verification_method == "heuristic_rejected"
 
 
+def test_pest_control_category_gate_rejects_high_sales_cookware():
+    product = SimpleNamespace(
+        asin="B00E4GACB8",
+        title="TERRO Liquid Ant Killer Bait Stations, 12 Count",
+        category="Home & Kitchen",
+        brand="TERRO",
+        main_image_url="https://example.test/terro.jpg",
+        weight_kg=None,
+        length_cm=None,
+        width_cm=None,
+        height_cm=None,
+    )
+    cookware = SupplierDTO(
+        alibaba_offer_id="cookware-12",
+        supplier_name="厨具工厂",
+        title_cn="硅胶锅铲厨具12件套厨房烹饪工具",
+        monthly_sales=50000,
+        offer_image_url="https://example.test/cookware.jpg",
+        raw_data={"full_text": "硅胶锅铲厨具12件套厨房烹饪工具"},
+    )
+    bait = SupplierDTO(
+        alibaba_offer_id="ant-bait",
+        supplier_name="灭虫用品工厂",
+        title_cn="室内灭蚁饵剂蚂蚁诱饵盒12只装",
+        monthly_sales=100,
+        raw_data={"full_text": "室内灭蚁饵剂蚂蚁诱饵盒12只装 液体"},
+    )
+
+    result = Alibaba1688Verifier(threshold_demote=0.0).verify(
+        [cookware, bait],
+        product,
+        analysis=None,
+        search_keywords=["灭蚁饵剂 12件套", "灭蚁饵剂"],
+    )
+
+    assert [supplier.alibaba_offer_id for supplier in result] == ["ant-bait"]
+    assert cookware.match_quality_score == 0.0
+    assert "category" in cookware.raw_data["spec_match"]["conflicts"]
+
+
+def test_bedding_category_gate_rejects_kitchen_container():
+    product = SimpleNamespace(
+        asin="B00Q7OAPM6",
+        title="Microfiber 4 Piece Bed Sheet Set with Deep Pockets",
+        category="Home & Kitchen",
+        brand="Amazon Basics",
+        main_image_url=None,
+        weight_kg=1.1,
+        length_cm=22.86,
+        width_cm=22.86,
+        height_cm=8.25,
+    )
+    supplier = SupplierDTO(
+        alibaba_offer_id="bowl-1",
+        supplier_name="餐盒工厂",
+        title_cn="玻璃保鲜盒便当盒带盖餐盒",
+        monthly_sales=50000,
+        raw_data={"full_text": "玻璃保鲜盒便当盒带盖餐盒"},
+    )
+
+    result = Alibaba1688Verifier(threshold_demote=0.0).verify(
+        [supplier], product, analysis=None, search_keywords=["床品套件", "床笠"]
+    )
+
+    assert result == []
+    assert "category" in supplier.raw_data["spec_match"]["conflicts"]
+
+
 def test_verifier_uses_visual_similarity_as_ranking_signal():
     suppliers = [
         SupplierDTO(

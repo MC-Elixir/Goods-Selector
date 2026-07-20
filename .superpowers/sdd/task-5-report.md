@@ -1,87 +1,83 @@
-# Task 5 Report: Amazon Detail, Buy Box, and Market Evidence Enrichment
+# Task 5 Report: SellerSprite preflight, configuration status, and HTTP API
 
 ## Status
 
-Implemented on top of `254299eff32743720b7b392a3acbd4ce6d427aef` with Amazon US and existing crawler interfaces preserved.
+Implemented the isolated SellerSprite browser readiness signal and the bounded
+reverse-keyword HTTP API. The pre-existing MJJL market-data guard and generic
+Browser Assistant routes were left unchanged.
 
-## RED
+## RED evidence
 
-Command:
+Before production code, the source-mounted Docker test command failed as
+expected because the new route, status block, and preflight check did not yet
+exist:
 
-`TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_amazon_detail_evidence.py tests/test_maijiajingling.py -v`
+```text
+7 failed, 28 passed
+```
 
-Observed collection failures for the intended missing contracts:
+The missing behavior was explicit in the failures:
 
-- `extract_amazon_detail` did not exist.
-- `MarketDataError` did not exist.
+- `POST /api/sellersprite/reverse-keywords` returned `404` instead of input
+  validation responses.
+- `agent.server.run_reverse_keyword_export` did not exist for route dispatch.
+- `agent.preflight._check_seller_sprite_browser` did not exist.
+- `get_config_status()` lacked `seller_sprite_browser`.
 
-A subsequent legacy DTO test also failed at import because `apply_detail_evidence` did not exist.
+## Implementation
 
-## GREEN
+- Added `POST /api/sellersprite/reverse-keywords`, accepting only the existing
+  JSON-object request shape. It validates a normalized ASIN and an optional
+  canonical UUID `sourcing_run_id` before delegating exactly once to
+  `run_reverse_keyword_export`.
+- Business outcomes remain HTTP 200 and are serialized as a stable safe
+  response with `status`, `error_code`, correlation context, and an explicit
+  evidence allowlist (`row_count`, string keyword list, UUID manifest ID).
+  Source paths, cookies, CDP addresses, raw manifests, and arbitrary result
+  fields are not returned.
+- Added the `seller_sprite_browser` status block with booleans and numeric
+  budgets only; configured host/container paths and profile contents are not
+  exposed.
+- Added a distinct warning-only browser preflight check. It verifies browser
+  enablement, a validated locator profile, writable configured container
+  download directory, and a usable resolved CDP websocket. It never consults
+  the MJJL API key or changes market-data guard behavior.
 
-Focused Task 5 and compatibility suite:
+## GREEN evidence
 
-`TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/test_amazon_detail_evidence.py tests/test_amazon_search.py tests/test_crawlers.py tests/test_maijiajingling.py tests/test_seller_sprite_diagnostics.py tests/test_scoring.py -q`
+Focused source-mounted Docker run:
 
-Result: `137 passed, 10 warnings in 1.13s`.
+```bash
+TEST_DATA=$(mktemp -d)
+docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -e LOG_DIR=/app/data/logs \
+  -v "$PWD:/app:ro" -v "$TEST_DATA:/app/data" -w /app \
+  --entrypoint pytest amazon-selector:dev \
+  tests/test_agent_server.py tests/test_preflight.py \
+  tests/test_config_status.py tests/test_browser_agent.py \
+  -q -s -p no:cacheprovider
+```
 
-## Full Suite
+Result: `44 passed in 4.06s`.
 
-Initial required full-suite run:
+`git diff --check` was clean before commit.
 
-`TEMP=/tmp TMP=/tmp TMPDIR=/tmp pytest tests/`
+## Files changed
 
-Result: `490 passed, 5 skipped, 209 warnings in 180.68s`.
+- `agent/preflight.py`
+- `agent/config_status.py`
+- `agent/server.py`
+- `tests/test_preflight.py`
+- `tests/test_config_status.py`
+- `tests/test_agent_server.py`
 
-After the final safe-response-diagnostic addition, a second full-suite run produced `1 failed, 490 passed, 5 skipped`: `test_runtime_attaches_result_summary_after_success` exceeded its two-second asynchronous wait. Immediate isolated rerun of that unchanged test passed: `1 passed, 4 warnings in 1.36s`. This is recorded as a timing flake, not hidden as a clean rerun.
+## Self-review
 
-## Files
-
-- `crawlers/_amazon_extractors.py`
-- `crawlers/amazon_search.py`
-- `analyzers/maijiajingling.py`
-- `tests/test_amazon_detail_evidence.py`
-- `tests/test_maijiajingling.py`
-- `.superpowers/sdd/task-5-report.md`
-
-## Self-check
-
-- Detail extraction always returns a complete evidence-key envelope and represents absence as `EvidenceStatus.MISSING` with `None`.
-- Extracted timestamps are timezone-aware and satisfy Task 1 `FieldEvidence` validation.
-- Coupon, discount/list price, variations, buy box seller/fulfillment/count, package quantity/material/dimensions, images, bullets, description, A+, availability, and first-available evidence are included.
-- Legacy DTO fields are copied only from `extracted`/`verified` evidence; complete serialized evidence remains under `raw_data["field_evidence"]`.
-- Market evidence distinguishes `success`, `partial`, and `failed`; empty DTOs cannot report success.
-- 401/403/invalid-key, 429, timeout, and missing response structure map to stable safe codes.
-- SellerSprite diagnostics retain endpoint, timezone-aware response timestamp, and SHA-256 response hash without API keys or raw response bodies.
-- No Task 6 visual-understanding or Task 11 orchestrator work was added.
-- `git diff --check` passed.
-
-## Concerns
-
-- One unrelated asynchronous agent-runtime test timed out once in the final full-suite rerun and passed immediately in isolation, as detailed above.
-- Secondary-image extraction supports the explicit page attribute contract plus URL text lists; backend-specific DOM adapters may provide richer image attributes in later integration work.
-
-## Review Fix Follow-up
-
-Follow-up commit scope addresses the Task 5 review findings without amending the original commit.
-
-### Additional RED evidence
-
-- Production-path tests called `AmazonScraplingScraper._scrape_product()` and `AmazonPlaywrightScraper._scrape_product()` with fake underlying pages; both failed because `raw_data["field_evidence"]` was absent.
-- Real-chain SellerSprite tests supplied mocked HTTP 401 and malformed JSON; both incorrectly returned `partial` because `analyze_market()` swallowed terminal errors.
-- A direct non-OK business response test failed because `_request()` returned `UPSTREAM_ERROR` instead of `MISSING_REQUIRED_DATA`.
-
-### Review fixes
-
-- Both browser backends now run `extract_amazon_detail()` against the already-fetched page, use the auditable listing URL as `source_ref`, and call the shared legacy DTO evidence applicator. No second detail fetch is performed.
-- `analyze_market()` retains best-effort behavior by default and accepts `strict=True`; `analyze_market_evidence()` uses strict mode so terminal `MarketDataError` values propagate to a failed result.
-- Real mocked HTTP chains now cover 401, 429, timeout, malformed JSON, and non-OK business responses.
-- JSON parsing failures and malformed/non-OK successful responses map to `MISSING_REQUIRED_DATA`; auth and rate signals retain their dedicated stable codes.
-- `_parse_dimensions_from_text()` now returns the annotated tuple type.
-- A+ detection checks both visible content and an adapter-visible `id` attribute. If neither adapter can expose presence, the evidence remains explicitly missing rather than inferred.
-
-### Follow-up verification
-
-- Focused Amazon crawler/search, market, diagnostics, and scoring suite: `196 passed, 5 skipped, 50 warnings in 13.29s`.
-- Full suite: `499 passed, 5 skipped, 210 warnings in 236.21s`.
-- All external behavior tests use synthetic pages or mocked HTTP; no external calls were made.
+- Confirmed the endpoint has no host, path, profile, cookie, or CDP URL input.
+- Confirmed invalid ASIN, UUID, and non-object JSON return clean 400 JSON
+  errors before workflow dispatch.
+- Confirmed the endpoint uses one service invocation and treats documented
+  workflow outcomes as data rather than transport errors.
+- Confirmed browser preflight is advisory (`ok` or `warning` only), independent
+  of MJJL configuration, and generic Browser Assistant tests still pass.
+- No user modifications outside Task 5 files were staged; the shared SDD
+  ledger and Task 4 report remain uncommitted.

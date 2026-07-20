@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from crawlers.amazon_bsr import ProductDTO
 from crawlers.amazon_search import AmazonSearchFailure, SearchPageDiagnostic
 from config.settings import settings
-from db.models import Base, RunLog
+from db.models import Base, ExecutionNode, RunLog
 from pipeline.orchestrator import run_pipeline
 
 
@@ -138,7 +138,7 @@ def test_category_source_mode_keeps_existing_bsr_crawler(monkeypatch, tmp_path):
         assert run.api_calls["source_query"] == "Home & Kitchen"
 
 
-def test_keyword_search_failure_persists_sanitized_diagnostics(monkeypatch, tmp_path):
+def test_keyword_captcha_becomes_human_required_with_sanitized_diagnostics(monkeypatch, tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'diagnostic.db'}", future=True)
     Base.metadata.create_all(engine)
     session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
@@ -169,18 +169,23 @@ def test_keyword_search_failure_persists_sanitized_diagnostics(monkeypatch, tmp_
         lambda *args, **kwargs: (_ for _ in ()).throw(AmazonSearchFailure("patio umbrella", diagnostic)),
     )
 
-    with pytest.raises(AmazonSearchFailure):
-        run_pipeline(
-            category="",
-            keyword="patio umbrella",
-            source_mode="keyword",
-            limit=10,
-            marketplace="US",
-            export=False,
-        )
+    run_id = run_pipeline(
+        category="",
+        keyword="patio umbrella",
+        source_mode="keyword",
+        limit=10,
+        marketplace="US",
+        export=False,
+    )
 
     with temp_session_scope() as session:
         run = session.query(RunLog).one()
-        assert run.status == "failed"
+        assert run.id == run_id
+        assert run.status == "human_required"
         assert run.api_calls["amazon_search"]["kind"] == "captcha"
         assert "html" not in run.api_calls["amazon_search"]
+        node = session.query(ExecutionNode).filter_by(
+            run_id=run_id, scope_type="run", stage="source_discovery"
+        ).one()
+        assert node.status == "human_required"
+        assert node.human_action_required["error_code"] == "HUMAN_ACTION_REQUIRED"
