@@ -300,6 +300,7 @@ def _execute(
                     item,
                     cancel_check,
                     market_keywords=hints,
+                    run_ref=f"run:{run_id}",
                 )
                 return {
                     "schema_version": SCHEMA_VERSION,
@@ -315,6 +316,13 @@ def _execute(
                     product_row = legacy._upsert_product(session, restored_product)
                     for supplier in restored_suppliers:
                         legacy._upsert_supplier(session, product_row.id, supplier)
+                    evidence = (
+                        restored_product.raw_data.get("sourcing_evidence")
+                        if isinstance(restored_product.raw_data, dict) else None
+                    )
+                    if isinstance(evidence, dict):
+                        from matchers.sourcing_slice import persist_serialized_sourcing_evidence
+                        persist_serialized_sourcing_evidence(evidence, session)
                 return writer
 
             result = coordinator.run_node(
@@ -333,7 +341,9 @@ def _execute(
                 },
             )
             if result.status == NodeStatus.SUCCEEDED.value:
+                restored_product = load_product(result.output_snapshot["product"])
                 suppliers = load_suppliers(result.output_snapshot.get("suppliers"))
+                records_by_asin[asin].product = restored_product
                 records_by_asin[asin].suppliers = suppliers
                 matched += len(suppliers)
             elif isinstance(result.exception, TimeoutError) and len(products) == 1:
@@ -494,6 +504,7 @@ def _execute(
     # Run-level aggregate nodes are fingerprinted by all ASIN score states, so
     # recovering B invalidates only filter/export while A and C remain cached.
     records = [records_by_asin[product.asin] for product in products]
+    legacy._finalize_sourcing_evidence(records)
     aggregate_refs = [
         _node_dependency(repository, run_id, product.asin, "score") for product in products
     ]

@@ -90,3 +90,35 @@ def test_mock_search_identity_does_not_leak_to_any_export(tmp_path):
         assert "SECRET-MOCK" not in content
         assert "SECRET TITLE" not in content
         assert "https://mock/SECRET" not in content
+
+
+def test_formal_pipeline_raw_sourcing_evidence_is_exported_without_slice_attribute(tmp_path):
+    record = _record()
+    del record.sourcing_slice
+    record.product.raw_data["sourcing_evidence"] = {
+        "schema_version": "target-sourcing-evidence-v1",
+        "run_ref": "run:88",
+        "query_attempts": [{"status": "not_started", "result_count": None}],
+        "evaluated_matches": [{
+            "supplier_ref": "offer:factory-1",
+            "decision": "keep",
+            "overall_confidence": 0.91,
+        }],
+        "recommendation": {
+            "status": "needs_manual_review",
+            "recommendation_reasons": ["strict_supplier_match_passed"],
+            "rejection_reasons": ["missing_market_evidence"],
+            "manual_verification_tasks": ["evaluate_market"],
+        },
+    }
+
+    payload = json.loads(
+        export_json([record], output_path=tmp_path / "formal.json").read_text(encoding="utf-8")
+    )[0]
+
+    assert payload["schema_version"] == "target-sourcing-evidence-v1"
+    assert payload["run_ref"] == "run:88"
+    assert payload["query_plan_and_hit_rates"][0]["result_count"] is None
+    assert payload["match_evidence"][0]["decision"] == "keep"
+    assert payload["recommendation_status"] == "needs_manual_review"
+    assert "missing_market_evidence" in payload["rejection_reasons"]

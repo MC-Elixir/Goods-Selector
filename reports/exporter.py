@@ -32,13 +32,25 @@ def _display_score(value) -> str:
     return "-" if value is None else f"{value:.3f}"
 
 
+def _raw_sourcing_payload(record) -> dict[str, Any]:
+    product = getattr(record, "product", None)
+    raw = getattr(product, "raw_data", None)
+    payload = (raw or {}).get("sourcing_evidence") if isinstance(raw, dict) else None
+    return payload if isinstance(payload, dict) else {}
+
+
 def _record_rejection_reasons(record) -> list[str]:
     reasons = getattr(record, "rejection_reasons", None)
     if not reasons:
         score = getattr(record, "score", None)
         reasons = getattr(score, "rejection_reasons", None) or []
     recommendation = getattr(getattr(record, "sourcing_slice", None), "recommendation", None)
-    evidence_reasons = getattr(recommendation, "rejection_reasons", None) or []
+    raw_recommendation = _raw_sourcing_payload(record).get("recommendation") or {}
+    evidence_reasons = (
+        getattr(recommendation, "rejection_reasons", None)
+        or raw_recommendation.get("rejection_reasons")
+        or []
+    )
     return list(dict.fromkeys([*reasons, *evidence_reasons]))
 
 
@@ -54,6 +66,19 @@ def _record_review_status(record) -> str:
 
 def _evidence_payload(record) -> dict[str, Any]:
     slice_result = getattr(record, "sourcing_slice", None)
+    raw_payload = _raw_sourcing_payload(record)
+    if not slice_result and raw_payload:
+        recommendation = raw_payload.get("recommendation") or {}
+        return {
+            "schema_version": raw_payload.get("schema_version") or "target-sourcing-evidence-v1",
+            "run_ref": raw_payload.get("run_ref"),
+            "query_plan_and_hit_rates": raw_payload.get("query_attempts") or [],
+            "match_evidence": raw_payload.get("evaluated_matches") or [],
+            "recommendation_status": recommendation.get("status"),
+            "recommendation_reasons": recommendation.get("recommendation_reasons") or [],
+            "evidence_rejection_reasons": recommendation.get("rejection_reasons") or [],
+            "manual_verification_tasks": recommendation.get("manual_verification_tasks") or [],
+        }
     recommendation = getattr(slice_result, "recommendation", None)
     status = getattr(recommendation, "status", None)
     status = getattr(status, "value", status)

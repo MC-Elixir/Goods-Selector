@@ -493,6 +493,26 @@ class TestApplyHardFilters:
         )
         assert "restricted_product" in reasons
 
+    def test_target_category_requires_strict_supplier_keep_decision(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(),
+            target_category_id="patio_umbrellas_shade",
+            top_supplier_target_decision="manual_review",
+        )
+        assert "target_supplier_contract_not_passed" in reasons
+
+        passed, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(),
+            target_category_id="patio_umbrellas_shade",
+            top_supplier_target_decision="keep",
+        )
+        assert passed is True
+        assert reasons == []
+
 
 # ============================================================
 # score_product 集成
@@ -640,3 +660,37 @@ class TestScoreProduct:
         for dim in (sb.profit_score, sb.demand_score, sb.competition_score,
                     sb.supply_score, sb.logistics_score, sb.risk_score):
             assert 0.0 <= dim <= 1.0
+
+    def test_bulky_target_category_uses_its_own_logistics_profile_and_hard_gate(self):
+        product = _MockProduct(
+            title="9 FT Market Patio Umbrella",
+            category="Patio Umbrellas & Shade",
+            weight_kg=18.0,
+            length_cm=180.0,
+            width_cm=35.0,
+            height_cm=35.0,
+        )
+        product.raw_data = {
+            "target_category_profile": {"category_id": "patio_umbrellas_shade"}
+        }
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.9
+        supplier.raw_data = {
+            "supplier_candidate_score": 0.9,
+            "spec_match": {"score": 0.95, "conflicts": []},
+            "strict_match_evidence": {"decision": "keep"},
+        }
+
+        result = score_product(
+            product=product,
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, supplier, supplier],
+        )
+        generic = score_logistics(
+            18.0, 180.0, 35.0, 35.0, [],
+            load_weights_config()["scoring_curves"]["logistics"],
+        )
+
+        assert result.logistics_score > generic
+        assert "target_supplier_contract_not_passed" not in result.rejection_reasons

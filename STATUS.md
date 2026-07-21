@@ -1,7 +1,18 @@
 # Amazon Selector — Pipeline Status
 
-**Snapshot date**: 2026-07-17
+**Snapshot date**: 2026-07-20
 **Pipeline mode**: deterministic 7-stage compatibility mode（Phase 3 `--mode agent` 尚未实现）
+
+**Target-category sourcing**: Outdoor Storage、Patio Heater、Patio Furniture Sets、
+Patio Umbrellas & Shade 已接入正式 `match_suppliers` 和可恢复 pipeline。目标产品执行 12 类
+确定性去品牌查询、Amazon/1688 参数归一化、最多 10 个详情补全，并对品类、整品/配件、
+子型、关键数值、材质和厂家身份执行硬门禁。只有 `keep` 进入利润/市场评分；拒绝与复核
+证据写入 SQLite 和三种导出。合同与验收见
+`docs/target-category-sourcing-contract.md`。
+
+**Target contract benchmark**: 20 个合成规格/厂家案例覆盖四个品类，当前 decision accuracy、
+strict keep precision、hard reject recall 和 rejection reason accuracy 均为 100%。这不是线上
+准确率；真实队列目前只有 3 个未人工标注的伞类历史案例，因此 live 指标保持 `NULL`。
 
 **Recoverable execution**: 7 阶段业务入口保持兼容，但调用层现已具备 run/ASIN 节点、
 attempt、输入指纹、租约与 fencing、自动退避恢复、人工继续、幂等业务结果和原子
@@ -19,11 +30,11 @@ SellerSprite 浏览器导出 3/3、1688 实时搜索 3/3、mock=0。TERRO 结果
 SellerSprite 浏览器导出 3/3，1688 实时搜索 3/3，真实供应商证据覆盖率 100%，mock=0。
 导出文件：[candidates_run_58_g2.xlsx](data/exports/candidates_run_58_g2.xlsx)。
 
-**Regression**: SellerSprite、可恢复链路、查询计划和语义门禁专项 134 passed；此前
-基线为 907 passed、6 skipped。PPIO 单图调用返回 `NOT_ENOUGH_BALANCE`，因此真实 run
-使用 SellerSprite/标题 fallback 并保留视觉缺失证据。
-真实 SQLite 迁移副本 `integrity_check=ok`、`foreign_key_check` 为空。当前 WSL 无 Docker
-命令且 Windows 9222/8765 端口不可达，镜像内和真实浏览器复验均待环境恢复。
+**Regression**: 2026-07-20 全量离线回归为 948 passed、6 skipped；四品类规格合同、
+正式匹配、查询证据、厂家门槛、可恢复落库、评分硬门禁和三种导出均在全套中通过。
+20 个合成合同案例全部通过，历史 6ft 伞与 85cm 候选被稳定识别为伞径硬冲突；该历史
+案例尚未人工标注，所以不计入线上准确率。当前 WSL 没有可用的 Docker 命令，
+`docker compose config` 与镜像内 WebUI 复验仍待 Docker Desktop WSL integration 恢复。
 
 **0.2.2（2026-06-23）**：放弃 1688 官方 API、仅用爬虫 —— 清空 `.env` 三个 `ALIBABA_*` key（官方 API 自动跳过）；新增 `enable_scrapling_matcher` 开关默认禁用被 TMD 拦的 Scrapling 死路径，直接降级 Playwright。主路径现为 Playwright 单路（详见 §4.1/§4.2 与 `CHANGELOG.md`）。
 
@@ -136,10 +147,11 @@ DB:       RunLog id=2 落库
 |---|---|---|
 | **Scrapling 1688 路径 0 结果** | Scrapling 是 HTTP 路径，cookies 只能走 header，1688 TMD 不认 | **0.2.2 已采纳方案 C**：`settings.enable_scrapling_matcher` 默认 False，默认不跑、直接降级 Playwright；待修好后置 True 即可恢复（无需改代码） |
 | **Amazon 2026 buybox 价格** | 第三方卖家主导的页没有内联价格（"See All Buying Options" 之后才有）| 写专门的 buybox extractor，从 JSON `olpMessage` / `p13n-sc-price` 区分主价 vs 变体价（独立工作）|
-| **1688 包装尺寸 / 交期缺失** | 搜索页没这些字段，要进详情页 | 实现 `get_offer_detail`（需要 session 复用 + 限速）|
+| **1688 详情字段覆盖不稳定** | 详情抓取已接通，但不同模板、登录拦截或字段缺省仍可能导致包装尺寸、交期、厂家身份缺失 | 保持 `manual_review/retry`，用真实标注队列逐字段补选择器，不以搜索卡片值替代详情证据 |
 | **Pailitao 图像搜索** | `PailitaoClient.search_by_image` 仍是 `NotImplementedError` | 大功能：要么接 1688 开放平台图搜 API（要特殊权限），要么用浏览器自动化上传图片到 1688 图搜页 |
 
 ### 4.3 测试
+- **当前（2026-07-20）**：全量离线回归 948 passed、6 skipped；四品类合成合同 20/20，真实队列 3 条均未标注，live accuracy 为 `NULL`
 - **0.2.1 实测（2026-06-23）**：181 passed, 5 skipped, 2 pre-existing failures —— 较 0.2.0 新增 4 个用例（`test_maijiajingling.py`）并扩展 `test_scoring.py`，无回归
 - 2 pre-existing failures 仍是 `test_vision_matcher.py` 的 cache-hit 测试（旧缓存导致 mock 不被调用，与本工作无关）
 - 5 skipped 仍是 `TestAgainstRealAmazonHtml`（真实 HTML fixture 待重跑 probe 脚本生成）
@@ -180,20 +192,19 @@ DB:       RunLog id=2 落库
 | **diskcache 24h TTL** | 同 ASIN / BSR 列表页回放时秒出；captcha 命中时 `delete(key)` 避免脏数据 |
 | **MJJL fallback 设计** | 卖家精灵无 key 时静默跳过而不是 crash，让 pipeline 仍能产出候选（少一个维度）|
 | **硬性筛选在 yaml 配置** | 净利率 / 总分 / 月销 / MOQ / 品牌黑名单 阈值都在 `scoring_weights.yaml`，改配置不动代码 |
-| **mock 兜底** | 1688 全路径失败时生成占位 supplier，让 pipeline 永不断（带 `match_verification_method='mock'` 标记）|
-| **仅走爬虫（0.2.2）** | 放弃 1688 官方 API（从未验证可用）+ 默认禁用被 TMD 拦的 Scrapling HTTP 路径；Playwright 注入 cookies 拿真实 offer，mock 兜底。简化依赖、少一个付费 key，代价是采购价/MOQ 等结构化字段需靠详情页爬虫补 |
+| **正式 no-mock** | 正式 WebUI/四品类路径禁用 mock；1688 全路径失败时记录数据不足或人工处理，不把占位 supplier 送入结果。mock 仅保留给显式开启的测试/调试兼容路径 |
+| **仅走爬虫（0.2.2）** | 放弃未验证可用的 1688 官方 API，默认禁用被 TMD 拦截的 Scrapling HTTP 路径；Playwright 注入 cookies 获取真实 offer。旧版调试 mock 仍可显式开启，但当前正式 no-mock 路径失败关闭 |
 
 ---
 
-## 6. 推荐的下一轮（按 ROI 排）
+## 6. 推荐的下一轮（只按匹配质量排序）
 
-1. **申请卖家精灵 4 接口试用 + 配 `MJJL_API_KEY`**（见 §4.4）—— 拿到 key 即激活 Stage 4 全量市场维度，ROI 最高
-2. **跑一次 `--limit 20~50` 的 E2E** —— 验证仅爬虫路线（Playwright 单路）在规模下的稳定性与 cookies 失效表现，ROI 次高
-3. **写 Amazon buybox extractor**（半天工作）—— 解决 price 字段 1/3 命中率问题
-4. **（可选）修 Scrapling 1688 路径**（1-2 天）—— 0.2.2 已默认禁用、不阻塞；方案 A (subprocess 拆分) 最干净，修好后 `enable_scrapling_matcher=True` 即恢复
-5. **实现 1688 详情页爬取**（独立工作）—— 仅爬虫路线下补齐采购价 / MOQ / 阶梯价 / 交期（搜索页拿不到，原指望官方 API，现需详情页爬虫）
-6. **实现 Pailitao 图搜**（2-4 天）—— 大功能，独立产品决策
-7. ~~CHANGELOG.md~~ ✅ 已建（见 `CHANGELOG.md`，Keep a Changelog 格式）
+1. **建立真实人工金标**：四个品类各复核至少 30 个 Amazon 商品，每个商品标记正确 1688 厂家、明确无匹配或需要复核；禁止把合成合同结果当线上准确率。
+2. **逐品类受控实跑**：Docker 环境恢复后，每类先跑 10 个 Amazon US 商品，保存 12 类查询、原始候选、详情证据、严格决策与导出，人工逐条确认参数和厂家身份。
+3. **按误差类型调规则**：分别统计错品类、整品/配件、子型、数值、材质、厂家误判和证据缺失；只根据已复核的 false positive/false negative 调整解析器、容差和查询词。
+4. **扩充真实详情解析 fixture**：优先补容量/尺寸、燃料与 BTU/功率、家具件数与组件、伞径/GSM，以及厂家/贸易商字段的多模板页面样本。
+5. **补多图视觉验收**：对文本参数无法确认的候选核验 Amazon 主辅图和 1688 SKU/详情图；视觉缺失继续进入复核，不生成固定相似度。
+6. **达到上线门槛后再扩量**：每类真实 P@1 ≥ 90%、硬冲突召回 ≥ 95%、参数字段准确率 ≥ 95%，且错误样本均可追溯到证据后，再扩大自动搜索范围。
 
 ---
 

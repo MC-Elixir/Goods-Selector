@@ -160,6 +160,21 @@ def _product_type_match(target: Any, observed: Any) -> float | None:
     return float(target_group == observed_group)
 
 
+def _manufacturer_match(factory_evidence: Any) -> float | None:
+    if not isinstance(factory_evidence, dict):
+        return None
+    supplier_type = _normalized(factory_evidence.get("supplier_type"))
+    if any(term in supplier_type for term in (
+        "生产厂家", "生产企业", "制造商", "manufacturer", "factory", "工厂"
+    )):
+        return 1.0
+    if any(term in supplier_type for term in (
+        "贸易", "经销", "批发商", "trading", "distributor"
+    )):
+        return 0.0
+    return None
+
+
 def _visual_evidence(
     supplier: Any, supplied: dict[str, Any] | None
 ) -> tuple[bool | None, float | None, bool]:
@@ -251,6 +266,10 @@ def build_match_evidence(
         ) and _price_present(supplier, detail) else None,
         "moq": 1.0 if trusted_detail("moq") is not None and _moq_present(supplier, detail) else None,
     }
+    if profile_match is not None:
+        states["manufacturer"] = _manufacturer_match(trusted_detail("factory_evidence"))
+        if states["manufacturer"] == 0.0:
+            mismatch.append("manufacturer_evidence_conflict")
     if understanding.package_quantity is not None:
         states["package_quantity"] = pack_match
     missing = [name for name, value in states.items() if value is None]
@@ -271,6 +290,8 @@ def build_match_evidence(
     scores.append(profile_match.score if profile_match is not None else spec.score)
     confidence = mean(scores) if scores else 0.0
     critical_evidence = {"function", "product_type", "price", "moq"}
+    if profile_match is not None:
+        critical_evidence.add("manufacturer")
     if understanding.package_quantity is not None:
         critical_evidence.add("package_quantity")
     if mismatch:

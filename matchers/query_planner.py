@@ -38,6 +38,13 @@ _TYPE_QUALIFIERS = {
     "alibaba_category": "1688类目",
 }
 
+_CATEGORY_QUERY_NAMES = {
+    "outdoor_storage": "户外储物",
+    "patio_heater": "户外取暖器",
+    "patio_furniture_sets": "户外家具套装",
+    "patio_umbrellas_shade": "户外遮阳",
+}
+
 
 def _clean(text: str, excluded: list[str]) -> str:
     value = remove_brand_terms(text, brand_tokens("", excluded))
@@ -64,7 +71,7 @@ def _base_values(u: AmazonProductUnderstanding) -> dict[str, str]:
     relation = {
         "replacement": "替换件",
         "consumable": "耗材",
-        "full_product": "整机",
+        "full_product": "整品",
         "unknown": "通用产品",
     }[u.replaceable_part_or_full_product]
     function = _parts(u.function, 2)
@@ -74,7 +81,10 @@ def _base_values(u: AmazonProductUnderstanding) -> dict[str, str]:
     specification = _parts(u.dimensions_visible, 2)
     package = f"{u.package_quantity}件装" if u.package_quantity else "包装批发"
     factory = _parts(u.likely_supplier_keywords_cn, 3)
-    category = u.category or u.subcategory or "工业品"
+    category = _CATEGORY_QUERY_NAMES.get(
+        u.category or "",
+        u.category or u.subcategory or "工业品",
+    )
     return {
         "generic_name": f"{generic} 通用产品",
         "supply_chain_name": f"{supply} 供应链",

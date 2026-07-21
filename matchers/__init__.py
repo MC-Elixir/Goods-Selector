@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import inspect
 import re
 from typing import Optional
 
@@ -26,6 +27,10 @@ from loguru import logger
 from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
 from crawlers.amazon_bsr import ProductDTO
 from agent.manual_queue import enqueue_sourcing_block
+from domain.target_categories import (
+    understanding_from_target_profile,
+    profile_from_product,
+)
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.alibaba_pifatuan import AlibabaPifatuanSearch
 from matchers.alibaba_playwright import Alibaba1688PlaywrightMatcher
@@ -34,6 +39,8 @@ from matchers.alibaba_detail import apply_1688_detail_to_supplier
 from matchers.imported_suppliers import find_imported_suppliers
 from matchers.vision_analyzer import VisionAnalyzer
 from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier, llm_eligible_suppliers
+from matchers.query_planner import generate_query_plan
+from matchers.sourcing_slice import evaluate_prefetched_suppliers, serialize_sourcing_result
 from matchers.alibaba_result_cache import (
     circuit_is_open,
     load_cached_offer_detail,
@@ -81,6 +88,7 @@ def match_suppliers(
     vision_api_key: Optional[str] = None,
     cancel_check: CancelCheck | None = None,
     market_keywords: list[str] | None = None,
+    run_ref: str | None = None,
 ) -> list[SupplierDTO]:
     """Amazon 产品 → 1688 货源列表。
 
@@ -97,6 +105,19 @@ def match_suppliers(
     global _vision, _pifatuan_search, _text_search, _scrapling, _playwright, _verifier, _llm_verifier
 
     _check_cancel(cancel_check, "match start")
+
+    raw_product = product.raw_data if isinstance(product.raw_data, dict) else {}
+    product.raw_data = raw_product
+    target_profile = profile_from_product(product)
+    target_understanding = None
+    target_queries = []
+    query_execution: list[dict] = []
+    if target_profile is not None:
+        target_understanding = understanding_from_target_profile(product, target_profile)
+        target_queries = generate_query_plan(target_understanding)
+        raw_product["target_category_profile"] = target_profile.to_dict()
+        raw_product["product_understanding"] = target_understanding.model_dump(mode="json")
+        raw_product["target_query_plan"] = [query.model_dump(mode="json") for query in target_queries]
 
     # ── Step 0: 从标题提取规格关键词 ──────────────────────
     dim_keywords = _extract_dimensional_keywords(
@@ -131,15 +152,21 @@ def match_suppliers(
     # language before visual/title fallbacks. Specifications are modifiers and
     # are never issued as standalone searches.
     seller_keywords = _supply_chain_keywords(market_keywords or [])
-    enriched_keywords = _build_enriched_keywords(
-        dim_keywords,
-        [*seller_keywords, *keywords],
-    )
-    if analysis is not None:
+    if target_queries:
+        # The target-category contract owns the formal 1688 query plan. Vision
+        # and SellerSprite terms remain audit context but cannot replace one of
+        # the twelve deterministic, de-branded query types.
+        enriched_keywords = [query.text for query in target_queries]
+    else:
         enriched_keywords = _build_enriched_keywords(
-            enriched_keywords,
-            [analysis.category_zh, analysis.title_zh],
+            dim_keywords,
+            [*seller_keywords, *keywords],
         )
+        if analysis is not None:
+            enriched_keywords = _build_enriched_keywords(
+                enriched_keywords,
+                [analysis.category_zh, analysis.title_zh],
+            )
 
     # ── Step 2a: 1688 分销严选开放平台 ─────────────────────
     from config.settings import settings as _cfg
@@ -237,14 +264,27 @@ def match_suppliers(
         if _playwright is None:
             _playwright = Alibaba1688PlaywrightMatcher(page_wait=5)
         try:
+            playwright_keywords = enriched_keywords if target_profile is not None else enriched_keywords[:5]
+            exhaustive = bool(
+                target_profile is not None
+                and getattr(_cfg, "target_category_exhaustive_queries", True)
+            )
             if product.main_image_url:
-                suppliers = _playwright.search_by_image(
+                suppliers = _call_playwright_search(
+                    _playwright.search_by_image,
                     image_url=product.main_image_url,
-                    keywords=enriched_keywords[:5],
+                    keywords=playwright_keywords,
                     limit=top_k,
+                    exhaustive=exhaustive,
                 )
             else:
-                suppliers = _playwright.search_by_keyword(enriched_keywords[:5], limit=top_k)
+                suppliers = _call_playwright_search(
+                    _playwright.search_by_keyword,
+                    keywords=playwright_keywords,
+                    limit=top_k,
+                    exhaustive=exhaustive,
+                )
+            query_execution = list(getattr(_playwright, "last_query_attempts", []) or [])
             _check_cancel(cancel_check, "1688 playwright search")
         except CancellationRequested:
             raise
@@ -259,28 +299,45 @@ def match_suppliers(
     if not suppliers:
         if real_search_blocked:
             logger.info(f"[match] ASIN={product.asin} real 1688 blocked; skip mock fallback")
-            return []
+            return _apply_target_strict_gate(
+                product, [], target_understanding, target_queries,
+                run_ref=run_ref, query_execution=query_execution,
+            )
         if not _cfg.alibaba_allow_mock_suppliers:
             logger.info(f"[match] ASIN={product.asin} no real 1688 suppliers; mock disabled")
-            return []
+            return _apply_target_strict_gate(
+                product, [], target_understanding, target_queries,
+                run_ref=run_ref, query_execution=query_execution,
+            )
         logger.info(f"[match] ASIN={product.asin} 全部方式无结果，使用 mock")
         suppliers = _mock_suppliers(product, enriched_keywords)
 
     # ── Step 4: 详情页补全（限量、缓存优先）──────────────────
     _check_cancel(cancel_check, "1688 detail enrichment")
-    suppliers = _enrich_supplier_details(suppliers, _cfg, cancel_check=cancel_check)
+    detail_limit = (
+        int(getattr(_cfg, "target_category_detail_enrich_limit", 10) or 0)
+        if target_profile is not None else None
+    )
+    suppliers = _enrich_supplier_details(
+        suppliers,
+        _cfg,
+        cancel_check=cancel_check,
+        limit_override=detail_limit,
+    )
     _check_cancel(cancel_check, "1688 detail enrichment")
 
     # ── Step 5: 启发式匹配验证 ──────────────────────────────
     _check_cancel(cancel_check, "supplier verification")
     if _verifier is None:
         _verifier = Alibaba1688Verifier()
-    suppliers = _verifier.verify(
+    gathered_suppliers = list(suppliers)
+    verified_suppliers = _verifier.verify(
         suppliers=suppliers,
         product=product,
         analysis=analysis,
         search_keywords=enriched_keywords,
     )
+    suppliers = gathered_suppliers if target_profile is not None else verified_suppliers
     for supplier in suppliers:
         supplier.raw_data["search_query_plan"] = {
             "queries": list(enriched_keywords),
@@ -289,7 +346,27 @@ def match_suppliers(
         }
 
     # ── Step 6: LLM 视觉验证（可选）─────────────────────────
-    if getattr(_cfg, 'enable_llm_verification', False) and len(suppliers) > 1:
+    if (
+        getattr(_cfg, "enable_llm_verification", False)
+        and target_profile is not None
+        and suppliers
+    ):
+        try:
+            _check_cancel(cancel_check, "target LLM visual verification")
+            if _llm_verifier is None:
+                _llm_verifier = LLMVisualVerifier()
+            _verify_target_supplier_images(
+                _llm_verifier,
+                product,
+                suppliers,
+                top_k=int(getattr(_cfg, "target_category_llm_top_k", 5)),
+                cancel_check=cancel_check,
+            )
+        except CancellationRequested:
+            raise
+        except Exception as exc:
+            logger.warning(f"[match] target LLM 验证不可用 ({product.asin}): {exc}")
+    elif getattr(_cfg, 'enable_llm_verification', False) and len(suppliers) > 1:
         eligible_for_llm = llm_eligible_suppliers(
             suppliers,
             min_match_quality=float(getattr(_cfg, "llm_verification_min_match_quality", 0.65)),
@@ -318,8 +395,21 @@ def match_suppliers(
             except Exception as e:
                 logger.warning(f"[match] LLM 验证跳过 ({product.asin}): {e}")
 
-    logger.info(f"[match] ASIN={product.asin} → {len(suppliers)} 条货源（已验证）")
+    gathered_count = len(suppliers)
     save_cached_suppliers(cache_key, suppliers)
+    suppliers = _apply_target_strict_gate(
+        product,
+        suppliers,
+        target_understanding,
+        target_queries,
+        run_ref=run_ref,
+        query_execution=query_execution,
+    )
+    logger.info(
+        f"[match] ASIN={product.asin} → {len(suppliers)} 条货源（严格通过；原始候选 {gathered_count}）"
+        if target_profile is not None
+        else f"[match] ASIN={product.asin} → {len(suppliers)} 条货源（已验证）"
+    )
     if any(is_real_supplier(s) for s in suppliers):
         reset_circuit()
     return suppliers
@@ -400,15 +490,94 @@ def _enqueue_manual_block(product: ProductDTO, keywords: list[str], reason: str)
         logger.debug(f"[match] manual queue write failed asin={product.asin}: {exc}")
 
 
+def _apply_target_strict_gate(
+    product: ProductDTO,
+    suppliers: list[SupplierDTO],
+    understanding,
+    queries: list,
+    *,
+    run_ref: str | None,
+    query_execution: list[dict],
+) -> list[SupplierDTO]:
+    if understanding is None:
+        return suppliers
+    result = evaluate_prefetched_suppliers(
+        product,
+        suppliers,
+        understanding,
+        queries,
+        run_ref=run_ref or f"adhoc:{product.asin}",
+        query_execution=query_execution,
+    )
+    payload = serialize_sourcing_result(result)
+    payload["amazon_completeness_basis"] = "target-category-contract-v1"
+    product.raw_data["sourcing_evidence"] = payload
+    return result.suppliers
+
+
+def _verify_target_supplier_images(
+    verifier: LLMVisualVerifier,
+    product: ProductDTO,
+    suppliers: list[SupplierDTO],
+    *,
+    top_k: int,
+    cancel_check: CancelCheck | None,
+) -> None:
+    eligible = [
+        supplier for supplier in suppliers
+        if supplier.offer_image_url
+        and (supplier.raw_data or {}).get("target_category_match", {}).get("decision") != "reject"
+    ][:max(0, top_k)]
+    for supplier in eligible:
+        _check_cancel(cancel_check, "target LLM visual verification")
+        try:
+            visual = verifier.verify_pair(product, supplier)
+            supplier.raw_data["visual_match"] = visual.model_dump(mode="json")
+            if not visual.is_match:
+                supplier.match_quality_score = 0.0
+                supplier.match_verification_method = "llm_rejected"
+        except CancellationRequested:
+            raise
+        except Exception as exc:
+            code = str(getattr(exc, "code", "provider_failure") or "provider_failure")
+            supplier.raw_data["visual_match"] = {
+                "is_match": None,
+                "classification_confidence": None,
+                "source": "llm",
+                "decision": "manual_review",
+                "reason": code,
+            }
+
+
+def _call_playwright_search(search_func, *, exhaustive: bool, **kwargs):
+    """Use exhaustive query execution when supported without breaking test doubles."""
+    try:
+        parameters = inspect.signature(search_func).parameters
+        accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        if "exhaustive" in parameters or accepts_kwargs:
+            kwargs["exhaustive"] = exhaustive
+    except (TypeError, ValueError):
+        pass
+    return search_func(**kwargs)
+
+
 def _enrich_supplier_details(
     suppliers: list[SupplierDTO],
     cfg,
     *,
     cancel_check: CancelCheck | None = None,
+    limit_override: int | None = None,
 ) -> list[SupplierDTO]:
     """Fill sourcing evidence from 1688 detail pages without unbounded browsing."""
     global _playwright
-    limit = int(getattr(cfg, "alibaba_detail_enrich_limit", 0) or 0)
+    limit = (
+        int(limit_override)
+        if limit_override is not None
+        else int(getattr(cfg, "alibaba_detail_enrich_limit", 0) or 0)
+    )
     if limit <= 0 or not suppliers:
         return suppliers
     ttl_seconds = int(
@@ -558,6 +727,13 @@ def _supply_chain_keywords(keywords: list[str]) -> list[str]:
         (("fitted sheet", "deep pocket", "sheet & pillowcase"), ("床笠",)),
         (("cooling sheets", "cooling bed sheets"), ("凉感床品",)),
         (("yoga mat", "exercise mat"), ("瑜伽垫",)),
+        (("deck box", "outdoor storage", "patio storage"), ("户外储物箱", "庭院收纳箱")),
+        (("storage shed", "garden shed"), ("户外储物棚", "庭院工具房")),
+        (("patio heater", "outdoor heater", "terrace heater"), ("户外取暖器", "露台取暖器")),
+        (("patio furniture", "outdoor furniture set", "conversation set"), ("户外家具套装", "庭院桌椅组合")),
+        (("patio umbrella", "market umbrella"), ("庭院遮阳伞", "户外中柱伞")),
+        (("cantilever umbrella", "offset umbrella"), ("户外侧立伞", "悬臂遮阳伞")),
+        (("shade sail", "sun shade sail"), ("户外遮阳帆",)),
     )
     for keyword in keywords:
         value = str(keyword or "").strip()
@@ -641,6 +817,13 @@ def _title_fallback_keywords(title: str) -> list[str]:
         ("枕头", ("pillow", "neck pillow", "bed pillow")),
         ("手机支架", ("phone stand", "phone holder", "tablet stand")),
         ("折叠桌", ("folding table", "foldable table", "camping table")),
+        ("户外储物箱", ("deck box", "outdoor storage", "patio storage", "garden storage")),
+        ("户外储物棚", ("storage shed", "garden shed")),
+        ("户外取暖器", ("patio heater", "outdoor heater", "terrace heater", "propane heater")),
+        ("户外家具套装", ("patio furniture", "outdoor furniture set", "conversation set", "outdoor dining set")),
+        ("庭院遮阳伞", ("patio umbrella", "market umbrella")),
+        ("户外侧立伞", ("cantilever umbrella", "offset umbrella")),
+        ("户外遮阳帆", ("shade sail", "sun shade sail")),
         ("毛巾", ("towel", "dish towel", "kitchen towel")),
     )
     for label, needles in category_rules:

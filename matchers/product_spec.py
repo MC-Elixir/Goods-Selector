@@ -20,6 +20,7 @@ MATERIAL_ALIASES = {
     "木": ("木", "实木", "柚木", "相思木", "wood", "teak", "acacia"),
     "腈纶": ("腈纶", "acrylic", "solution-dyed acrylic"),
     "烯烃布": ("烯烃布", "olefin"),
+    "高密度聚乙烯": ("高密度聚乙烯", "hdpe", "high density polyethylene"),
 }
 
 CATEGORY_ALIASES = {
@@ -291,7 +292,7 @@ def _find_alias(raw: str, normalized: str, aliases: dict[str, tuple[str, ...]]) 
         for value in values:
             haystack = normalized if _is_ascii(value) else raw
             needle = value.lower() if _is_ascii(value) else value
-            if needle in haystack:
+            if _alias_present(needle, haystack):
                 return canonical
     return None
 
@@ -485,12 +486,27 @@ def _canonical_set(value: str, aliases: dict[str, tuple[str, ...]]) -> set[str]:
         for alias in values:
             needle = alias.lower() if _is_ascii(alias) else alias
             haystack = normalized if _is_ascii(alias) else value
-            if needle and needle in haystack:
+            if needle and _alias_present(needle, haystack):
                 out.add(canonical)
                 break
     if not out:
         out.add(_canonical(value, aliases))
     return out
+
+
+def _alias_present(needle: str, haystack: str) -> bool:
+    """Match short ASCII aliases as tokens, not inside dimensions or words."""
+    if not needle:
+        return False
+    if not _is_ascii(needle):
+        return needle in haystack
+    escaped = re.escape(needle.casefold())
+    value = haystack.casefold()
+    if re.fullmatch(r"\d+", needle):
+        return re.search(rf"(?<![\d.]){escaped}(?![\d.])", value) is not None
+    if re.fullmatch(r"[a-z0-9]+", needle, re.I):
+        return re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", value) is not None
+    return needle.casefold() in value
 
 
 def _same_number(a: Optional[int], b: Optional[int]) -> Optional[bool]:

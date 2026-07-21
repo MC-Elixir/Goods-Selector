@@ -63,6 +63,35 @@ _SUPPLY_NAMES = {
     "patio_umbrellas_shade": "户外遮阳产品",
 }
 
+_MATERIAL_SEARCH_CN = {
+    "resin": "树脂",
+    "hdpe": "高密度聚乙烯",
+    "plastic": "塑料",
+    "steel": "钢制",
+    "aluminum": "铝合金",
+    "wood": "实木",
+    "rattan": "藤编",
+    "polyester": "涤纶",
+    "olefin": "烯烃布",
+    "acrylic": "腈纶",
+}
+
+_COMPONENT_SEARCH_CN = {
+    "door": "门板",
+    "lid": "箱盖",
+    "shelf": "层板",
+    "burner": "燃烧器",
+    "reflector": "反射罩",
+    "table": "桌子",
+    "chair": "椅子",
+    "sofa": "沙发",
+    "cushion": "坐垫",
+    "canopy": "伞面",
+    "rib": "伞骨",
+    "pole": "伞杆",
+    "base": "底座",
+}
+
 _SUBTYPE_TERMS_CN = {
     "deck_box": ["户外储物箱", "庭院甲板箱", "防水收纳箱"],
     "storage_shed": ["户外储物棚", "庭院工具房"],
@@ -175,7 +204,7 @@ def _relation(text: str, category_id: str) -> str:
     value = _norm(text)
     replacement_patterns = (
         r"\breplacement\b", r"\bspare\s+part\b", r"\bcanopy\s+only\b",
-        r"\bfabric\s+only\b", r"替换(?:件|布|篷|顶|坐垫)", r"仅伞布", r"配件替换",
+        r"\bfabric\s+only\b", r"替换(?:件|布|篷|顶|坐垫|伞布|篷布)", r"仅伞布", r"配件替换",
     )
     if any(re.search(pattern, value) for pattern in replacement_patterns):
         return "replacement"
@@ -247,6 +276,18 @@ def _subtype(text: str, category_id: str, relation: str) -> str:
         return "replacement_canopy"
     if relation == "accessory":
         return "umbrella_accessory"
+    broad_umbrella_category = _contains(
+        value,
+        ("patio umbrellas & shade", "patio umbrellas and shade", "umbrella shade category"),
+    )
+    explicit_subtype = _contains(value, (
+        "market umbrella", "market patio umbrella", "cantilever", "offset umbrella", "banana umbrella",
+        "beach umbrella", "clamp umbrella", "chair umbrella", "shade sail",
+        "gazebo", "pergola", "庭院伞", "中柱伞", "市场伞", "香蕉伞",
+        "侧立伞", "罗马伞", "沙滩伞", "夹式伞", "椅夹伞", "遮阳帆", "凉亭",
+    ))
+    if broad_umbrella_category and not explicit_subtype:
+        return "umbrella_shade"
     if _contains(value, ("shade sail", "遮阳帆")):
         return "shade_sail"
     if _contains(value, ("gazebo", "pergola", "凉亭", "遮阳棚")):
@@ -257,8 +298,6 @@ def _subtype(text: str, category_id: str, relation: str) -> str:
         return "beach_umbrella"
     if _contains(value, ("clamp umbrella", "chair umbrella", "夹式伞", "椅夹伞")):
         return "clamp_umbrella"
-    if _contains(value, ("patio umbrellas & shade", "patio umbrellas and shade", "umbrella shade category")):
-        return "umbrella_shade"
     if _contains(value, ("patio umbrella", "market umbrella", "庭院伞", "中柱伞", "中柱遮阳伞", "市场伞")):
         return "market_umbrella"
     return "patio_umbrella"
@@ -729,15 +768,38 @@ def understanding_from_target_profile(
     package_quantity = profile.numeric.get("piece_count")
     if package_quantity is not None:
         package_quantity = int(package_quantity)  # type: ignore[arg-type]
-    dimensions = []
+    dimensions: list[str] = []
     if profile.numeric.get("dimensions_cm"):
-        dimensions.append("x".join(str(value) for value in profile.numeric["dimensions_cm"]) + "cm")  # type: ignore[index]
-    for key in ("capacity_l", "heat_output_btu", "power_w", "canopy_diameter_cm", "pole_diameter_cm", "rib_count"):
+        dimensions.append(
+            "x".join(str(value) for value in profile.numeric["dimensions_cm"]) + "厘米"  # type: ignore[index]
+        )
+    numeric_labels = {
+        "capacity_l": ("容量", "升"),
+        "heat_output_btu": ("热功率", "BTU"),
+        "power_w": ("功率", "瓦"),
+        "canopy_diameter_cm": ("伞面直径", "厘米"),
+        "pole_diameter_cm": ("伞杆直径", "厘米"),
+        "rib_count": ("伞骨", "根"),
+        "fabric_gsm": ("面料克重", "GSM"),
+        "seating_count": ("座位", "座"),
+    }
+    for key, (label, unit) in numeric_labels.items():
         if key in profile.numeric:
-            dimensions.append(f"{key}={profile.numeric[key]}")
+            dimensions.append(f"{label}{profile.numeric[key]}{unit}")
     terms = list(dict.fromkeys([
         *profile.search_terms_cn,
         _SUPPLY_NAMES[profile.category_id],
+    ]))
+    materials_cn = [
+        _MATERIAL_SEARCH_CN.get(value, value) for value in profile.materials
+    ]
+    components_cn = [
+        _COMPONENT_SEARCH_CN.get(value, value) for value in profile.components
+    ]
+    supplier_terms = list(dict.fromkeys([
+        *terms,
+        *(f"{term}生产厂家" for term in terms[:1]),
+        *(f"{term}源头工厂" for term in terms[:1]),
     ]))
     return AmazonProductUnderstanding(
         asin=str(getattr(product, "asin", "") or ""),
@@ -748,15 +810,15 @@ def understanding_from_target_profile(
         category=profile.category_id,
         subcategory=profile.subtype,
         function=list(_FUNCTIONS[profile.category_id]),
-        material=list(profile.materials),
-        components=list(profile.components),
+        material=materials_cn,
+        components=components_cn,
         package_quantity=package_quantity,
         dimensions_visible=dimensions,
         target_user=["户外庭院用户"],
         use_case=list(_FUNCTIONS[profile.category_id]),
         replaceable_part_or_full_product=relation,
         distinguishing_features=list(profile.features),
-        likely_supplier_keywords_cn=terms,
+        likely_supplier_keywords_cn=supplier_terms,
         excluded_brand_tokens=[str(getattr(product, "brand", "") or "")] if getattr(product, "brand", None) else [],
         uncertainty=[f"missing:{name}" for name in profile.missing_critical],
         model_provider="deterministic",

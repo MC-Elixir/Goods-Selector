@@ -403,6 +403,7 @@ def test_target_category_exact_single_product_does_not_require_invented_pack_cou
         "product_type": "full_product",
         "function": "户外遮阳",
         "category_profile": candidate_profile.to_dict(),
+        "factory_evidence": {"supplier_type": "生产厂家"},
     }, title_cn="274cm 涤纶户外中柱遮阳伞")
 
     result = build_match_evidence(
@@ -412,6 +413,7 @@ def test_target_category_exact_single_product_does_not_require_invented_pack_cou
     )
 
     assert result.decision == "keep"
+    assert "manufacturer" in result.passed_reasons
     assert "package_quantity" not in result.missing_evidence
     assert result.dimension_match == 1.0
 

@@ -192,3 +192,29 @@ hard_filters:
   exclude_brand_listings: true         # 排除明显大牌 Listing
   exclude_restricted_keywords: true    # 排除杀虫/药剂等受限合规风险品
   exclude_amazon_choice: false         # 是否排除 Amazon's Choice（默认不排除）
+
+# The four client categories are intentionally bulky. These curves prevent the
+# generic small-parcel 2kg/45cm profile from treating every valid outdoor item
+# as if its dimensions were erroneous. They affect ranking only; exact product
+# and manufacturer evidence remains a separate hard gate.
+target_category_profiles:
+  outdoor_storage:
+    logistics:
+      volumetric_ratio_max: 8.0
+      max_weight_kg: 100.0
+      max_longest_side_cm: 300
+  patio_heater:
+    logistics:
+      volumetric_ratio_max: 5.0
+      max_weight_kg: 80.0
+      max_longest_side_cm: 300
+  patio_furniture_sets:
+    logistics:
+      volumetric_ratio_max: 10.0
+      max_weight_kg: 250.0
+      max_longest_side_cm: 400
+  patio_umbrellas_shade:
+    logistics:
+      volumetric_ratio_max: 8.0
+      max_weight_kg: 50.0
+      max_longest_side_cm: 400

@@ -137,6 +137,13 @@ def _supplier_spec_match(supplier) -> dict:
     return spec if isinstance(spec, dict) else {}
 
 
+def _target_category_id(product) -> str | None:
+    raw = getattr(product, "raw_data", None)
+    profile = (raw or {}).get("target_category_profile") if isinstance(raw, dict) else None
+    value = profile.get("category_id") if isinstance(profile, dict) else None
+    return str(value) if value else None
+
+
 # ============================================================
 # 单维度归一化函数（纯函数，便于单测）
 # ============================================================
@@ -505,6 +512,8 @@ def apply_hard_filters(
     top_supplier_spec_score: Optional[float] = None,
     top_supplier_spec_conflicts: Optional[list[str]] = None,
     top_supplier_candidate_score: Optional[float] = None,
+    target_category_id: Optional[str] = None,
+    top_supplier_target_decision: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
     """返回 (是否通过, 拒绝原因列表)。"""
     hf = config["hard_filters"]
@@ -572,6 +581,9 @@ def apply_hard_filters(
     ):
         reasons.append("supplier_candidate_too_low")
 
+    if target_category_id and top_supplier_target_decision != "keep":
+        reasons.append("target_supplier_contract_not_passed")
+
     passed = len(reasons) == 0
     return passed, reasons
 
@@ -637,13 +649,20 @@ def score_product(
 
     s_score = score_supply(suppliers=suppliers, curve=curves["supply"])
 
+    target_category_id = _target_category_id(product)
+    logistics_curve = dict(curves["logistics"])
+    target_profile = (config.get("target_category_profiles") or {}).get(
+        target_category_id or "", {}
+    )
+    if isinstance(target_profile, dict):
+        logistics_curve.update(target_profile.get("logistics") or {})
     l_score = score_logistics(
         weight_kg=getattr(product, "weight_kg", None),
         length_cm=getattr(product, "length_cm", None),
         width_cm=getattr(product, "width_cm", None),
         height_cm=getattr(product, "height_cm", None),
         attrs=[],
-        curve=curves["logistics"],
+        curve=logistics_curve,
     )
 
     r_score = score_risk(
@@ -671,6 +690,10 @@ def score_product(
     )
     top_supplier = suppliers[0] if suppliers else None
     top_spec = _supplier_spec_match(top_supplier) if top_supplier else {}
+    top_target_evidence = (
+        _supplier_raw_data(top_supplier).get("strict_match_evidence")
+        if top_supplier else None
+    )
     spec_conflicts = top_spec.get("conflicts") if top_spec else None
     if spec_conflicts is not None and not isinstance(spec_conflicts, list):
         spec_conflicts = [str(spec_conflicts)]
@@ -691,6 +714,11 @@ def score_product(
         top_supplier_candidate_score=_first_number(
             _supplier_raw_number(top_supplier, "supplier_rank_score") if top_supplier else None,
             _supplier_number(top_supplier, "candidate_score", "supplier_candidate_score") if top_supplier else None,
+        ),
+        target_category_id=target_category_id,
+        top_supplier_target_decision=(
+            top_target_evidence.get("decision")
+            if isinstance(top_target_evidence, dict) else None
         ),
     )
 

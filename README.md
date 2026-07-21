@@ -6,6 +6,25 @@ Amazon Best Seller 选品自动化系统。给定一个 Amazon 类目 → 爬取
 有限状态循环尚未实现。最新的 Phase 1–2 验证结果及外部数据阻塞见
 [审计报告](docs/audits/2026-07-10-phase1-phase2-results.md)。
 
+## 四类户外产品精准寻源
+
+正式匹配已为 `Outdoor Storage`、`Patio Heater`、`Patio Furniture Sets`、
+`Patio Umbrellas & Shade` 启用专用品类合同：Amazon 详情证据会归一化为容量、尺寸、
+BTU/功率、件数、组件、伞径、GSM、材质和整品/配件关系；随后执行 12 类去品牌 1688
+查询并补全详情。只有关键参数无冲突、价格/MOQ/功能/商品类型有可信来源，且明确属于
+生产厂家时，供应商才以 `keep` 进入利润和市场评分。贸易商、规格冲突和证据不足项分别
+进入拒绝或人工复核，并保留完整查询与匹配证据。
+
+详细字段合同、判定规则、评估口径和配置见
+[四类户外产品自动寻源合同](docs/target-category-sourcing-contract.md)。合成合同金标可直接回归：
+
+```bash
+python3 -m benchmarks.evaluate_target_contract
+```
+
+真实历史案例尚未人工标注，因此真实 P@1/P@5 和 false-match rate 当前保持 `NULL`，不以
+合成合同集的 100% 回归结果冒充线上搜索准确率。
+
 ## 快速开始
 
 ```bash

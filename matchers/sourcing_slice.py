@@ -353,6 +353,19 @@ def _not_started_attempt(query: Any) -> dict[str, Any]:
     }
 
 
+def _execution_error_code(execution: dict[str, Any]) -> str:
+    diagnostic = str(execution.get("error") or "").casefold()
+    if any(term in diagnostic for term in ("captcha", "验证码", "滑块", "tmd")):
+        return "CAPTCHA"
+    if any(term in diagnostic for term in ("login", "passport", "登录")):
+        return "AUTH_REQUIRED"
+    if any(term in diagnostic for term in ("rate limit", "频繁", "限流")):
+        return "RATE_LIMITED"
+    if "timeout" in diagnostic or "超时" in diagnostic:
+        return "TIMEOUT"
+    return "INTERNAL"
+
+
 def evaluate_prefetched_suppliers(
     product: Any,
     suppliers: list[Any],
@@ -383,7 +396,11 @@ def evaluate_prefetched_suppliers(
             result.query_attempts.append(_not_started_attempt(query))
             continue
         if execution.get("status") != "completed":
-            attempt = _attempt(query, error_code="INTERNAL", completed=False)
+            attempt = _attempt(
+                query,
+                error_code=_execution_error_code(execution),
+                completed=False,
+            )
             attempt["backend"] = execution.get("backend")
             attempt["diagnostic"] = str(execution.get("error") or "")[:200] or None
             result.query_attempts.append(attempt)
@@ -395,6 +412,18 @@ def evaluate_prefetched_suppliers(
                 if isinstance(getattr(supplier, "raw_data", None), dict) else []
             )
         ]
+        observed_refs = list(dict.fromkeys(execution.get("result_refs") or []))
+        available_refs = {f"offer:{supplier.alibaba_offer_id}" for supplier in hits}
+        if observed_refs and not set(observed_refs).issubset(available_refs):
+            result.query_attempts.append({
+                **_not_started_attempt(query),
+                "status": "partial",
+                "backend": execution.get("backend"),
+                "result_refs": observed_refs,
+                "observed_result_count": execution.get("result_count"),
+                "error_code": None,
+            })
+            continue
         relevant = [supplier for supplier in hits if _default_relevance(query, supplier)]
         attempt = _attempt(
             query,
@@ -446,13 +475,13 @@ def evaluate_prefetched_suppliers(
         status = RecommendationStatus.REJECT
     else:
         status = RecommendationStatus.INSUFFICIENT_DATA
-    rejection_reasons = list(dict.fromkeys(
+    rejected_offer_reasons = list(dict.fromkeys(
         reason
         for item in result.rejected_matches
         for reason in item.mismatch_reasons
     ))
     if not result.evaluated_matches:
-        rejection_reasons.append("no_real_supplier_evidence")
+        rejected_offer_reasons.append("no_real_supplier_evidence")
     manual_tasks = list(dict.fromkeys([
         *(
             f"verify_{name}"
@@ -477,7 +506,9 @@ def evaluate_prefetched_suppliers(
         unconfirmed_specs=best.missing_evidence if best else [],
         confidence=best.overall_confidence if best else 0.0,
         recommendation_reasons=["strict_supplier_match_passed"] if best else [],
-        rejection_reasons=rejection_reasons,
+        # Rejected alternatives remain available in ``evaluated_matches``.
+        # They are not blockers for an accepted, explicitly selected offer.
+        rejection_reasons=[] if best is not None else rejected_offer_reasons,
         manual_verification_tasks=manual_tasks,
     )
     return result
@@ -518,6 +549,7 @@ def _persist_serialized_on_connection(connection: Any, payload: dict[str, Any]) 
             "artifact_ref": json.dumps({
                 "result_refs": attempt.get("result_refs") or [],
                 "hit_rate": attempt.get("hit_rate"),
+                "observed_result_count": attempt.get("observed_result_count"),
                 "error_code": attempt.get("error_code"),
                 "diagnostic": attempt.get("diagnostic"),
             }, ensure_ascii=False),
@@ -573,6 +605,14 @@ def finalize_record_sourcing_evidence(record: Any) -> dict[str, Any] | None:
 
     reasons = list(recommendation.get("rejection_reasons") or [])
     tasks = list(recommendation.get("manual_verification_tasks") or [])
+    completed_tasks: set[str] = set()
+    if score is not None:
+        completed_tasks.add("complete_scoring_evidence")
+    if profit is not None:
+        completed_tasks.add("calculate_profit")
+    if market is not None:
+        completed_tasks.add("evaluate_market")
+    tasks = [task for task in tasks if task not in completed_tasks]
     if accepted:
         if score is None:
             status = RecommendationStatus.NEEDS_MANUAL_REVIEW.value
@@ -588,6 +628,7 @@ def finalize_record_sourcing_evidence(record: Any) -> dict[str, Any] | None:
                 tasks.append("evaluate_market")
         else:
             status = RecommendationStatus.RECOMMEND.value
+            reasons = []
             recommendation["recommendation_reasons"] = list(dict.fromkeys([
                 *(recommendation.get("recommendation_reasons") or []),
                 "strict_supplier_match_passed",

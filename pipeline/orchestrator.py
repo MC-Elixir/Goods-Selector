@@ -202,6 +202,7 @@ def _run_pipeline_legacy(
                     match_suppliers,
                     p,
                     cancel_check,
+                    run_ref=f"run:{run_id}",
                 )
                 matched += len(sups)
             except (PipelineCancelled, PipelineTimeout):
@@ -329,6 +330,7 @@ def _run_pipeline_legacy(
                 logger.warning(f"[run #{run_id}] score failed asin={rec.product.asin}: {e}")
 
         # === 6. filter ===
+        _finalize_sourcing_evidence(records)
         controls.progress("filter", f"Ranking {len(records)} records")
         ranked_candidates = rank_candidates(records, top_n=None)
         candidates, candidate_duplicates_removed = _dedupe_records_by_asin(ranked_candidates)
@@ -480,6 +482,7 @@ def _call_match_suppliers(
     product: ProductDTO,
     cancel_check: CancelCheck | None,
     market_keywords: list[str] | None = None,
+    run_ref: str | None = None,
 ) -> list[SupplierDTO]:
     try:
         params = inspect.signature(match_func).parameters
@@ -488,15 +491,19 @@ def _call_match_suppliers(
         )
         accepts_cancel = "cancel_check" in params or accepts_kwargs
         accepts_market_keywords = "market_keywords" in params or accepts_kwargs
+        accepts_run_ref = "run_ref" in params or accepts_kwargs
     except (TypeError, ValueError):
         accepts_cancel = False
         accepts_market_keywords = False
+        accepts_run_ref = False
     try:
         kwargs = {}
         if accepts_cancel:
             kwargs["cancel_check"] = cancel_check
         if accepts_market_keywords:
             kwargs["market_keywords"] = market_keywords or []
+        if accepts_run_ref:
+            kwargs["run_ref"] = run_ref
         return match_func(product, **kwargs)
     except CancellationRequested as exc:
         raise PipelineCancelled(str(exc)) from exc
@@ -512,12 +519,29 @@ def _persist_products(products: list[ProductDTO]) -> dict[str, int]:
 
 
 def _persist_suppliers_for_product(product: ProductDTO, suppliers: list[SupplierDTO]) -> None:
-    if not suppliers:
-        return
     with session_scope() as s:
         product_row = _upsert_product(s, product)
         for supplier in suppliers:
             _upsert_supplier(s, product_row.id, supplier)
+        raw = product.raw_data if isinstance(product.raw_data, dict) else {}
+        evidence = raw.get("sourcing_evidence")
+        if isinstance(evidence, dict):
+            from matchers.sourcing_slice import persist_serialized_sourcing_evidence
+            persist_serialized_sourcing_evidence(evidence, s)
+
+
+def _finalize_sourcing_evidence(records: list[PipelineRecord]) -> None:
+    from matchers.sourcing_slice import (
+        finalize_record_sourcing_evidence,
+        persist_serialized_sourcing_evidence,
+    )
+    for record in records:
+        payload = finalize_record_sourcing_evidence(record)
+        if not isinstance(payload, dict):
+            continue
+        with session_scope() as session:
+            _upsert_product(session, record.product)
+            persist_serialized_sourcing_evidence(payload, session)
 
 
 def _persist_profit_for_record(record: PipelineRecord) -> None:

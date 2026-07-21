@@ -218,6 +218,13 @@ def test_spec_from_text_supports_target_outdoor_categories_and_units():
     assert umbrella.category == "户外遮阳"
 
 
+def test_decimal_dimension_prefix_does_not_become_stainless_steel_material():
+    spec = spec_from_text("304.8x365.76cm 长方形户外遮阳帆 185gsm HDPE")
+
+    assert spec.material == "高密度聚乙烯"
+    assert spec.material != "不锈钢"
+
+
 def test_spec_from_product_consumes_hydrated_amazon_evidence():
     product = SimpleNamespace(
         title="Outdoor Patio Furniture",

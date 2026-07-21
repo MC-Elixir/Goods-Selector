@@ -129,6 +129,9 @@ class Settings(BaseSettings):
     llm_verification_top_k: int = 2
     llm_verification_min_match_quality: float = 0.65
     llm_verification_min_spec_score: float = 0.50
+    target_category_llm_top_k: int = Field(default=5, ge=0, le=20)
+    target_category_detail_enrich_limit: int = Field(default=10, ge=0, le=50)
+    target_category_exhaustive_queries: bool = True
     # 1688 Scrapling 匹配器（patchright HTTP 路径）。被 1688 TMD 反爬拦截、0 结果，
     # 默认禁用、直接降级 Playwright；待该路径修好后置 True 启用。
     enable_scrapling_matcher: bool = False

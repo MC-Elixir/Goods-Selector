@@ -250,6 +250,13 @@ class Alibaba1688PlaywrightMatcher:
                         raise RuntimeError("1688 TMD 验证码拦截，请刷新 1688 登录态并手动解验证码")
                     if "login" in page_url.lower() or "passport" in page_url.lower():
                         logger.warning("[1688-kw] 跳转登录页，Session 过期")
+                        self.last_query_attempts.append({
+                            "query": kw,
+                            "status": "failed",
+                            "result_count": None,
+                            "error": "1688 login required",
+                            "backend": "alibaba_playwright_keyword",
+                        })
                         continue
                     remaining = per_query_limit if exhaustive else limit - len(results)
                     batch = self._parse_playwright_page(page, remaining)
@@ -278,6 +285,10 @@ class Alibaba1688PlaywrightMatcher:
                         "query": kw,
                         "status": "completed",
                         "result_count": len(batch),
+                        "result_refs": [
+                            f"offer:{dto.alibaba_offer_id}" for dto in batch
+                            if dto.alibaba_offer_id
+                        ],
                         "error": None,
                         "backend": "alibaba_playwright_keyword",
                     })

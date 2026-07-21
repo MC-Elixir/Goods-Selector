@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "dataset_id": "target-category-live-review-queue-20260720",
+  "ground_truth_type": "unreviewed_live_queue",
+  "description": "Real historical Amazon/1688 pairs awaiting an explicit human decision. Empty labels are intentional and must not be used as accuracy ground truth.",
+  "cases": [
+    {
+      "case_id": "live-umbrella-B01MTLOEAD",
+      "reviewed": false,
+      "category_id": "patio_umbrellas_shade",
+      "asin": "B01MTLOEAD",
+      "amazon_title": "AMMSUN Folded Portable Travel Beach Umbrella Telescopic umbrellas with Sand Anchor Tilt Air Vent UPF 50+UV Protection Fit In Suitcase for Patio Garden Beach Pool",
+      "artifact_path": "data/exports/candidates_20260710_162741.json",
+      "artifact_sha256": "25a7f290477bdc780ddf0f0de784191ac37acb405d881f06f46db745ead8e769",
+      "candidate_offer_ids": ["717721279009"],
+      "candidate_titles": ["20252m铝杆沙滩伞带转向螺旋地插太阳伞钓鱼伞防晒可折叠遮阳户外"],
+      "correct_offer_ids": [],
+      "no_match": null,
+      "recommendation_label": null,
+      "review_notes": ""
+    },
+    {
+      "case_id": "live-umbrella-B0DT4VNHCC",
+      "reviewed": false,
+      "category_id": "patio_umbrellas_shade",
+      "asin": "B0DT4VNHCC",
+      "amazon_title": "LOTTAFUN 6ft Beach Umbrella - Heavy Duty Wind Resistant UV 50+ Portable Sun Shade with Sand Anchor & Carry Bag, Outdoor Folding Umbrella for Beach, Pool, Patio, Garden (Blue Stripe) No Tilt The sand needs to exceed the spiral 6inch",
+      "artifact_path": "data/exports/candidates_20260710_162741.json",
+      "artifact_sha256": "25a7f290477bdc780ddf0f0de784191ac37acb405d881f06f46db745ead8e769",
+      "candidate_offer_ids": ["618828375121"],
+      "candidate_titles": ["VUVUZELA厂家供应85cm无纺布沙滩伞带塑料转向 塑料螺旋头太阳伞"],
+      "correct_offer_ids": [],
+      "no_match": null,
+      "recommendation_label": null,
+      "review_notes": ""
+    },
+    {
+      "case_id": "live-umbrella-B00O198PGW",
+      "reviewed": false,
+      "category_id": "patio_umbrellas_shade",
+      "asin": "B00O198PGW",
+      "amazon_title": "Wondershade Portable Sun Shade Umbrella, Lightweight Adjustable Instant Sun Protection",
+      "artifact_path": "data/exports/candidates_20260710_143805.json",
+      "artifact_sha256": "854a2df253bcaf9d8e8223e8110ad0e411ae0c8ab32702703e561fce1aae5aad",
+      "candidate_offer_ids": ["910451075688", "783481676897", "37051266407"],
+      "candidate_titles": [
+        "植物遮阳伞花卉盆栽防晒伞银胶隔热户外铝合金伸缩地插小型钓鱼伞",
+        "直销遮阳篷遮雨棚太阳伞帐篷广告展示架支架户外印架子展架铝合金",
+        "外贸广告帐篷户外铝合金遮雨棚遮阳篷展示架架子太阳伞展架支架"
+      ],
+      "correct_offer_ids": [],
+      "no_match": null,
+      "recommendation_label": null,
+      "review_notes": ""
+    }
+  ]
+}
