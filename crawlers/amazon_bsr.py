@@ -50,7 +50,7 @@ class ProductDTO:
 # ============================================================
 # 统一入口
 # ============================================================
-Backend = Literal["auto", "playwright", "keepa", "rainforest"]
+Backend = Literal["auto", "scrapling", "playwright", "keepa", "rainforest"]
 
 
 def crawl_best_sellers(
@@ -66,10 +66,15 @@ def crawl_best_sellers(
         limit       抓取产品数量
         marketplace 站点代码：US / UK / DE / JP
         backend     数据后端，"auto" 时按以下优先级选择：
-                    playwright（无 Key）→ keepa（有 Key）→ rainforest（有 Key）
+                    scrapling（默认，无 Key 即可）→ keepa（有 Key）→
+                    rainforest（有 Key）→ playwright（兜底）
     """
     resolved = _resolve_backend(backend)
     logger.info(f"[crawl] backend={resolved} category={category!r} limit={limit}")
+
+    if resolved == "scrapling":
+        from crawlers.amazon_scrapling import AmazonScraplingScraper
+        return AmazonScraplingScraper().scrape_best_sellers(category, limit, marketplace)
 
     if resolved == "playwright":
         from crawlers.amazon_playwright import AmazonPlaywrightScraper
@@ -89,9 +94,9 @@ def crawl_best_sellers(
 def _resolve_backend(backend: Backend) -> str:
     if backend != "auto":
         return backend
-    # auto：有 key 优先用 API（数据更全），否则用 playwright
+    # auto：优先 scrapling（无需 Key，patchright 抗检测），有 API Key 时用 API
     if settings.keepa_api_key:
         return "keepa"
     if settings.rainforest_api_key:
         return "rainforest"
-    return "playwright"
+    return "scrapling"

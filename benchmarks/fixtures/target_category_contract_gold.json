@@ -1,0 +1,179 @@
+{
+  "schema_version": "1.0",
+  "dataset_id": "target-category-contract-gold-v1",
+  "ground_truth_type": "synthetic_contract",
+  "description": "Explicit specification and manufacturer-gate cases for deterministic regression. This is not a human review of live Amazon/1688 retrieval quality.",
+  "cases": [
+    {
+      "case_id": "storage-exact-factory",
+      "category_id": "outdoor_storage",
+      "target_text": "120 Gallon Resin Deck Box Outdoor Storage",
+      "candidate_text": "户外储物箱 454L 树脂",
+      "supplier_type": "生产厂家",
+      "expected_decision": "keep"
+    },
+    {
+      "case_id": "storage-capacity-conflict",
+      "category_id": "outdoor_storage",
+      "target_text": "120 Gallon Resin Deck Box Outdoor Storage",
+      "candidate_text": "户外储物箱 50 Gallon 树脂",
+      "supplier_type": "生产厂家",
+      "expected_decision": "reject",
+      "expected_reason": "target_category_conflict:capacity_l"
+    },
+    {
+      "case_id": "storage-cover-conflict",
+      "category_id": "outdoor_storage",
+      "target_text": "120 Gallon Resin Deck Box Outdoor Storage",
+      "candidate_text": "户外储物箱防护罩 120 Gallon",
+      "supplier_type": "生产厂家",
+      "expected_decision": "reject",
+      "expected_reason": "accessory_full_product_conflict"
+    },
+    {
+      "case_id": "storage-missing-capacity",
+      "category_id": "outdoor_storage",
+      "target_text": "120 Gallon Resin Deck Box Outdoor Storage",
+      "candidate_text": "户外储物箱 树脂",
+      "supplier_type": "生产厂家",
+      "expected_decision": "review"
+    },
+    {
+      "case_id": "storage-trader",
+      "category_id": "outdoor_storage",
+      "target_text": "120 Gallon Resin Deck Box Outdoor Storage",
+      "candidate_text": "户外储物箱 454L 树脂",
+      "supplier_type": "贸易公司",
+      "expected_decision": "reject",
+      "expected_reason": "manufacturer_evidence_conflict"
+    },
+    {
+      "case_id": "heater-exact-factory",
+      "category_id": "patio_heater",
+      "target_text": "48,000 BTU Propane Pyramid Patio Heater",
+      "candidate_text": "48000 BTU 丙烷金字塔户外取暖器",
+      "supplier_type": "制造商",
+      "expected_decision": "keep"
+    },
+    {
+      "case_id": "heater-fuel-structure-conflict",
+      "category_id": "patio_heater",
+      "target_text": "48,000 BTU Propane Pyramid Patio Heater",
+      "candidate_text": "1500W 电动壁挂户外取暖器",
+      "supplier_type": "生产厂家",
+      "expected_decision": "reject",
+      "expected_reason": "target_category_conflict:subtype"
+    },
+    {
+      "case_id": "heater-output-conflict",
+      "category_id": "patio_heater",
+      "target_text": "48,000 BTU Propane Pyramid Patio Heater",
+      "candidate_text": "20000 BTU 丙烷金字塔户外取暖器",
+      "supplier_type": "生产厂家",
+      "expected_decision": "reject",
+      "expected_reason": "target_category_conflict:heat_output_btu"
+    },
+    {
+      "case_id": "heater-missing-output",
+      "category_id": "patio_heater",
+      "target_text": "48,000 BTU Propane Pyramid Patio Heater",
+      "candidate_text": "丙烷金字塔户外取暖器",
+      "supplier_type": "生产厂家",
+      "expected_decision": "review"
+    },
+    {
+      "case_id": "heater-unknown-manufacturer",
+      "category_id": "patio_heater",
+      "target_text": "48,000 BTU Propane Pyramid Patio Heater",
+      "candidate_text": "48000 BTU 丙烷金字塔户外取暖器",
+      "supplier_type": null,
+      "expected_decision": "review"
+    },
+    {
+      "case_id": "furniture-exact-factory",
+      "category_id": "patio_furniture_sets",
+      "target_text": "7 Piece Patio Furniture Conversation Set, PE Rattan, 6 Chairs and 1 Table",
+      "candidate_text": "7件套 PE藤编户外休闲桌椅套装 6把椅子 1张桌子",
+      "supplier_type": "工厂",
+      "expected_decision": "keep"
+    },
+    {
+      "case_id": "furniture-piece-conflict",
+      "category_id": "patio_furniture_sets",
+      "target_text": "7 Piece Patio Furniture Conversation Set, PE Rattan, 6 Chairs and 1 Table",
+      "candidate_text": "5件套 PE藤编户外休闲桌椅套装 4把椅子 1张桌子",
+      "supplier_type": "生产厂家",
+      "expected_decision": "reject",
+      "expected_reason": "target_category_conflict:piece_count"
+    },
+    {
+      "case_id": "furniture-cover-conflict",
+      "category_id": "patio_furniture_sets",
+      "target_text": "7 Piece Patio Furniture Conversation Set, PE Rattan, 6 Chairs and 1 Table",
+      "candidate_text": "PE藤编户外家具防护罩",
+      "supplier_type": "生产厂家",
+      "expected_decision": "reject",
+      "expected_reason": "accessory_full_product_conflict"
+    },
+    {
+      "case_id": "furniture-missing-piece-count",
+      "category_id": "patio_furniture_sets",
+      "target_text": "7 Piece Patio Furniture Conversation Set, PE Rattan, 6 Chairs and 1 Table",
+      "candidate_text": "PE藤编户外休闲桌椅套装",
+      "supplier_type": "生产厂家",
+      "expected_decision": "review"
+    },
+    {
+      "case_id": "furniture-trader",
+      "category_id": "patio_furniture_sets",
+      "target_text": "7 Piece Patio Furniture Conversation Set, PE Rattan, 6 Chairs and 1 Table",
+      "candidate_text": "7件套 PE藤编户外休闲桌椅套装 6把椅子 1张桌子",
+      "supplier_type": "经销商",
+      "expected_decision": "reject",
+      "expected_reason": "manufacturer_evidence_conflict"
+    },
+    {
+      "case_id": "umbrella-exact-factory",
+      "category_id": "patio_umbrellas_shade",
+      "target_text": "9 FT Market Patio Umbrella, 180 GSM Polyester, 8 Ribs",
+      "candidate_text": "274cm 户外中柱遮阳伞 180gsm 涤纶 8骨",
+      "supplier_type": "生产厂家",
+      "expected_decision": "keep"
+    },
+    {
+      "case_id": "umbrella-diameter-conflict",
+      "category_id": "patio_umbrellas_shade",
+      "target_text": "9 FT Market Patio Umbrella, 180 GSM Polyester, 8 Ribs",
+      "candidate_text": "85cm 户外中柱遮阳伞 180gsm 涤纶 8骨",
+      "supplier_type": "生产厂家",
+      "expected_decision": "reject",
+      "expected_reason": "target_category_conflict:canopy_diameter_cm"
+    },
+    {
+      "case_id": "umbrella-replacement-conflict",
+      "category_id": "patio_umbrellas_shade",
+      "target_text": "9 FT Market Patio Umbrella, 180 GSM Polyester, 8 Ribs",
+      "candidate_text": "274cm 替换伞布 180gsm 涤纶 8骨",
+      "supplier_type": "生产厂家",
+      "expected_decision": "reject",
+      "expected_reason": "accessory_full_product_conflict"
+    },
+    {
+      "case_id": "shade-sail-exact-factory",
+      "category_id": "patio_umbrellas_shade",
+      "target_text": "10 x 12 FT Rectangular Shade Sail, 185 GSM HDPE",
+      "candidate_text": "304.8x365.76cm 长方形户外遮阳帆 185gsm HDPE",
+      "supplier_type": "生产厂家",
+      "expected_decision": "keep"
+    },
+    {
+      "case_id": "shade-sail-dimension-conflict",
+      "category_id": "patio_umbrellas_shade",
+      "target_text": "10 x 12 FT Rectangular Shade Sail, 185 GSM HDPE",
+      "candidate_text": "200x300cm 长方形户外遮阳帆 185gsm HDPE",
+      "supplier_type": "生产厂家",
+      "expected_decision": "reject",
+      "expected_reason": "target_category_conflict:dimensions_cm"
+    }
+  ]
+}

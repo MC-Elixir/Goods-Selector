@@ -23,6 +23,8 @@ from typing import Optional
 import yaml
 from loguru import logger
 
+from analyzers.profit_model import normalize_positive_number, normalize_price_tier
+
 from config.settings import CONFIG_DIR
 
 _BRAND_BLACKLIST = {
@@ -30,6 +32,13 @@ _BRAND_BLACKLIST = {
     "instant pot", "kitchenaid", "cuisinart", "breville", "philips",
     "bosch", "de'longhi", "delonghi", "shark", "roomba", "irobot",
 }
+
+
+class ScoringEvidenceError(ValueError):
+    def __init__(self, dimension: str, fields: list[str]):
+        self.dimension = dimension
+        self.fields = fields
+        super().__init__(f"missing {dimension} evidence: {','.join(fields)}")
 
 
 # ============================================================
@@ -83,6 +92,56 @@ def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 def _sigmoid(x: float, center: float, k: float) -> float:
     return 1.0 / (1.0 + math.exp(-k * (x - center)))
+
+
+def _contains_any_keyword(text: str, keywords: list[str]) -> bool:
+    haystack = (text or "").lower()
+    return any(str(k).lower() in haystack for k in keywords if str(k).strip())
+
+
+def _first_number(*values) -> Optional[float]:
+    """返回第一个可用数字，避免把搜索量误当成销量等语义串线。"""
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _supplier_raw_data(supplier) -> dict:
+    raw = getattr(supplier, "raw_data", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _supplier_raw_number(supplier, key: str) -> Optional[float]:
+    value = _supplier_raw_data(supplier).get(key)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _supplier_number(supplier, attr: str, raw_key: Optional[str] = None) -> Optional[float]:
+    value = getattr(supplier, attr, None)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return _supplier_raw_number(supplier, raw_key or attr)
+
+
+def _supplier_spec_match(supplier) -> dict:
+    spec = _supplier_raw_data(supplier).get("spec_match")
+    return spec if isinstance(spec, dict) else {}
+
+
+def _target_category_id(product) -> str | None:
+    raw = getattr(product, "raw_data", None)
+    profile = (raw or {}).get("target_category_profile") if isinstance(raw, dict) else None
+    value = profile.get("category_id") if isinstance(profile, dict) else None
+    return str(value) if value else None
 
 
 # ============================================================
@@ -178,6 +237,10 @@ def score_competition(
     bsr20_low_review_count: Optional[int] = None,
 ) -> float:
     """竞争烈度 → [0,1]，越激烈越低。"""
+    if competing_listings is None and top10_share is None:
+        raise ScoringEvidenceError(
+            "competition", ["competing_listings", "top10_share"]
+        )
     c = curve
     n = competing_listings or 0
 
@@ -211,10 +274,52 @@ def score_competition(
 def score_supply(suppliers: list, curve: dict) -> float:
     """货源稳定性 → [0,1]。
 
-    五因子：供应商数量 + 回头率 + MOQ + 交期 + 初始资金
+    六因子：供应商数量 + 回头率 + MOQ + 交期 + 初始资金 + 匹配质量
     """
-    if not suppliers:
-        return 0.0
+    real_suppliers = []
+    for supplier in suppliers:
+        raw = _supplier_raw_data(supplier)
+        method = getattr(supplier, "match_verification_method", None)
+        if raw.get("source") == "mock" or raw.get("method") == "mock" or method == "mock":
+            continue
+        real_suppliers.append(supplier)
+    if not real_suppliers:
+        raise ScoringEvidenceError("supply", ["real_supplier"])
+
+    evidenced = []
+    suppliers_with_price = []
+    suppliers_with_moq = []
+    for supplier in real_suppliers:
+        price = normalize_positive_number(_supplier_number(supplier, "base_price_cny"))
+        if price is None:
+            tiers = getattr(supplier, "price_tiers", None) or []
+            price = next(
+                (
+                    normalized[1]
+                    for tier in tiers
+                    if (normalized := normalize_price_tier(tier)) is not None
+                ),
+                None,
+            )
+        moq = normalize_positive_number(_supplier_number(supplier, "moq"))
+        if price is not None:
+            suppliers_with_price.append(supplier)
+        if moq is not None:
+            suppliers_with_moq.append(supplier)
+        if price is not None and moq is not None:
+            evidenced.append(supplier)
+    if not evidenced:
+        if suppliers_with_price and suppliers_with_moq:
+            fields = ["purchase_price", "moq"]
+        else:
+            fields = []
+            if not suppliers_with_price:
+                fields.append("purchase_price")
+            if not suppliers_with_moq:
+                fields.append("moq")
+        raise ScoringEvidenceError("supply", fields)
+
+    suppliers = evidenced
 
     c = curve
 
@@ -244,7 +349,7 @@ def score_supply(suppliers: list, curve: dict) -> float:
         delivery_score = 0.5  # 无数据时中性
 
     # 初始资金（首单成本 ≤ 5 万 CNY）
-    prices = [getattr(s, "base_price_cny", None) for s in suppliers]
+    prices = [normalize_positive_number(_supplier_number(s, "base_price_cny")) for s in suppliers]
     prices = [p for p in prices if p is not None]
     capital_max = c.get("initial_capital_max_cny", 50000)
     if moq_min is not None and prices:
@@ -253,13 +358,42 @@ def score_supply(suppliers: list, curve: dict) -> float:
     else:
         capital_score = 0.5
 
+    # 匹配质量（来自 verifier）
+    match_scores = [
+        getattr(s, "match_quality_score", None) for s in suppliers
+        if getattr(s, "match_quality_score", None) is not None
+    ]
+    if match_scores:
+        avg_match = sum(match_scores) / len(match_scores)
+        match_target = c.get("match_quality_target", 0.6)
+        match_score = _clamp(avg_match / match_target) if match_target else 0.5
+    else:
+        match_score = 0.5  # 无验证数据时中性
+
     # FBA 经验奖励
     fba_bonus = c.get("fba_ready_bonus", 0.08) if any(
         getattr(s, "fba_ready", False) for s in suppliers
     ) else 0.0
 
-    base = (0.30 * n_score + 0.30 * repeat_avg + 0.15 * moq_score
-            + 0.15 * delivery_score + 0.10 * capital_score)
+    factory_values = [getattr(s, "is_factory", None) for s in suppliers]
+    known_factory = [v for v in factory_values if v is not None]
+    factory_score = (
+        sum(1.0 if v is True else 0.45 for v in known_factory) / len(known_factory)
+        if known_factory else 0.65
+    )
+
+    monthly_sales = [
+        getattr(s, "monthly_sales", None) for s in suppliers
+        if getattr(s, "monthly_sales", None) is not None
+    ]
+    avg_supplier_sales = sum(monthly_sales) / len(monthly_sales) if monthly_sales else None
+    supplier_sales_score = _clamp((avg_supplier_sales or 0) / 1000) if avg_supplier_sales is not None else 0.5
+
+    base = (
+        0.20 * n_score + 0.18 * repeat_avg + 0.12 * moq_score
+        + 0.12 * delivery_score + 0.08 * capital_score + 0.15 * match_score
+        + 0.10 * factory_score + 0.05 * supplier_sales_score
+    )
     return _clamp(base + fba_bonus)
 
 
@@ -276,6 +410,15 @@ def score_logistics(
     三因子：体积重比 + 重量 + 最长边
     危险属性黑名单命中则直接返回 0。
     """
+    values = {
+        "weight_kg": weight_kg,
+        "length_cm": length_cm,
+        "width_cm": width_cm,
+        "height_cm": height_cm,
+    }
+    missing = [name for name, value in values.items() if value is None]
+    if missing:
+        raise ScoringEvidenceError("logistics", missing)
     c = curve
     blacklist = set(c.get("blacklist_attrs", []))
     if attrs and blacklist & set(str(a).lower() for a in attrs):
@@ -310,6 +453,7 @@ def score_risk(
     brand: Optional[str],
     curve: dict,
     *,
+    title: Optional[str] = None,
     seasonality: Optional[dict] = None,
 ) -> float:
     """风险等级 → [0,1]，从 1.0 递减。"""
@@ -327,6 +471,11 @@ def score_risk(
     cat = (category or "").strip()
     if any(cat.startswith(bc) or bc in cat for bc in blacklist_cats):
         s *= c.get("cert_required_penalty", 0.7)
+
+    restricted_keywords = c.get("restricted_keywords", [])
+    restricted_text = " ".join(filter(None, [title, category]))
+    if _contains_any_keyword(restricted_text, restricted_keywords):
+        s *= c.get("restricted_keyword_penalty", 0.4)
 
     # 季节性风险：月销售额变异系数 > 0.4
     if seasonality and isinstance(seasonality, dict):
@@ -355,8 +504,16 @@ def apply_hard_filters(
     brand: Optional[str],
     config: dict,
     *,
+    product_title: Optional[str] = None,
+    product_category: Optional[str] = None,
     monthly_sales: Optional[int] = None,
     selling_price: Optional[float] = None,
+    top_supplier_match_quality: Optional[float] = None,
+    top_supplier_spec_score: Optional[float] = None,
+    top_supplier_spec_conflicts: Optional[list[str]] = None,
+    top_supplier_candidate_score: Optional[float] = None,
+    target_category_id: Optional[str] = None,
+    top_supplier_target_decision: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
     """返回 (是否通过, 拒绝原因列表)。"""
     hf = config["hard_filters"]
@@ -386,6 +543,46 @@ def apply_hard_filters(
     if hf.get("exclude_brand_listings", True) and brand:
         if brand.strip().lower() in _BRAND_BLACKLIST:
             reasons.append("brand_excluded")
+
+    if hf.get("exclude_restricted_keywords", True):
+        restricted_keywords = config.get("scoring_curves", {}).get("risk", {}).get(
+            "restricted_keywords", []
+        )
+        restricted_text = " ".join(filter(None, [product_title, product_category]))
+        if _contains_any_keyword(restricted_text, restricted_keywords):
+            reasons.append("restricted_product")
+
+    min_match = hf.get("min_top_supplier_match_quality")
+    if (
+        min_match is not None
+        and top_supplier_match_quality is not None
+        and top_supplier_match_quality < min_match
+    ):
+        reasons.append("supplier_match_too_low")
+
+    min_spec = hf.get("min_top_supplier_spec_score")
+    if (
+        min_spec is not None
+        and top_supplier_spec_score is not None
+        and top_supplier_spec_score < min_spec
+    ):
+        reasons.append("supplier_spec_too_low")
+
+    max_conflicts = hf.get("max_top_supplier_spec_conflicts")
+    if max_conflicts is not None and top_supplier_spec_conflicts is not None:
+        if len(top_supplier_spec_conflicts) > max_conflicts:
+            reasons.append("supplier_spec_conflict")
+
+    min_candidate = hf.get("min_top_supplier_candidate_score")
+    if (
+        min_candidate is not None
+        and top_supplier_candidate_score is not None
+        and top_supplier_candidate_score < min_candidate
+    ):
+        reasons.append("supplier_candidate_too_low")
+
+    if target_category_id and top_supplier_target_decision != "keep":
+        reasons.append("target_supplier_contract_not_passed")
 
     passed = len(reasons) == 0
     return passed, reasons
@@ -418,6 +615,12 @@ def score_product(
     ma = market_analysis  # 简写
 
     # --- 各维度得分 ---
+    estimated_monthly_sales = _first_number(
+        getattr(ma, "est_monthly_sales", None),
+        getattr(product, "estimated_monthly_sales", None),
+    )
+    estimated_daily_sales = _first_number(getattr(ma, "est_daily_sales", None))
+
     p_score = score_profit(
         profit_margin=profit_breakdown.profit_margin if profit_breakdown else 0.0,
         curve=curves["profit"],
@@ -425,11 +628,11 @@ def score_product(
 
     d_score = score_demand(
         bsr_rank=getattr(product, "bsr_rank", None),
-        monthly_sales=getattr(product, "review_velocity_30d", None),  # 月销量字段回退
+        monthly_sales=estimated_monthly_sales,
         curve=curves["demand"],
         opportunity_score=getattr(ma, "opportunity_score", None),
         daily_revenue_top100=None,   # 由卖家精灵扩展字段补充
-        daily_sales_top20=None,
+        daily_sales_top20=estimated_daily_sales,
         search_volume_monthly=getattr(ma, "search_volume_monthly", None),
         price=getattr(product, "price", None),
         google_trends_up=False,
@@ -446,19 +649,27 @@ def score_product(
 
     s_score = score_supply(suppliers=suppliers, curve=curves["supply"])
 
+    target_category_id = _target_category_id(product)
+    logistics_curve = dict(curves["logistics"])
+    target_profile = (config.get("target_category_profiles") or {}).get(
+        target_category_id or "", {}
+    )
+    if isinstance(target_profile, dict):
+        logistics_curve.update(target_profile.get("logistics") or {})
     l_score = score_logistics(
         weight_kg=getattr(product, "weight_kg", None),
         length_cm=getattr(product, "length_cm", None),
         width_cm=getattr(product, "width_cm", None),
         height_cm=getattr(product, "height_cm", None),
         attrs=[],
-        curve=curves["logistics"],
+        curve=logistics_curve,
     )
 
     r_score = score_risk(
         category=getattr(product, "category", None),
         brand=getattr(product, "brand", None),
         curve=curves["risk"],
+        title=getattr(product, "title", None),
         seasonality=getattr(ma, "seasonality", None),
     )
 
@@ -477,6 +688,15 @@ def score_product(
         (getattr(s, "moq", None) for s in suppliers if getattr(s, "moq", None) is not None),
         default=None,
     )
+    top_supplier = suppliers[0] if suppliers else None
+    top_spec = _supplier_spec_match(top_supplier) if top_supplier else {}
+    top_target_evidence = (
+        _supplier_raw_data(top_supplier).get("strict_match_evidence")
+        if top_supplier else None
+    )
+    spec_conflicts = top_spec.get("conflicts") if top_spec else None
+    if spec_conflicts is not None and not isinstance(spec_conflicts, list):
+        spec_conflicts = [str(spec_conflicts)]
     passed, reasons = apply_hard_filters(
         profit_margin=profit_breakdown.profit_margin if profit_breakdown else 0.0,
         total_score=total,
@@ -484,8 +704,22 @@ def score_product(
         supplier_count=len(suppliers),
         brand=getattr(product, "brand", None),
         config=config,
-        monthly_sales=getattr(ma, "search_volume_monthly", None),
+        product_title=getattr(product, "title", None),
+        product_category=getattr(product, "category", None),
+        monthly_sales=estimated_monthly_sales,
         selling_price=getattr(product, "price", None),
+        top_supplier_match_quality=_supplier_number(top_supplier, "match_quality_score") if top_supplier else None,
+        top_supplier_spec_score=_first_number(top_spec.get("score")) if top_spec else None,
+        top_supplier_spec_conflicts=spec_conflicts,
+        top_supplier_candidate_score=_first_number(
+            _supplier_raw_number(top_supplier, "supplier_rank_score") if top_supplier else None,
+            _supplier_number(top_supplier, "candidate_score", "supplier_candidate_score") if top_supplier else None,
+        ),
+        target_category_id=target_category_id,
+        top_supplier_target_decision=(
+            top_target_evidence.get("decision")
+            if isinstance(top_target_evidence, dict) else None
+        ),
     )
 
     logger.info(

@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from config.settings import settings
+from db.migrate import install_sqlite_foreign_keys
 
 engine = create_engine(
     settings.database_url,
@@ -16,6 +17,7 @@ engine = create_engine(
     if settings.database_url.startswith("sqlite")
     else {},
 )
+install_sqlite_foreign_keys(engine)
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 

@@ -1,11 +1,16 @@
 """
-1688 Playwright 货源匹配器
+1688 Scrapling 货源匹配器
 ===========================
-无需 API Key，Playwright 直接爬 1688 搜索结果页。
+基于 Scrapling DynamicFetcher（Playwright 底层）爬 1688 搜索结果。
+相比原生 Playwright，Scrapling 提供：
+  - 内置反检测（指纹伪装、webdriver 隐藏）
+  - Scrapy 风格 CSS 选择器（::text, ::attr）
+  - 自适应元素定位（auto_save/adaptive）
+  - 内置代理支持和 network_idle 等待
 
 关键实现细节：
   - URL 关键词必须用 GBK 编码（1688 老系统）
-  - Playwright 需显式传入系统代理（HTTP_PROXY），不自动继承
+  - Scrapling DynamicFetcher 基于 Chromium
   - 产品卡片选择器：a.search-offer-item.major-offer
   - Offer ID 从 href 的 offerId= 参数提取
 
@@ -22,39 +27,30 @@ from __future__ import annotations
 
 import os
 import re
-import time
+import json
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, urlparse, parse_qs
 
 from loguru import logger
 
+from matchers.alibaba_detail import apply_1688_detail_to_supplier, parse_1688_offer_detail_html
 from matchers.alibaba_pailitao import SupplierDTO
 
-# ============================================================
-# 常量
-# ============================================================
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _PROFILE_DIR = _PROJECT_ROOT / "data" / "browser_profiles" / "1688"
 _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
+_COOKIES_FILE = _PROJECT_ROOT / "data" / "1688_cookies.json"
+
 _SEARCH_BASE = "https://s.1688.com/selloffer/offer_search.htm"
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/126.0.0.0 Safari/537.36"
-)
-
-# 产品卡片选择器（经过实测验证）
 _CARD_SEL = "a.search-offer-item.major-offer"
 
-# 页面等待时间（秒）
 _PAGE_WAIT = 10
 
 
 def _system_proxy() -> Optional[str]:
-    """从环境变量读取系统代理，Playwright 不自动继承。"""
     return (
         os.environ.get("HTTP_PROXY")
         or os.environ.get("http_proxy")
@@ -63,13 +59,106 @@ def _system_proxy() -> Optional[str]:
     ) or None
 
 
+def _playwright_proxy(proxy_url: Optional[str]) -> Optional[dict]:
+    """把 env 读出的 proxy 字符串 (或 None) 转成 Playwright 接受的 dict / None。
+
+    之前的实现传 `proxy=self._proxy or ""`，但：
+      - 空字符串 ""  → Playwright 抛 "expected object, got string"
+      - 字符串 URL   → 同样不被接受
+    正确：None 表示无代理；非空 URL 包装成 {"server": url}。
+    """
+    if not proxy_url:
+        return None
+    return {"server": proxy_url}
+
+
+def _playwright_context(headless: bool, proxy_url: Optional[str]):
+    from playwright.sync_api import sync_playwright
+
+    pw = sync_playwright().start()
+    kwargs = {
+        "user_data_dir": str(_PROFILE_DIR),
+        "headless": headless,
+        "locale": "zh-CN",
+        "timezone_id": "Asia/Shanghai",
+        "user_agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "viewport": {"width": 1920, "height": 1080},
+        "args": [
+            "--disable-blink-features=AutomationControlled",
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
+        ],
+    }
+    proxy = _playwright_proxy(proxy_url)
+    if proxy:
+        kwargs["proxy"] = proxy
+    ctx = pw.chromium.launch_persistent_context(**kwargs)
+    return _ContextManager(ctx, pw)
+
+
+class _ContextManager:
+    def __init__(self, ctx, playwright):
+        self.ctx = ctx
+        self.playwright = playwright
+
+    def __enter__(self):
+        return self.ctx
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self.ctx.close()
+        finally:
+            self.playwright.stop()
+
+
+def _load_cookies_into(ctx) -> int:
+    if not _COOKIES_FILE.exists():
+        logger.warning(f"[1688] cookies 文件不存在：{_COOKIES_FILE}")
+        return 0
+    try:
+        with open(_COOKIES_FILE, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+    except Exception as e:
+        logger.warning(f"[1688] 读取 cookies 失败: {e}")
+        return 0
+
+    cleaned: list[dict] = []
+    for c in cookies:
+        if not isinstance(c, dict) or not c.get("name") or c.get("value") is None:
+            continue
+        item = {
+            "name": c["name"],
+            "value": str(c["value"]),
+            "domain": c.get("domain") or ".1688.com",
+            "path": c.get("path") or "/",
+            "expires": c.get("expires", c.get("expirationDate", -1)),
+            "httpOnly": bool(c.get("httpOnly", False)),
+            "secure": bool(c.get("secure", False)),
+        }
+        same_site = c.get("sameSite")
+        if same_site in {"Strict", "Lax", "None"}:
+            item["sameSite"] = same_site
+        cleaned.append(item)
+
+    if not cleaned:
+        return 0
+    try:
+        ctx.add_cookies(cleaned)
+        return len(cleaned)
+    except Exception as e:
+        logger.warning(f"[1688] 注入 cookies 失败: {e}")
+        return 0
+
+
 def _gbk_url(keyword: str) -> str:
-    """1688 搜索 URL 使用 GBK 编码（非 UTF-8）。"""
     return f"{_SEARCH_BASE}?keywords={quote(keyword, encoding='gbk')}"
 
 
 def _offer_id_from_href(href: str) -> str:
-    """从 detail.m.1688.com 链接提取 offerId。"""
     try:
         qs = parse_qs(urlparse(href).query)
         ids = qs.get("offerId", [])
@@ -85,11 +174,8 @@ def _offer_url(offer_id: str) -> str:
     return f"https://detail.1688.com/offer/{offer_id}.html"
 
 
-# ============================================================
-# 主类
-# ============================================================
 class Alibaba1688PlaywrightMatcher:
-    """Playwright 1688 货源匹配器（无 API Key 版）。"""
+    """Scrapling 1688 货源匹配器（基于 DynamicFetcher）。"""
 
     def __init__(
         self,
@@ -99,21 +185,23 @@ class Alibaba1688PlaywrightMatcher:
         self.headless = headless
         self.page_wait = page_wait
         self._proxy = _system_proxy()
-
-    # ─────────────────────────────────────────────────────────
-    # 公开接口
-    # ─────────────────────────────────────────────────────────
+        self.last_query_attempts: list[dict] = []
 
     def search_by_image(
         self,
         image_url: str,
         keywords: Optional[list[str]] = None,
         limit: int = 10,
+        *,
+        exhaustive: bool = False,
     ) -> list[SupplierDTO]:
-        """以图搜货（需已登录 Profile）；失败则自动降级关键词搜索。"""
+        if keywords:
+            logger.info("[1688-img] imageAddress 图搜不稳定，使用视觉关键词搜索")
+            return self.search_by_keyword(keywords, limit=limit, exhaustive=exhaustive)
+
         if not _profile_has_cookies():
             logger.info("[1688-img] 无登录 Profile，直接使用关键词搜索")
-            return self.search_by_keyword(keywords or [], limit=limit)
+            return self.search_by_keyword(keywords or [], limit=limit, exhaustive=exhaustive)
 
         try:
             results = self._image_search(image_url, limit)
@@ -124,144 +212,135 @@ class Alibaba1688PlaywrightMatcher:
         except Exception as e:
             logger.warning(f"[1688-img] 图搜失败: {e}，降级关键词搜索")
 
-        return self.search_by_keyword(keywords or [], limit=limit)
+        return self.search_by_keyword(keywords or [], limit=limit, exhaustive=exhaustive)
 
     def search_by_keyword(
         self,
         keywords: list[str],
         limit: int = 10,
+        *,
+        exhaustive: bool = False,
     ) -> list[SupplierDTO]:
-        """按关键词搜索 1688，无需登录。多关键词逐一搜索，去重合并。"""
         if not keywords:
-            return []
-
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            logger.error("Playwright 未安装：pip install playwright && playwright install chromium")
+            self.last_query_attempts = []
             return []
 
         seen_ids: set[str] = set()
         results: list[SupplierDTO] = []
+        self.last_query_attempts = []
 
-        with sync_playwright() as pw:
-            # 关键词搜索也用持久化 Profile（1688 需要登录态才返回产品列表）
-            ctx = self._new_context(pw, persistent=True)
-            page = self._new_page(ctx)
-
-            for kw in keywords:
-                if len(results) >= limit:
-                    break
-                try:
-                    batch = self._scrape_page(page, _gbk_url(kw), limit - len(results))
+        per_query_limit = max(1, min(limit, 5)) if exhaustive else limit
+        for kw in keywords:
+            if not exhaustive and len(results) >= limit:
+                break
+            try:
+                with _playwright_context(self.headless, self._proxy) as ctx:
+                    page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                    loaded = _load_cookies_into(ctx)
+                    if loaded:
+                        logger.info(f"[1688] 已加载 {loaded} 个 cookies")
+                    page.goto(_gbk_url(kw), wait_until="domcontentloaded", timeout=60_000)
+                    page.wait_for_timeout(int(self.page_wait * 1000))
+                    dismissed = _dismiss_popups(page)
+                    if dismissed:
+                        logger.info(f"[1688] 已关闭 {dismissed} 个弹窗/遮罩")
+                        page.wait_for_timeout(1500)
+                    page_url = page.url or ""
+                    if _is_tmd_block(page_url, page.title()):
+                        raise RuntimeError("1688 TMD 验证码拦截，请刷新 1688 登录态并手动解验证码")
+                    if "login" in page_url.lower() or "passport" in page_url.lower():
+                        logger.warning("[1688-kw] 跳转登录页，Session 过期")
+                        self.last_query_attempts.append({
+                            "query": kw,
+                            "status": "failed",
+                            "result_count": None,
+                            "error": "1688 login required",
+                            "backend": "alibaba_playwright_keyword",
+                        })
+                        continue
+                    remaining = per_query_limit if exhaustive else limit - len(results)
+                    batch = self._parse_playwright_page(page, remaining)
                     for dto in batch:
+                        raw = dto.raw_data if isinstance(dto.raw_data, dict) else {}
+                        dto.raw_data = raw
+                        queries = raw.setdefault("search_queries", [])
+                        if kw not in queries:
+                            queries.append(kw)
+                        raw["search_backend"] = "alibaba_playwright_keyword"
                         if dto.alibaba_offer_id not in seen_ids:
                             seen_ids.add(dto.alibaba_offer_id)
                             results.append(dto)
+                        else:
+                            existing = next(
+                                item for item in results
+                                if item.alibaba_offer_id == dto.alibaba_offer_id
+                            )
+                            existing_raw = existing.raw_data if isinstance(existing.raw_data, dict) else {}
+                            existing.raw_data = existing_raw
+                            existing_queries = existing_raw.setdefault("search_queries", [])
+                            if kw not in existing_queries:
+                                existing_queries.append(kw)
                     logger.info(f"[1688-kw] '{kw}' → {len(batch)} 条")
-                except Exception as e:
-                    logger.warning(f"[1688-kw] '{kw}' 失败: {e}")
-
-            ctx.close()
+                    self.last_query_attempts.append({
+                        "query": kw,
+                        "status": "completed",
+                        "result_count": len(batch),
+                        "result_refs": [
+                            f"offer:{dto.alibaba_offer_id}" for dto in batch
+                            if dto.alibaba_offer_id
+                        ],
+                        "error": None,
+                        "backend": "alibaba_playwright_keyword",
+                    })
+            except Exception as e:
+                self.last_query_attempts.append({
+                    "query": kw,
+                    "status": "failed",
+                    "result_count": None,
+                    "error": str(e)[:200],
+                    "backend": "alibaba_playwright_keyword",
+                })
+                logger.warning(f"[1688-kw] '{kw}' 失败: {e}")
 
         results.sort(key=lambda d: d.monthly_sales or 0, reverse=True)
         logger.info(f"[1688-kw] 共 {len(results)} 条（关键词 {len(keywords)} 个）")
         return results[:limit]
 
-    # ─────────────────────────────────────────────────────────
-    # 内部：图搜
-    # ─────────────────────────────────────────────────────────
-
     def _image_search(self, image_url: str, limit: int) -> list[SupplierDTO]:
-        from playwright.sync_api import sync_playwright
+        url = f"{_SEARCH_BASE}?imageAddress={quote(image_url, safe=':/')}"
+        logger.info(f"[1688-img] {url[:80]}...")
 
-        pw = sync_playwright().start()
-        try:
-            ctx = self._new_context(pw, persistent=True)
-            page = self._new_page(ctx)
-
-            url = f"{_SEARCH_BASE}?imageAddress={quote(image_url, safe=':/')}"
-            logger.info(f"[1688-img] {url[:80]}...")
-            page.goto(url, timeout=60_000, wait_until="domcontentloaded")
-            time.sleep(self.page_wait)
-
-            if "login" in page.url.lower() or "passport" in page.url.lower():
+        with _playwright_context(self.headless, self._proxy) as ctx:
+            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            loaded = _load_cookies_into(ctx)
+            if loaded:
+                logger.info(f"[1688] 已加载 {loaded} 个 cookies")
+            page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            page.wait_for_timeout(int(self.page_wait * 1000))
+            dismissed = _dismiss_popups(page)
+            if dismissed:
+                logger.info(f"[1688] 已关闭 {dismissed} 个弹窗/遮罩")
+                page.wait_for_timeout(1500)
+            page_url = page.url or ""
+            if _is_tmd_block(page_url, page.title()):
+                raise RuntimeError("1688 TMD 验证码拦截，请刷新 1688 登录态并手动解验证码")
+            if "login" in page_url.lower() or "passport" in page_url.lower():
                 logger.warning("[1688-img] 跳转登录页，Session 过期")
                 return []
+            results = self._parse_playwright_page(page, limit)
+        for rank, dto in enumerate(results, 1):
+            raw = dto.raw_data if isinstance(dto.raw_data, dict) else {}
+            dto.raw_data = raw
+            raw["search_backend"] = "alibaba_playwright_image"
+            raw["image_search_rank"] = rank
+        return results
 
-            results = self._parse_cards(page, limit)
-            for dto in results:
-                dto.image_similarity = 0.85
-            return results
-
-        finally:
-            try:
-                ctx.close()
-            except Exception:
-                pass
-            pw.stop()
-
-    # ─────────────────────────────────────────────────────────
-    # 内部：浏览器管理
-    # ─────────────────────────────────────────────────────────
-
-    def _new_context(self, pw, persistent: bool):
-        proxy_arg = {"server": self._proxy} if self._proxy else None
-        common = dict(
-            headless=self.headless,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            proxy=proxy_arg,
-            viewport={"width": 1920, "height": 1080},
-            user_agent=_UA,
-            locale="zh-CN",
-        )
-        if persistent:
-            return pw.chromium.launch_persistent_context(
-                user_data_dir=str(_PROFILE_DIR), **common
-            )
-        launch_args = {k: v for k, v in common.items() if k in ("headless", "args", "proxy")}
-        browser = pw.chromium.launch(**launch_args)
-        ctx_args: dict = {
-            "viewport": {"width": 1920, "height": 1080},
-            "user_agent": _UA,
-            "locale": "zh-CN",
-        }
-        if proxy_arg:
-            ctx_args["proxy"] = proxy_arg
-        return browser.new_context(**ctx_args)
-
-    def _new_page(self, ctx):
-        page = ctx.new_page()
-        page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-        try:
-            from playwright_stealth import Stealth
-            Stealth().apply_stealth_sync(page)
-        except Exception:
-            pass
-        return page
-
-    # ─────────────────────────────────────────────────────────
-    # 内部：页面解析
-    # ─────────────────────────────────────────────────────────
-
-    def _scrape_page(self, page, url: str, limit: int) -> list[SupplierDTO]:
-        page.goto(url, timeout=30_000, wait_until="domcontentloaded")
-        time.sleep(self.page_wait)
-
-        if "login" in page.url.lower() or "passport" in page.url.lower():
-            logger.warning("[1688] 页面跳转到登录，放弃")
-            return []
-
-        return self._parse_cards(page, limit)
-
-    def _parse_cards(self, page, limit: int) -> list[SupplierDTO]:
-        cards = page.query_selector_all(_CARD_SEL)
+    def _parse_scrapling_page(self, page, limit: int) -> list[SupplierDTO]:
+        cards = page.css(_CARD_SEL) or []
         logger.debug(f"[1688] 找到 {len(cards)} 张卡片")
 
         results: list[SupplierDTO] = []
-        for card in cards[: limit * 2]:
+        for card in cards[:limit * 2]:
             if len(results) >= limit:
                 break
             try:
@@ -272,56 +351,130 @@ class Alibaba1688PlaywrightMatcher:
                 logger.debug(f"[1688] 卡片解析失败: {e}")
         return results
 
+    def _parse_playwright_page(self, page, limit: int) -> list[SupplierDTO]:
+        selectors = (
+            _CARD_SEL,
+            "a[data-aplus-report]",
+            "a[href*='offerId=']",
+            "a[href*='detail.1688.com']",
+            ".sm-offer-item",
+        )
+        cards = None
+        for sel in selectors:
+            loc = page.locator(sel)
+            try:
+                if loc.count() > 0:
+                    cards = loc
+                    logger.debug(f"[1688] selector={sel!r} cards={loc.count()}")
+                    break
+            except Exception:
+                continue
+        if cards is None:
+            return []
 
-# ============================================================
-# 卡片解析（纯函数）
-# ============================================================
+        results: list[SupplierDTO] = []
+        count = min(cards.count(), limit * 2)
+        for i in range(count):
+            if len(results) >= limit:
+                break
+            try:
+                dto = _parse_playwright_card(cards.nth(i))
+                if dto:
+                    results.append(dto)
+            except Exception as e:
+                logger.debug(f"[1688] Playwright 卡片解析失败: {e}")
+        return results
+
+    def enrich_supplier_detail(self, supplier: SupplierDTO) -> SupplierDTO:
+        """Open a 1688 detail page and fill MOQ/spec/logistics/risk fields."""
+        if not supplier.offer_url:
+            return supplier
+        try:
+            with _playwright_context(self.headless, self._proxy) as ctx:
+                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                loaded = _load_cookies_into(ctx)
+                if loaded:
+                    logger.info(f"[1688-detail] 已加载 {loaded} 个 cookies")
+                page.goto(supplier.offer_url, wait_until="domcontentloaded", timeout=60_000)
+                page.wait_for_timeout(int(min(self.page_wait, 5) * 1000))
+                if _is_tmd_block(page.url or "", page.title()):
+                    raise RuntimeError("1688 TMD 验证码拦截，请刷新 1688 登录态并手动解验证码")
+                html = page.content()
+                final_url = page.url or ""
+            return _enrich_supplier_from_detail_html(supplier, html, page_url=final_url)
+        except Exception as exc:
+            logger.warning(f"[1688-detail] 详情页补采失败 offer={supplier.alibaba_offer_id}: {exc}")
+            supplier.raw_data.setdefault("detail_error", str(exc))
+            return supplier
+
+
+def _card_full_text(card) -> str:
+    text_nodes = card.css("::text").getall() if hasattr(card, 'css') else []
+    return "\n".join(t.strip() for t in text_nodes if t.strip()) if text_nodes else ""
+
+
+def _enrich_supplier_from_detail_html(
+    supplier: SupplierDTO, html: str, *, page_url: str | None = None
+) -> SupplierDTO:
+    detail = parse_1688_offer_detail_html(
+        html,
+        expected_offer_id=supplier.alibaba_offer_id or None,
+        page_url=page_url,
+    )
+    return apply_1688_detail_to_supplier(supplier, detail)
+
 
 def _parse_card(card) -> Optional[SupplierDTO]:
-    """从 a.search-offer-item.major-offer 卡片提取 SupplierDTO。"""
-    href = card.get_attribute("href") or ""
+    href = card.attrib.get("href") or ""
+    if not href:
+        href_links = card.css("::attr(href)").getall() if hasattr(card, 'css') else []
+        href = href_links[0] if href_links else ""
+
     offer_id = _offer_id_from_href(href)
     if not offer_id:
         return None
 
-    full_text = card.inner_text() or ""
+    full_text = _card_full_text(card)
 
-    # ── 标题 ──────────────────────────────────────────────
-    title_el = card.query_selector(".offer-title-row, [class*='title']")
-    title = title_el.inner_text().strip() if title_el else full_text.split("\n")[0][:60]
+    title_els = card.css(".offer-title-row")
+    if not title_els:
+        title_els = card.css("[class*='title']")
+    if title_els:
+        title = (title_els[0].css("::text").getall())
+        title = "".join(t.strip() for t in title).strip()
+        if not title:
+            title = full_text.split("\n")[0][:60] if full_text else ""
+    else:
+        title = full_text.split("\n")[0][:60] if full_text else ""
 
-    # ── 价格（格式：¥\n10\n.99 → 10.99） ─────────────────
     price_cny: Optional[float] = None
     price_tiers: list[dict] = []
-    price_el = card.query_selector(".offer-price-row, [class*='price']")
-    if price_el:
-        raw_price = price_el.inner_text().replace("\n", "").replace(" ", "")
+    price_els = card.css(".offer-price-row")
+    if not price_els:
+        price_els = card.css("[class*='price']")
+    if price_els:
+        price_texts = price_els[0].css("::text").getall()
+        raw_price = "".join(price_texts).replace("\n", "").replace(" ", "")
         price_cny = _parse_price(raw_price)
         if price_cny:
             price_tiers = [{"qty": 1, "price": price_cny}]
 
-    # ── 图片 ──────────────────────────────────────────────
     img_url: Optional[str] = None
-    img_el = card.query_selector("img")
-    if img_el:
-        src = img_el.get_attribute("src") or img_el.get_attribute("data-src") or ""
+    img_els = card.css("img")
+    if img_els:
+        src = img_els[0].attrib.get("src") or img_els[0].attrib.get("data-src") or ""
         if src.startswith("//"):
             src = f"https:{src}"
         img_url = src or None
 
-    # ── 供应商名称（全文末行中找公司名） ─────────────────
     supplier_name = _extract_supplier(full_text)
 
-    # ── 月销量 ──────────────────────────────────────────
     monthly_sales = _parse_monthly_sales(full_text)
 
-    # ── 复购率 ──────────────────────────────────────────
     repeat_buyer_rate = _parse_repeat_rate(full_text)
 
-    # ── 工厂标签 ─────────────────────────────────────────
     is_factory = "工厂" in full_text or "源头厂家" in full_text
 
-    # ── MOQ ─────────────────────────────────────────────
     moq = _parse_moq(full_text)
 
     return SupplierDTO(
@@ -339,26 +492,113 @@ def _parse_card(card) -> Optional[SupplierDTO]:
         is_factory=is_factory,
         delivery_days=None,
         fba_ready=None,
-        raw_data={"title_cn": title, "full_text": full_text[:200]},
+        title_cn=title,
+        raw_data={"title_cn": title, "full_text": full_text[:200], "source": "alibaba_playwright"},
     )
 
 
-# ============================================================
-# 字段解析工具
-# ============================================================
+def _parse_playwright_card(card) -> Optional[SupplierDTO]:
+    href = card.get_attribute("href") or ""
+    if not href:
+        links = card.locator("a[href*='detail.1688.com'], a[href*='offerId=']")
+        if links.count() > 0:
+            href = links.first.get_attribute("href") or ""
+
+    offer_id = _offer_id_from_href(href)
+    if not offer_id:
+        return None
+
+    full_text = _safe_inner_text(card)
+    title = ""
+    for sel in (".offer-title-row", "[class*='title']", "a[href*='detail.1688.com']"):
+        loc = card.locator(sel)
+        if loc.count() > 0:
+            title = _safe_inner_text(loc.first).replace("\n", "").strip()
+            if title:
+                break
+    if not title:
+        title = full_text.split("\n")[0][:60] if full_text else ""
+
+    price_cny: Optional[float] = None
+    price_tiers: list[dict] = []
+    for sel in (".offer-price-row", "[class*='price']"):
+        loc = card.locator(sel)
+        if loc.count() > 0:
+            price_cny = _parse_price(_safe_inner_text(loc.first))
+            if price_cny:
+                price_tiers = [{"qty": 1, "price": price_cny}]
+                break
+    if price_cny is None:
+        price_cny = _parse_price(full_text)
+        if price_cny:
+            price_tiers = [{"qty": 1, "price": price_cny}]
+
+    img_url: Optional[str] = None
+    imgs = card.locator("img")
+    if imgs.count() > 0:
+        src = (
+            imgs.first.get_attribute("src")
+            or imgs.first.get_attribute("data-src")
+            or imgs.first.get_attribute("data-lazyload-src")
+            or ""
+        )
+        if src.startswith("//"):
+            src = f"https:{src}"
+        img_url = src or None
+
+    supplier_name = _extract_supplier(full_text)
+    monthly_sales = _parse_monthly_sales(full_text)
+    repeat_buyer_rate = _parse_repeat_rate(full_text)
+    is_factory = "工厂" in full_text or "源头厂家" in full_text
+    moq = _parse_moq(full_text)
+
+    return SupplierDTO(
+        alibaba_offer_id=offer_id,
+        supplier_name=supplier_name,
+        offer_url=_offer_url(offer_id),
+        offer_image_url=img_url,
+        image_similarity=None,
+        text_similarity=None,
+        moq=moq,
+        base_price_cny=price_cny,
+        price_tiers=price_tiers,
+        monthly_sales=monthly_sales,
+        repeat_buyer_rate=repeat_buyer_rate,
+        is_factory=is_factory,
+        delivery_days=None,
+        fba_ready=None,
+        title_cn=title,
+        raw_data={"title_cn": title, "full_text": full_text[:200], "source": "alibaba_playwright"},
+    )
+
+
+def _safe_inner_text(locator) -> str:
+    try:
+        return locator.inner_text(timeout=1500).strip()
+    except Exception:
+        return ""
+
 
 def _parse_price(text: str) -> Optional[float]:
-    """从价格文本提取 CNY 价格。
+    raw = text or ""
+    if "¥" in raw or "￥" in raw:
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        for i, line in enumerate(lines):
+            if "¥" not in line and "￥" not in line:
+                continue
+            after = re.sub(r".*[¥￥]\s*", "", line).strip()
+            if re.fullmatch(r"\d+(?:\.\d+)?", after):
+                return float(after)
+            if not after and i + 1 < len(lines):
+                next_line = lines[i + 1]
+                if re.fullmatch(r"\d+(?:\.\d+)?", next_line):
+                    if i + 2 < len(lines) and re.fullmatch(r"\.\d+", lines[i + 2]):
+                        return float(next_line + lines[i + 2])
+                    return float(next_line)
 
-    1688 价格格式：'¥\\n10\\n.99\\n新人价\\n全网1.5万+件'
-    策略：找第一个 ¥/￥ 后的数字序列，最多两段（整数+小数）。
-    上限 ¥9999，超出视为解析错误（可能把销量数据误读为价格）。
-    """
-    t = (text or "").replace("\n", "").replace(" ", "")
-    # 找 ¥ 后的数字（可能含小数点）
+    t = raw.replace("\n", "").replace(" ", "")
     m = re.search(r"[¥￥]([\d,]+\.?\d*)", t)
     if not m:
-        # 无货币符号时，取第一个合理数字
         m = re.search(r"^([\d,]+\.?\d*)", re.sub(r"[^\d.,]", "", t))
     if m:
         try:
@@ -371,9 +611,9 @@ def _parse_price(text: str) -> Optional[float]:
 
 
 def _parse_monthly_sales(text: str) -> Optional[int]:
-    """解析月销量 / 全网销量：'全网1.5万+件' → 15000，'月销200' → 200。"""
     for pattern in (
         r"全网([\d.]+)万\+?件",
+        r"([\d.]+)万\+?件",
         r"月销[量售]*([\d.]+)万\+?件",
         r"月成交([\d.]+)万\+?",
         r"月销[量售]*([\d,]+)",
@@ -413,20 +653,76 @@ def _parse_moq(text: str) -> Optional[int]:
         m = re.search(pattern, text or "")
         if m:
             return int(m.group(1))
-    return 1  # 默认最小起订 1
+    return 1
 
 
 def _extract_supplier(text: str) -> Optional[str]:
-    """从卡片全文末尾提取供应商名（通常是最后一行非空文本）。"""
     lines = [l.strip() for l in (text or "").split("\n") if l.strip()]
-    # 找包含"公司"、"工厂"、"厂家"的行
     for line in reversed(lines):
         if any(k in line for k in ("公司", "工厂", "厂家", "有限", "店")):
             return line[:40]
-    # 没找到则取最后一行
     return lines[-1][:40] if lines else None
 
 
 def _profile_has_cookies() -> bool:
     cookies_file = _PROFILE_DIR / "Default" / "Cookies"
-    return cookies_file.exists() and cookies_file.stat().st_size > 10_000
+    return (
+        (_COOKIES_FILE.exists() and _COOKIES_FILE.stat().st_size > 1000)
+        or (cookies_file.exists() and cookies_file.stat().st_size > 10_000)
+    )
+
+
+def _dismiss_popups(page) -> int:
+    selectors = (
+        ".next-dialog-close",
+        ".next-overlay-close",
+        ".next-dialog-close-icon",
+        ".rax-dialog-close",
+        ".dialog-close",
+        ".modal-close",
+        ".close",
+        "[aria-label='close']",
+        "[aria-label='Close']",
+        "[title='关闭']",
+        "[title='close']",
+        "button:has-text('关闭')",
+        "button:has-text('我知道了')",
+        "button:has-text('知道了')",
+        "button:has-text('稍后再说')",
+        "text=关闭",
+        "text=我知道了",
+        "text=知道了",
+        "text=稍后再说",
+        "text=×",
+    )
+    clicked = 0
+    for _ in range(3):
+        did_click = False
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() == 0 or not loc.is_visible(timeout=300):
+                    continue
+                loc.click(timeout=1000)
+                clicked += 1
+                did_click = True
+                page.wait_for_timeout(500)
+                break
+            except Exception:
+                continue
+        if not did_click:
+            break
+
+    # Some 1688 overlays close on Escape even when the close button is hard to select.
+    if clicked == 0:
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(500)
+        except Exception:
+            pass
+    return clicked
+
+
+def _is_tmd_block(url: str, title: str = "") -> bool:
+    text = f"{url} {title}".lower()
+    return "_____tmd_____" in text or "punish" in text or "验证码拦截" in title

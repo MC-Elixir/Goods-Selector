@@ -30,6 +30,12 @@ CM_TO_IN = 0.393701
 KG_TO_OZ = 35.274
 
 
+class InsufficientCostEvidence(ValueError):
+    def __init__(self, fields: list[str]):
+        self.fields = fields
+        super().__init__("missing cost evidence: " + ",".join(fields))
+
+
 # ============================================================
 # DTO
 # ============================================================
@@ -89,6 +95,31 @@ def reload_profit_params() -> None:
 # 各项成本计算（纯函数，方便单测）
 # ============================================================
 
+def normalize_positive_number(value: object) -> Optional[float]:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(normalized) or normalized <= 0:
+        return None
+    return normalized
+
+
+def normalize_price_tier(tier: object) -> Optional[tuple[float, float]]:
+    if not isinstance(tier, dict):
+        return None
+    qty_value = normalize_positive_number(tier.get("min_qty", tier.get("qty")))
+    price_value = normalize_positive_number(tier.get("price_cny", tier.get("price")))
+    if qty_value is None or price_value is None:
+        return None
+    return qty_value, price_value
+
+
+def _missing_physical_fields(product) -> list[str]:
+    fields = ("weight_kg", "length_cm", "width_cm", "height_cm")
+    return [name for name in fields if getattr(product, name, None) is None]
+
+
 def calc_purchase_cost(supplier, batch_qty: int, params: dict) -> float:
     """采购成本（USD） = 1688 阶梯价 × 汇率。
 
@@ -97,25 +128,28 @@ def calc_purchase_cost(supplier, batch_qty: int, params: dict) -> float:
     """
     cny_to_usd: float = params["defaults"]["cny_to_usd"]
 
-    price_tiers: list = getattr(supplier, "price_tiers", None) or []
+    price_tiers = [
+        normalized
+        for tier in (getattr(supplier, "price_tiers", None) or [])
+        if (normalized := normalize_price_tier(tier)) is not None
+    ]
     price_cny: Optional[float] = None
 
     if price_tiers:
         # 按起订量升序，找 <= batch_qty 的最高档
-        eligible = [t for t in price_tiers if t.get("qty", 0) <= batch_qty]
+        eligible = [t for t in price_tiers if t[0] <= batch_qty]
         if eligible:
-            best = max(eligible, key=lambda t: t.get("qty", 0))
-            price_cny = best.get("price")
+            price_cny = max(eligible, key=lambda t: t[0])[1]
         else:
             # batch_qty 小于最低起订量，用最低档价
-            price_cny = min(price_tiers, key=lambda t: t.get("qty", 0)).get("price")
+            price_cny = min(price_tiers, key=lambda t: t[0])[1]
 
     if price_cny is None:
         price_cny = getattr(supplier, "base_price_cny", None)
 
-    if not price_cny:
-        logger.warning("supplier 无价格信息，采购成本返回 0")
-        return 0.0
+    price_cny = normalize_positive_number(price_cny)
+    if price_cny is None:
+        raise InsufficientCostEvidence(["purchase_price"])
 
     return float(price_cny) * cny_to_usd
 
@@ -129,10 +163,13 @@ def calc_shipping_cost(product, params: dict) -> float:
     method: str = shipping["default_method"]
     rate: dict = shipping["rates"][method]
 
-    weight_kg: float = getattr(product, "weight_kg", None) or 0.5
-    length_cm: float = getattr(product, "length_cm", None) or 0.0
-    width_cm: float = getattr(product, "width_cm", None) or 0.0
-    height_cm: float = getattr(product, "height_cm", None) or 0.0
+    missing = _missing_physical_fields(product)
+    if missing:
+        raise InsufficientCostEvidence(missing)
+    weight_kg: float = getattr(product, "weight_kg")
+    length_cm: float = getattr(product, "length_cm")
+    width_cm: float = getattr(product, "width_cm")
+    height_cm: float = getattr(product, "height_cm")
 
     divisor: float = shipping.get("volumetric_divisor", 6000)
     if length_cm and width_cm and height_cm:
@@ -149,10 +186,13 @@ def calc_fba_fee(product, params: dict) -> float:
     fba = params["fba"]
     tiers: dict = fba["fulfillment_fees"]
 
-    weight_kg: float = getattr(product, "weight_kg", None) or 0.5
-    length_cm: float = getattr(product, "length_cm", None) or 20.0
-    width_cm: float = getattr(product, "width_cm", None) or 15.0
-    height_cm: float = getattr(product, "height_cm", None) or 5.0
+    missing = _missing_physical_fields(product)
+    if missing:
+        raise InsufficientCostEvidence(missing)
+    weight_kg: float = getattr(product, "weight_kg")
+    length_cm: float = getattr(product, "length_cm")
+    width_cm: float = getattr(product, "width_cm")
+    height_cm: float = getattr(product, "height_cm")
 
     longest_in = max(length_cm, width_cm, height_cm) * CM_TO_IN
     weight_oz = weight_kg * KG_TO_OZ
@@ -207,7 +247,9 @@ def predict_profit(
     params = params or load_profit_params()
     batch_qty = batch_qty or params["sourcing"]["default_batch_qty"]
 
-    price: float = getattr(product, "price", None) or 0.0
+    price = normalize_positive_number(getattr(product, "price", None))
+    if price is None:
+        raise InsufficientCostEvidence(["selling_price"])
 
     purchase = calc_purchase_cost(supplier, batch_qty, params)
     shipping = calc_shipping_cost(product, params)

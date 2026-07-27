@@ -87,7 +87,7 @@ scoring_curves:
     bsr20_review_gt500_warning: 10     # ≥ 10 个高评论产品时，竞争门槛较高
 
   supply:
-    # 五因子：供应商数量 + 回头率 + MOQ + 交期 + FBA 经验
+    # 六因子：供应商数量 + 回头率 + MOQ + 交期 + FBA 经验 + 匹配质量
     # 来源：真实选品评分表开发调研部分（供应链可行性）
 
     min_suppliers: 3                   # 至少 3 家供应商才算稳
@@ -104,6 +104,10 @@ scoring_curves:
 
     # 初始资金门槛（MOQ × 采购价，小卖家现金流约束）
     initial_capital_max_cny: 50000     # 首单资金 > 5 万 CNY 扣分
+
+    # 匹配质量（来自 verifier 启发式验证）
+    match_quality_target: 0.6          # 平均匹配质量 >= 0.6 满分
+    match_quality_min: 0.25            # 低于此值的供应商已被 verifier 过滤
 
   logistics:
     # 三因子：体积重比 + 重量 / 尺寸 + 危险属性
@@ -138,6 +142,22 @@ scoring_curves:
       - "Health & Personal Care"       # FDA 风险
       - "Electronics > Car Electronics" # FCC 认证
 
+    # 标题/类目受限词：杀虫剂、药剂、液体诱饵等通常涉及合规/运输/平台限制
+    restricted_keyword_penalty: 0.25
+    restricted_keywords:
+      - "pesticide"
+      - "insecticide"
+      - "ant killer"
+      - "ant bait"
+      - "bait station"
+      - "liquid bait"
+      - "poison"
+      - "杀虫"
+      - "灭蚁"
+      - "蚂蚁药"
+      - "农药"
+      - "药剂"
+
     # 季节性风险（季节性强 → 库存压力大、资金回转慢）
     seasonality_cv_threshold: 0.4      # 月销售额变异系数 > 0.4 视为强季节性
     seasonality_penalty: 0.7           # 强季节性产品，风险得分 ×0.7
@@ -163,7 +183,38 @@ hard_filters:
   # 供应链
   max_moq: 500                         # MOQ > 500 淘汰（首单资金压力过大）
   min_supplier_count: 1                # 至少 1 家可用供应商
+  min_top_supplier_match_quality: 0.45 # top 供应商图文/参数综合匹配过低则淘汰
+  min_top_supplier_spec_score: 0.45    # top 供应商结构化参数匹配过低则淘汰
+  max_top_supplier_spec_conflicts: 0   # 有明确参数冲突时不进入正式候选
+  min_top_supplier_candidate_score: 0.45 # top 供应商综合候选分过低则淘汰
 
   # 品牌
   exclude_brand_listings: true         # 排除明显大牌 Listing
+  exclude_restricted_keywords: true    # 排除杀虫/药剂等受限合规风险品
   exclude_amazon_choice: false         # 是否排除 Amazon's Choice（默认不排除）
+
+# The four client categories are intentionally bulky. These curves prevent the
+# generic small-parcel 2kg/45cm profile from treating every valid outdoor item
+# as if its dimensions were erroneous. They affect ranking only; exact product
+# and manufacturer evidence remains a separate hard gate.
+target_category_profiles:
+  outdoor_storage:
+    logistics:
+      volumetric_ratio_max: 8.0
+      max_weight_kg: 100.0
+      max_longest_side_cm: 300
+  patio_heater:
+    logistics:
+      volumetric_ratio_max: 5.0
+      max_weight_kg: 80.0
+      max_longest_side_cm: 300
+  patio_furniture_sets:
+    logistics:
+      volumetric_ratio_max: 10.0
+      max_weight_kg: 250.0
+      max_longest_side_cm: 400
+  patio_umbrellas_shade:
+    logistics:
+      volumetric_ratio_max: 8.0
+      max_weight_kg: 50.0
+      max_longest_side_cm: 400

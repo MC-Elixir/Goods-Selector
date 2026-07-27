@@ -8,6 +8,7 @@ import pytest
 
 from analyzers import profit_model
 from analyzers.profit_model import (
+    InsufficientCostEvidence,
     ProfitBreakdown,
     calc_ad_cost,
     calc_commission,
@@ -118,6 +119,45 @@ def test_calc_purchase_cost_no_tiers_fallback():
     assert cost == pytest.approx(50.0 * cny_rate)
 
 
+def test_purchase_cost_requires_real_price():
+    params = profit_model.load_profit_params()
+    supplier = _MockSupplier(base_price_cny=None, price_tiers=[])
+    with pytest.raises(InsufficientCostEvidence, match="purchase_price"):
+        calc_purchase_cost(supplier, 200, params)
+
+
+def test_purchase_cost_accepts_extracted_tier_schema():
+    params = profit_model.load_profit_params()
+    supplier = _MockSupplier(
+        base_price_cny=None,
+        price_tiers=[{"min_qty": 100, "price_cny": 32.0}],
+    )
+    assert calc_purchase_cost(supplier, 200, params) == pytest.approx(
+        32.0 * params["defaults"]["cny_to_usd"]
+    )
+
+
+@pytest.mark.parametrize("invalid", ["nan", float("nan"), "inf", float("inf"), "-inf", float("-inf")])
+@pytest.mark.parametrize("field", ["min_qty", "price_cny"])
+def test_purchase_cost_rejects_nonfinite_tier_values(field, invalid):
+    params = profit_model.load_profit_params()
+    tier = {"min_qty": 10, "price_cny": 20}
+    tier[field] = invalid
+    supplier = _MockSupplier(base_price_cny=None, price_tiers=[tier])
+
+    with pytest.raises(InsufficientCostEvidence, match="purchase_price"):
+        calc_purchase_cost(supplier, 200, params)
+
+
+@pytest.mark.parametrize("invalid", ["nan", float("nan"), "inf", float("inf"), "-inf", float("-inf")])
+def test_purchase_cost_rejects_nonfinite_base_price(invalid):
+    params = profit_model.load_profit_params()
+    supplier = _MockSupplier(base_price_cny=invalid, price_tiers=[])
+
+    with pytest.raises(InsufficientCostEvidence, match="purchase_price"):
+        calc_purchase_cost(supplier, 200, params)
+
+
 # ============================================================
 # calc_shipping_cost
 # ============================================================
@@ -139,6 +179,14 @@ def test_calc_shipping_cost_uses_volumetric_when_larger():
     rate = params["shipping"]["rates"]["sea_lcl"]
     expected = rate["base_fee"] + rate["per_kg"] * 12.0
     assert cost == pytest.approx(expected)
+
+
+def test_shipping_requires_weight_and_dimensions():
+    params = profit_model.load_profit_params()
+    product = _MockProduct(weight_kg=None, length_cm=None, width_cm=None, height_cm=None)
+    with pytest.raises(InsufficientCostEvidence, match="weight_kg") as exc_info:
+        calc_shipping_cost(product, params)
+    assert exc_info.value.fields == ["weight_kg", "length_cm", "width_cm", "height_cm"]
 
 
 # ============================================================
@@ -164,6 +212,14 @@ def test_calc_fba_fee_large_product():
     assert calc_fba_fee(prod_medium_os, params) == pytest.approx(
         params["fba"]["fulfillment_fees"]["medium_oversize"]["fee_usd"]
     )
+
+
+def test_fba_fee_requires_weight_and_dimensions():
+    params = profit_model.load_profit_params()
+    product = _MockProduct(weight_kg=None, length_cm=None, width_cm=None, height_cm=None)
+    with pytest.raises(InsufficientCostEvidence) as exc_info:
+        calc_fba_fee(product, params)
+    assert exc_info.value.fields == ["weight_kg", "length_cm", "width_cm", "height_cm"]
 
 
 # ============================================================
@@ -222,3 +278,11 @@ def test_predict_profit_margin_reasonable():
     """标准小件产品利润率应在 -20% ~ 70% 之间。"""
     pb = predict_profit(_MockProduct(), _MockSupplier())
     assert -0.20 < pb.profit_margin < 0.70
+
+
+@pytest.mark.parametrize("price", [None, 0, float("nan"), float("inf")])
+def test_predict_profit_rejects_missing_or_invalid_selling_price(price):
+    product = _MockProduct(price=price)
+    with pytest.raises(InsufficientCostEvidence) as exc_info:
+        predict_profit(product, _MockSupplier())
+    assert exc_info.value.fields == ["selling_price"]

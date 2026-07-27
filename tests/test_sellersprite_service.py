@@ -1,0 +1,433 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from agent.sellersprite_models import SellerSpriteLocatorProfile
+from agent.sellersprite_service import (
+    SellerSpriteDependencies,
+    run_reverse_keyword_export,
+)
+from agent.tools.sellersprite_browser import SellerSpriteWorkflowError
+from agent.tools.sellersprite_importer import SellerSpriteImportError
+from config.settings import settings
+
+
+def test_dependencies_map_container_download_path_for_host_cli(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.sellersprite_service.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "agent.sellersprite_service.load_sellersprite_browser_config",
+        lambda *_args: SimpleNamespace(
+            enabled=True,
+            locator_profile_path="",
+            download_dir="/app/data/imports/sellersprite",
+        ),
+    )
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        session_factory=lambda: FakeSession(),
+        browser_enabled=True,
+    )
+
+    assert dependencies.download_dir == tmp_path / "data" / "imports" / "sellersprite"
+    expected = "\\\\wsl.localhost\\Ubuntu" + str(dependencies.download_dir).replace("/", "\\")
+    assert dependencies.browser_download_dir == expected
+
+
+def test_dependencies_use_explicit_windows_host_download_dir_in_wsl(monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    monkeypatch.setattr(
+        "agent.sellersprite_service.load_sellersprite_browser_config",
+        lambda *_args: SimpleNamespace(
+            enabled=True,
+            locator_profile_path="",
+            download_dir="/app/data/imports/sellersprite",
+            host_download_dir="/mnt/c/Users/dell/Downloads",
+        ),
+    )
+
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        session_factory=lambda: FakeSession(),
+        browser_enabled=True,
+    )
+
+    assert dependencies.download_dir == Path("/mnt/c/Users/dell/Downloads")
+    assert dependencies.browser_download_dir == "C:\\Users\\dell\\Downloads"
+
+
+def test_dotenv_host_download_dir_overrides_persisted_config_sentinel(
+    monkeypatch, tmp_path
+):
+    from agent.sellersprite_browser_config import load_sellersprite_browser_config
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "sellersprite_browser_config.json").write_text(
+        '{"enabled":true,"locator_profile_path":"/app/data/locators.json",'
+        '"download_dir":"/app/data/imports/sellersprite",'
+        '"host_download_dir":"configured"}',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR", raising=False)
+
+    class Settings:
+        sellersprite_browser_enabled = True
+        sellersprite_browser_locator_profile_path = ""
+        sellersprite_browser_download_dir = ""
+        sellersprite_browser_host_download_dir = "/mnt/c/Users/dell/Downloads"
+
+    config = load_sellersprite_browser_config(tmp_path, Settings())
+
+    assert config.host_download_dir == "/mnt/c/Users/dell/Downloads"
+
+
+def valid_profile() -> SellerSpriteLocatorProfile:
+    return SellerSpriteLocatorProfile(
+        panel_open="css=panel_open",
+        ready="css=ready",
+        login_required="css=login_required",
+        permission_required="css=permission_required",
+        captcha="css=captcha",
+        reverse_keywords="css=reverse_keywords",
+        asin_input="css=asin_input",
+        submit="css=submit",
+        results_ready="css=results_ready",
+        export_menu="css=export_menu",
+        export="css=export",
+    )
+
+
+@dataclass
+class FakeImported:
+    rows: list[dict[str, object]]
+    row_count: int
+    artifact: object
+
+
+class FakeSession:
+    def __init__(self, *, error_code: str | None = None, artifact: object | None = None) -> None:
+        self.error_code = error_code
+        self.artifact = artifact if artifact is not None else object()
+        self.opened: list[str] = []
+        self.checked = 0
+        self.exported = 0
+
+    def __enter__(self) -> "FakeSession":
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def open_amazon_product(self, asin: str) -> None:
+        self.opened.append(asin)
+        self._maybe_fail()
+
+    def check_sellersprite_extension(self) -> None:
+        self.checked += 1
+        self._maybe_fail()
+
+    def export_sellersprite_reverse_keywords(self, _asin: str) -> object:
+        self.exported += 1
+        self._maybe_fail()
+        return self.artifact
+
+    def _maybe_fail(self) -> None:
+        if self.error_code:
+            raise SellerSpriteWorkflowError(self.error_code)
+
+
+class ExportErrorSession(FakeSession):
+    def open_amazon_product(self, asin: str) -> None:
+        self.opened.append(asin)
+
+    def check_sellersprite_extension(self) -> None:
+        self.checked += 1
+
+    def export_sellersprite_reverse_keywords(self, _asin: str) -> object:
+        self.exported += 1
+        assert self.error_code is not None
+        raise SellerSpriteWorkflowError(self.error_code)
+
+
+class FakeRepository:
+    def __init__(self) -> None:
+        self.saved: list[FakeImported] = []
+
+    def save(self, imported: FakeImported) -> dict[str, str]:
+        self.saved.append(imported)
+        return {"id": "01234567-89ab-4def-8123-456789abcdef"}
+
+
+@pytest.fixture
+def fake_dependencies():
+    session = FakeSession()
+    repository = FakeRepository()
+    events: list[dict[str, object]] = []
+    imported = FakeImported(
+        rows=[
+            {"keyword": "umbrella", "search_volume": 1000},
+            {"keyword": "patio umbrella", "search_volume_lower_bound": 10_000},
+        ],
+        row_count=2,
+        artifact=type("Artifact", (), {"sha256": "a" * 64})(),
+    )
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        session_factory=lambda: session,
+        browser_enabled=True,
+        importer=lambda _context, _artifact: imported,
+        repository=repository,
+        event_recorder=lambda **event: events.append(event),
+        sleeper=lambda _seconds: None,
+        max_retries=1,
+    )
+    return dependencies, session, repository, events
+
+
+def test_workflow_opens_checks_exports_imports_and_persists(fake_dependencies):
+    dependencies, session, repository, events = fake_dependencies
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "SUCCESS"
+    assert session.opened == ["B00Q7OAN50"]
+    assert session.checked == 1
+    assert session.exported == 1
+    assert result.data["row_count"] == 2
+    assert result.data["file_sha256"] == "a" * 64
+    assert result.data["keyword_rows"] == [
+        {"keyword": "umbrella", "search_volume": 1000},
+        {"keyword": "patio umbrella", "search_volume_lower_bound": 10_000},
+    ]
+    assert repository.saved and events[-1]["event"] == "sellersprite_imported"
+
+
+def test_success_evidence_is_bounded_structured_and_does_not_expose_raw_payload(fake_dependencies):
+    dependencies, _session, _repository, _events = fake_dependencies
+    dependencies.importer = lambda _context, _artifact: FakeImported(
+        rows=[
+            {
+                "keyword": f"keyword {index}",
+                "search_volume": index,
+                "raw_payload": {"cookie": "secret"},
+                "untrusted_metric": "not-public",
+            }
+            for index in range(21)
+        ],
+        row_count=21,
+        artifact=type("Artifact", (), {"sha256": "b" * 64})(),
+    )
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "SUCCESS"
+    assert result.data["row_count"] == 21
+    assert result.data["file_sha256"] == "b" * 64
+    assert len(result.data["keyword_rows"]) == 20
+    assert result.data["keyword_rows"][0] == {"keyword": "keyword 0", "search_volume": 0}
+    assert all("raw_payload" not in row and "untrusted_metric" not in row for row in result.data["keyword_rows"])
+
+
+@pytest.mark.parametrize(
+    ("error_code", "status"),
+    [
+        ("SELLERSPRITE_LOGIN_REQUIRED", "NEEDS_HUMAN"),
+        ("SELLERSPRITE_PERMISSION_REQUIRED", "NEEDS_HUMAN"),
+        ("CAPTCHA", "NEEDS_HUMAN"),
+        ("ASIN_MISMATCH", "ASIN_MISMATCH"),
+        ("AMBIGUOUS_DOWNLOAD", "AMBIGUOUS_DOWNLOAD"),
+        ("INVALID_EXPORT", "INVALID_EXPORT"),
+        ("CANCELLED", "CANCELLED"),
+    ],
+)
+def test_terminal_errors_do_not_retry_or_persist(fake_dependencies, error_code, status):
+    dependencies, session, repository, _events = fake_dependencies
+    session.error_code = error_code
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == status
+    assert result.error_code == error_code
+    assert session.checked == 0 or session.checked == 1
+    assert session.exported == 0
+    assert repository.saved == []
+
+
+def test_absent_profile_never_constructs_or_guesses_browser_selector(fake_dependencies):
+    dependencies, session, _repository, _events = fake_dependencies
+    dependencies.profile = None
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "NEEDS_HUMAN"
+    assert result.error_code == "EXTENSION_UNAVAILABLE"
+    assert session.opened == []
+
+
+def test_disabled_browser_setting_blocks_even_injected_runnable_session(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.sellersprite_service.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(settings, "sellersprite_browser_enabled", False)
+    session = FakeSession()
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        session_factory=lambda: session,
+    )
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "NEEDS_HUMAN"
+    assert result.error_code == "EXTENSION_UNAVAILABLE"
+    assert session.opened == []
+
+
+def test_cancellation_after_navigation_stops_before_extension_check(fake_dependencies):
+    dependencies, session, repository, _events = fake_dependencies
+    cancelled = False
+
+    def is_cancelled() -> bool:
+        return cancelled
+
+    def cancel_after_open(asin: str) -> None:
+        nonlocal cancelled
+        session.opened.append(asin)
+        cancelled = True
+
+    session.open_amazon_product = cancel_after_open
+    dependencies.is_cancelled = is_cancelled
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "CANCELLED"
+    assert session.opened == ["B00Q7OAN50"]
+    assert session.checked == 0
+    assert session.exported == 0
+    assert repository.saved == []
+
+
+def test_export_event_is_recorded_before_repository_failure(fake_dependencies):
+    dependencies, session, _repository, events = fake_dependencies
+
+    def fail_save(_imported):
+        raise RuntimeError("database unavailable")
+
+    session.artifact = type("Artifact", (), {"sha256": "a" * 64})()
+    dependencies.repository = fail_save
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    exported = [event for event in events if event["event"] == "sellersprite_exported"]
+    assert result.status == "INTERNAL"
+    assert len(exported) == 1
+    assert exported[0]["payload"]["file_sha256"] == "a" * 64
+    assert events[-1]["event"] == "sellersprite_failed"
+
+
+@pytest.mark.parametrize(
+    "persisted",
+    [
+        {},
+        {"id": "not-a-uuid"},
+        {"id": "01234567-89AB-4DEF-8123-456789ABCDEF"},
+    ],
+    ids=["missing-id", "invalid-id", "non-canonical-id"],
+)
+def test_success_requires_a_canonical_persisted_manifest_id(fake_dependencies, persisted):
+    dependencies, _session, repository, events = fake_dependencies
+    dependencies.repository = lambda imported: (repository.saved.append(imported), persisted)[1]
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "INTERNAL"
+    assert result.error_code == "INTERNAL"
+    assert repository.saved
+    exported = [event for event in events if event["event"] == "sellersprite_exported"]
+    assert len(exported) == 1
+    assert exported[0]["payload"]["file_sha256"] == "a" * 64
+    assert not [event for event in events if event["event"] == "sellersprite_imported"]
+    assert events[-1]["event"] == "sellersprite_failed"
+
+
+def test_default_session_receives_dependency_cancellation_predicate(tmp_path):
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        browser_enabled=True,
+        download_dir=tmp_path,
+        is_cancelled=lambda: True,
+    )
+
+    session = dependencies._make_default_session()
+
+    with pytest.raises(SellerSpriteWorkflowError, match="CANCELLED"):
+        session.__enter__()
+
+
+def test_transient_export_failure_retries_once(fake_dependencies):
+    dependencies, _session, repository, _events = fake_dependencies
+    first = ExportErrorSession(error_code="EXPORT_FAILED")
+    second = FakeSession()
+    sessions = [first, second]
+    dependencies.session_factory = lambda: sessions.pop(0)
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "SUCCESS"
+    assert repository.saved
+    assert first.exported == 1 and second.exported == 1
+
+
+def test_download_timeout_retries_at_most_once(fake_dependencies):
+    dependencies, _session, repository, _events = fake_dependencies
+    sessions = [FakeSession(error_code="DOWNLOAD_TIMEOUT"), FakeSession()]
+    dependencies.session_factory = lambda: sessions.pop(0)
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "SUCCESS"
+    assert repository.saved
+    assert sessions == []
+
+
+def test_invalid_export_from_importer_is_not_persisted_or_retried(fake_dependencies):
+    dependencies, session, repository, _events = fake_dependencies
+
+    def invalid_importer(_context, _artifact):
+        raise SellerSpriteImportError("INVALID_EXPORT")
+
+    dependencies.importer = invalid_importer
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "INVALID_EXPORT"
+    assert result.error_code == "INVALID_EXPORT"
+    assert session.exported == 1
+    assert repository.saved == []
+
+
+def test_non_retryable_error_after_an_export_click_never_clicks_again(fake_dependencies):
+    dependencies, _session, repository, _events = fake_dependencies
+    first = ExportErrorSession(error_code="CAPTCHA")
+    second = FakeSession()
+    sessions = [first, second]
+    dependencies.session_factory = lambda: sessions.pop(0)
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "NEEDS_HUMAN"
+    assert result.error_code == "CAPTCHA"
+    assert first.exported == 1
+    assert len(sessions) == 1
+    assert repository.saved == []
+
+
+def test_cancellation_stops_before_browser_or_persistence(fake_dependencies):
+    dependencies, session, repository, _events = fake_dependencies
+    dependencies.is_cancelled = lambda: True
+
+    result = run_reverse_keyword_export("B00Q7OAN50", dependencies=dependencies)
+
+    assert result.status == "CANCELLED"
+    assert session.opened == []
+    assert repository.saved == []

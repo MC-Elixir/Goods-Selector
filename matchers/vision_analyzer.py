@@ -60,6 +60,14 @@ class ProductAnalysis:
     description_en: str = ""
 
 
+class ProductAnalysisError(RuntimeError):
+    """Safe structured-analysis failure with a stable non-sensitive code."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 # ============================================================
 # Prompt（与后端无关，通用）
 # ============================================================
@@ -88,6 +96,30 @@ _PROMPT = """\
 - keywords_zh 至少4个，从精准到宽泛排列，符合1688买家搜索习惯
 - 避免品牌词和型号词
 - 产品明显含电池、液体、强磁铁则将 has_dangerous_attr 设为 true\
+"""
+
+AMAZON_UNDERSTANDING_PROMPT_VERSION = "amazon-understanding-v1"
+
+_PRODUCT_UNDERSTANDING_PROMPT = """\
+你是跨境供应链产品分析器。综合下方 Amazon 英文文本证据和所有产品图片，识别产品本体，
+并严格输出一个 JSON 对象，不要输出 markdown 或解释。必须包含以下每个字段：
+asin, original_title_en, translated_title_cn, generic_product_name,
+supply_chain_name_cn, category, subcategory, function, material, components,
+package_quantity, dimensions_visible, target_user, use_case,
+replaceable_part_or_full_product, distinguishing_features,
+likely_supplier_keywords_cn, excluded_brand_tokens, uncertainty,
+model_provider, model_name, prompt_version。
+
+规则：
+- replaceable_part_or_full_product 必须明确选择 replacement、consumable、full_product、unknown 之一。
+- package_quantity 无法从文本或图片确认时填 null，不得猜测。
+- dimensions_visible 只记录文本明确给出或图片中清晰可见的尺寸；不得推断不可见尺寸。
+- uncertainty 必须明确列出证据不足、冲突或无法确认之处；没有则输出空数组。
+- 品牌和型号只能保留在 excluded_brand_tokens，绝不能出现在 likely_supplier_keywords_cn。
+- likely_supplier_keywords_cn 只写去品牌化的中文供应商检索词。
+- model_provider、model_name、prompt_version 可先输出任意字符串，调用方会用真实运行值覆盖。
+
+Amazon 文本证据：
 """
 
 Provider = Literal["ppio", "anthropic", "auto"]
@@ -147,6 +179,102 @@ class VisionAnalyzer:
         if self._cache is not None:
             self._cache.set(cache_key, result, expire=settings.cache_ttl_seconds)
         return result
+
+    def analyze_product(self, payload: dict) -> dict:
+        """Analyze combined Amazon text and up to five images into strict JSON."""
+        image_urls = payload.get("image_urls") or []
+        try:
+            image_bytes = [_download_image(url) for url in image_urls[:5]]
+        except Exception:
+            raise ProductAnalysisError("image_download_failure") from None
+        cache_key = self._product_cache_key(payload, image_bytes)
+        if self._cache is not None and cache_key in self._cache:
+            logger.debug(f"[vision] product cache hit {cache_key[:16]}")
+            return self._cache[cache_key]
+
+        result = self._call_product(payload, image_bytes)
+        result.update({
+            "model_provider": self._provider,
+            "model_name": self._model,
+            "prompt_version": AMAZON_UNDERSTANDING_PROMPT_VERSION,
+        })
+        if self._cache is not None:
+            self._cache.set(cache_key, result, expire=settings.cache_ttl_seconds)
+        return result
+
+    def _product_cache_key(self, payload: dict, images: list[bytes]) -> str:
+        text_payload = {key: value for key, value in payload.items() if key != "image_urls"}
+        normalized = json.dumps(
+            text_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+        )
+        identity = {
+            "prompt_version": AMAZON_UNDERSTANDING_PROMPT_VERSION,
+            "prompt_sha256": hashlib.sha256(
+                _PRODUCT_UNDERSTANDING_PROMPT.encode("utf-8")
+            ).hexdigest(),
+            "provider": self._provider,
+            "model": self._model,
+            "text": normalized,
+            "image_hashes": [hashlib.sha256(image).hexdigest() for image in images],
+        }
+        digest = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return "apu_" + digest
+
+    def _call_product(self, payload: dict, images: list[bytes]) -> dict:
+        prompt = _PRODUCT_UNDERSTANDING_PROMPT + json.dumps(
+            {key: value for key, value in payload.items() if key != "image_urls"},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        if self._provider == "ppio":
+            content = [self._openai_image_block(image) for image in images]
+            content.append({"type": "text", "text": prompt})
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._model,
+                    max_tokens=2048,
+                    messages=[{"role": "user", "content": content}],
+                )
+                response_text = response.choices[0].message.content
+            except Exception:
+                raise ProductAnalysisError("provider_failure") from None
+            return _parse_product_json(response_text)
+
+        content = [self._anthropic_image_block(image) for image in images]
+        content.append({"type": "text", "text": prompt})
+        try:
+            response = self._client.messages.create(
+                model=self._model,
+                max_tokens=2048,
+                messages=[{"role": "user", "content": content}],
+            )
+            response_text = response.content[0].text
+        except Exception:
+            raise ProductAnalysisError("provider_failure") from None
+        return _parse_product_json(response_text)
+
+    @staticmethod
+    def _openai_image_block(image: bytes) -> dict:
+        media_type = _detect_media_type(image)
+        encoded = base64.standard_b64encode(image).decode("utf-8")
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{encoded}"},
+        }
+
+    @staticmethod
+    def _anthropic_image_block(image: bytes) -> dict:
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": _detect_media_type(image),
+                "data": base64.standard_b64encode(image).decode("utf-8"),
+            },
+        }
 
     # --------------------------------------------------------
     def _call(self, image_bytes: bytes) -> ProductAnalysis:
@@ -214,7 +342,11 @@ class VisionAnalyzer:
             if not key:
                 raise ValueError("PPIO_API_KEY 未配置，请在 .env 中设置")
             self._model = self._model or settings.ppio_model
-            return _openai.OpenAI(api_key=key, base_url=base)
+            return _openai.OpenAI(
+                api_key=key,
+                base_url=base,
+                timeout=float(settings.llm_request_timeout_seconds),
+            )
 
         if self._provider == "anthropic":
             if not _HAS_ANTHROPIC:
@@ -223,7 +355,10 @@ class VisionAnalyzer:
             if not key:
                 raise ValueError("ANTHROPIC_API_KEY 未配置，请在 .env 中设置")
             self._model = self._model or settings.anthropic_model
-            return _anthropic.Anthropic(api_key=key)
+            return _anthropic.Anthropic(
+                api_key=key,
+                timeout=float(settings.llm_request_timeout_seconds),
+            )
 
         raise ValueError(f"未知 provider: {self._provider}，可选：ppio / anthropic")
 
@@ -256,6 +391,26 @@ def _parse_json_response(text: str) -> ProductAnalysis:
         has_dangerous_attr=bool(data.get("has_dangerous_attr", False)),
         description_en=data.get("description_en", ""),
     )
+
+
+def _parse_json_object(text: str) -> dict:
+    """Parse model JSON without filling, coercing, or defaulting schema fields."""
+    value = text.strip()
+    if "```" in value:
+        match = re.search(r"```(?:json)?\s*([\s\S]+?)```", value)
+        if match:
+            value = match.group(1).strip()
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError("model response must be a JSON object")
+    return parsed
+
+
+def _parse_product_json(text: str) -> dict:
+    try:
+        return _parse_json_object(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise ProductAnalysisError("json_parse_failure") from None
 
 
 def _download_image(url: str) -> bytes:

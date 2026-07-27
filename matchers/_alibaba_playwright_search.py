@@ -11,16 +11,30 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import random
 import re
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from matchers.alibaba_detail import BlockedOfferPage, parse_1688_offer_detail_html
+
+try:
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+except ImportError:  # Playwright is an optional runtime dependency for import-only users.
+    PlaywrightTimeoutError = TimeoutError
+
 logger = logging.getLogger(__name__)
 
 
-def search_by_keyword(keyword: str, limit: int = 10) -> list[dict[str, Any]]:
+def search_by_keyword(
+    keyword: str,
+    limit: int = 10,
+    *,
+    enrich_details: bool = False,
+    detail_jitter_range: tuple[float, float] = (1.5, 3.0),
+) -> list[dict[str, Any]]:
     """1688 关键词搜索，返回货源列表。
 
     Returns:
@@ -75,11 +89,77 @@ def search_by_keyword(keyword: str, limit: int = 10) -> list[dict[str, Any]]:
                 except Exception as e:
                     logger.debug("[1688-kw] parse error: %s", e)
 
+            if enrich_details and offers:
+                offers = enrich_offer_details(ctx, offers, jitter_range=detail_jitter_range)
+
         finally:
             browser.close()
 
     logger.info("[1688-kw] '%s' → %d offers", keyword, len(offers))
     return offers
+
+
+def enrich_offer_details(
+    context: Any,
+    offers: list[dict[str, Any]],
+    *,
+    jitter_range: tuple[float, float] = (1.5, 3.0),
+    sleep=time.sleep,
+    max_retries: int = 2,
+) -> list[dict[str, Any]]:
+    """Fetch verified details serially in an existing authenticated context.
+
+    Auth/captcha artifacts immediately become human-handoff records. Only
+    transient timeouts and rate-control pages are retried, and retries are
+    bounded. The input offer dictionaries remain compatible with search users.
+    """
+    page = context.new_page()
+    enriched: list[dict[str, Any]] = []
+    try:
+        for index, offer in enumerate(offers):
+            item = dict(offer)
+            url = item.get("url")
+            if not url:
+                enriched.append(item)
+                continue
+            if index:
+                sleep(random.uniform(*jitter_range))
+            for attempt in range(max_retries + 1):
+                try:
+                    page.goto(url, timeout=60_000, wait_until="domcontentloaded")
+                    detail = parse_1688_offer_detail_html(
+                        page.content(),
+                        expected_offer_id=str(item.get("offer_id") or "") or None,
+                        page_url=getattr(page, "url", None),
+                    )
+                    item["detail"] = detail
+                    item["detail_status"] = "extracted"
+                    break
+                except BlockedOfferPage as exc:
+                    if exc.error_code == "RATE_LIMITED" and attempt < max_retries:
+                        sleep(2 ** attempt)
+                        continue
+                    item.pop("detail", None)
+                    item["detail_status"] = (
+                        "human_handoff"
+                        if exc.error_code in {"AUTH_REQUIRED", "CAPTCHA"}
+                        else "blocked_invalid"
+                    )
+                    item["detail_error_code"] = exc.error_code
+                    item["detail_diagnostic"] = exc.diagnostic
+                    break
+                except (TimeoutError, PlaywrightTimeoutError) as exc:
+                    if attempt < max_retries:
+                        sleep(2 ** attempt)
+                        continue
+                    item["detail_status"] = "retry_exhausted"
+                    item["detail_error_code"] = "TIMEOUT"
+                    item["detail_diagnostic"] = str(exc)
+                    break
+            enriched.append(item)
+    finally:
+        page.close()
+    return enriched
 
 
 # ── 选择器 ────────────────────────────────────────────────
@@ -172,7 +252,7 @@ def _parse_offer(item) -> dict[str, Any] | None:
         offer_url = f"https:{offer_url}" if offer_url.startswith("//") else f"https://detail.1688.com{offer_url}"
 
     # 起订量
-    moq = 1
+    moq = None
     for sel in ["span[class*='moq']", "span[class*='minimum']", "span[class*='quantity']"]:
         el = item.query_selector(sel)
         if el:
@@ -181,7 +261,10 @@ def _parse_offer(item) -> dict[str, Any] | None:
                 moq = int(digits)
                 break
 
-    offer_id = hashlib.md5((title + (offer_url or "")).encode()).hexdigest()[:12]
+    id_match = re.search(r"/offer/(\d+)\.html", offer_url or "")
+    offer_id = id_match.group(1) if id_match else hashlib.md5(
+        (title + (offer_url or "")).encode()
+    ).hexdigest()[:12]
 
     return {
         "offer_id": offer_id,

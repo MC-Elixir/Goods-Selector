@@ -8,6 +8,7 @@ import pytest
 
 from analyzers import scorer
 from analyzers.scorer import (
+    ScoringEvidenceError,
     ScoreBreakdown,
     apply_hard_filters,
     load_weights_config,
@@ -59,6 +60,8 @@ class _MockSupplier:
 class _MockMarket:
     opportunity_score: float = 0.08
     search_volume_monthly: int = 3000
+    est_daily_sales: Optional[int] = 20
+    est_monthly_sales: Optional[int] = 600
     competing_listings: int = 60
     top10_revenue_share: float = 0.5
     seasonality: Optional[dict] = None
@@ -203,6 +206,10 @@ class TestScoreCompetition:
         for n, share in [(5, 0.3), (100, 0.6), (300, 0.9)]:
             assert 0.0 <= score_competition(n, share, c) <= 1.0
 
+    def test_missing_competition_data_is_not_best_competition(self):
+        with pytest.raises(ScoringEvidenceError, match="competition"):
+            score_competition(None, None, self._curve())
+
 
 # ============================================================
 # score_supply
@@ -211,8 +218,9 @@ class TestScoreSupply:
     def _curve(self):
         return load_weights_config()["scoring_curves"]["supply"]
 
-    def test_empty_suppliers_zero(self):
-        assert score_supply([], self._curve()) == 0.0
+    def test_empty_suppliers_are_insufficient(self):
+        with pytest.raises(ScoringEvidenceError, match="supply"):
+            score_supply([], self._curve())
 
     def test_good_suppliers_high_score(self):
         sups = [_MockSupplier() for _ in range(4)]
@@ -231,11 +239,75 @@ class TestScoreSupply:
         with_fba = [_MockSupplier(fba_ready=True)]
         assert score_supply(with_fba, c) >= score_supply(no_fba, c)
 
+    def test_factory_and_sales_improve_supply_score(self):
+        c = self._curve()
+        weak = [_MockSupplier(is_factory=False, monthly_sales=20, repeat_buyer_rate=0.05, fba_ready=False)]
+        strong = [_MockSupplier(is_factory=True, monthly_sales=3000, repeat_buyer_rate=0.45, fba_ready=False)]
+        assert score_supply(strong, c) > score_supply(weak, c)
+
     def test_output_in_range(self):
         c = self._curve()
         for n in [1, 3, 6]:
             s = score_supply([_MockSupplier() for _ in range(n)], c)
             assert 0.0 <= s <= 1.0
+
+    def test_missing_moq_is_insufficient_supply_evidence(self):
+        with pytest.raises(ScoringEvidenceError, match="moq"):
+            score_supply([_MockSupplier(moq=None)], self._curve())
+
+    def test_mock_supplier_is_not_supply_evidence(self):
+        supplier = _MockSupplier()
+        supplier.raw_data = {"source": "mock"}
+        with pytest.raises(ScoringEvidenceError, match="supply"):
+            score_supply([supplier], self._curve())
+
+    @pytest.mark.parametrize(
+        "price_tiers",
+        [
+            [{"min_qty": "broken", "price_cny": 20}],
+            [{"min_qty": 10, "price_cny": 0}],
+            [{"qty": 10, "price": -1}],
+        ],
+    )
+    def test_malformed_or_nonpositive_tiers_are_not_price_evidence(self, price_tiers):
+        supplier = _MockSupplier(base_price_cny=None)
+        supplier.price_tiers = price_tiers
+
+        with pytest.raises(ScoringEvidenceError) as exc_info:
+            score_supply([supplier], self._curve())
+
+        assert exc_info.value.fields == ["purchase_price"]
+
+    def test_price_and_moq_must_exist_on_the_same_supplier(self):
+        price_only = _MockSupplier(moq=None, base_price_cny=20)
+        moq_only = _MockSupplier(moq=20, base_price_cny=None)
+
+        with pytest.raises(ScoringEvidenceError) as exc_info:
+            score_supply([price_only, moq_only], self._curve())
+
+        assert exc_info.value.fields == ["purchase_price", "moq"]
+
+    @pytest.mark.parametrize("invalid", ["nan", float("nan"), "inf", float("inf"), "-inf", float("-inf")])
+    @pytest.mark.parametrize("field", ["min_qty", "price_cny"])
+    def test_nonfinite_tier_values_are_missing_purchase_price(self, field, invalid):
+        supplier = _MockSupplier(base_price_cny=None)
+        tier = {"min_qty": 10, "price_cny": 20}
+        tier[field] = invalid
+        supplier.price_tiers = [tier]
+
+        with pytest.raises(ScoringEvidenceError) as exc_info:
+            score_supply([supplier], self._curve())
+
+        assert exc_info.value.fields == ["purchase_price"]
+
+    @pytest.mark.parametrize("invalid", ["nan", float("nan"), "inf", float("inf"), "-inf", float("-inf")])
+    def test_nonfinite_base_price_is_missing_purchase_price(self, invalid):
+        supplier = _MockSupplier(base_price_cny=invalid)
+
+        with pytest.raises(ScoringEvidenceError) as exc_info:
+            score_supply([supplier], self._curve())
+
+        assert exc_info.value.fields == ["purchase_price"]
 
 
 # ============================================================
@@ -273,6 +345,11 @@ class TestScoreLogistics:
             s = score_logistics(w, l, wd, h, [], c)
             assert 0.0 <= s <= 1.0
 
+    def test_missing_physical_fields_is_insufficient_logistics_evidence(self):
+        with pytest.raises(ScoringEvidenceError, match="logistics") as exc_info:
+            score_logistics(None, None, None, None, [], self._curve())
+        assert exc_info.value.fields == ["weight_kg", "length_cm", "width_cm", "height_cm"]
+
 
 # ============================================================
 # score_risk
@@ -292,6 +369,15 @@ class TestScoreRisk:
     def test_cert_category_penalized(self):
         s = score_risk("Toys & Games > Infant Toys", "Generic", self._curve())
         assert s < 0.8
+
+    def test_restricted_keyword_penalized(self):
+        s = score_risk(
+            "Home & Kitchen",
+            "Generic",
+            self._curve(),
+            title="Liquid Ant Killer Bait Stations",
+        )
+        assert s < 0.4
 
     def test_seasonal_product_penalized(self):
         seasonal = {f"month_{i}": (100 if i in (11, 12) else 5) for i in range(1, 13)}
@@ -373,6 +459,60 @@ class TestApplyHardFilters:
         )
         assert len(reasons) >= 3
 
+    def test_low_top_supplier_match_rejected_when_available(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(), top_supplier_match_quality=0.20,
+        )
+        assert "supplier_match_too_low" in reasons
+
+    def test_top_supplier_spec_conflict_rejected_when_available(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(), top_supplier_spec_conflicts=["capacity"],
+        )
+        assert "supplier_spec_conflict" in reasons
+
+    def test_low_top_supplier_candidate_score_rejected_when_available(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(), top_supplier_candidate_score=0.20,
+        )
+        assert "supplier_candidate_too_low" in reasons
+
+    def test_restricted_keyword_rejected(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(),
+            product_title="TERRO Liquid Ant Killer Bait Stations",
+            product_category="Home & Kitchen",
+        )
+        assert "restricted_product" in reasons
+
+    def test_target_category_requires_strict_supplier_keep_decision(self):
+        _, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(),
+            target_category_id="patio_umbrellas_shade",
+            top_supplier_target_decision="manual_review",
+        )
+        assert "target_supplier_contract_not_passed" in reasons
+
+        passed, reasons = apply_hard_filters(
+            profit_margin=0.30, total_score=70,
+            moq=100, supplier_count=3, brand="Generic",
+            config=self._cfg(),
+            target_category_id="patio_umbrellas_shade",
+            top_supplier_target_decision="keep",
+        )
+        assert passed is True
+        assert reasons == []
+
 
 # ============================================================
 # score_product 集成
@@ -407,14 +547,108 @@ class TestScoreProduct:
         assert sb.passed_hard_filter is False
         assert "brand_excluded" in sb.rejection_reasons
 
-    def test_no_market_data_still_works(self):
+    def test_restricted_product_fails_filter(self):
+        sb = score_product(
+            product=_MockProduct(title="Liquid Ant Killer Bait Stations", price=24.99),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[_MockSupplier() for _ in range(3)],
+        )
+        assert sb.risk_score < 0.4
+        assert sb.passed_hard_filter is False
+        assert "restricted_product" in sb.rejection_reasons
+
+    def test_no_market_data_is_explicitly_insufficient(self):
+        with pytest.raises(ScoringEvidenceError, match="competition"):
+            score_product(
+                product=_MockProduct(),
+                profit_breakdown=_make_profit(0.25),
+                market_analysis=None,
+                suppliers=[_MockSupplier()],
+            )
+
+    def test_low_estimated_monthly_sales_rejected(self):
         sb = score_product(
             product=_MockProduct(),
-            profit_breakdown=_make_profit(0.25),
-            market_analysis=None,
-            suppliers=[_MockSupplier()],
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(est_monthly_sales=50, search_volume_monthly=10000),
+            suppliers=[_MockSupplier() for _ in range(3)],
         )
-        assert isinstance(sb, ScoreBreakdown)
+        assert sb.passed_hard_filter is False
+        assert "monthly_sales_too_low" in sb.rejection_reasons
+
+    def test_search_volume_does_not_count_as_monthly_sales(self):
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(est_monthly_sales=None, search_volume_monthly=50),
+            suppliers=[_MockSupplier() for _ in range(3)],
+        )
+        assert "monthly_sales_too_low" not in sb.rejection_reasons
+
+    def test_low_top_supplier_match_quality_rejected(self):
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.20
+        supplier.raw_data = {
+            "supplier_candidate_score": 0.80,
+            "spec_match": {"score": 0.90, "conflicts": []},
+        }
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, _MockSupplier(), _MockSupplier()],
+        )
+        assert sb.passed_hard_filter is False
+        assert "supplier_match_too_low" in sb.rejection_reasons
+
+    def test_top_supplier_spec_conflict_rejected(self):
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.80
+        supplier.raw_data = {
+            "supplier_candidate_score": 0.80,
+            "spec_match": {"score": 0.80, "conflicts": ["pack_count"]},
+        }
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, _MockSupplier(), _MockSupplier()],
+        )
+        assert sb.passed_hard_filter is False
+        assert "supplier_spec_conflict" in sb.rejection_reasons
+
+    def test_low_top_supplier_candidate_score_rejected(self):
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.80
+        supplier.raw_data = {
+            "supplier_candidate_score": 0.20,
+            "spec_match": {"score": 0.80, "conflicts": []},
+        }
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, _MockSupplier(), _MockSupplier()],
+        )
+        assert sb.passed_hard_filter is False
+        assert "supplier_candidate_too_low" in sb.rejection_reasons
+
+    def test_top_supplier_rank_score_overrides_legacy_candidate_score(self):
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.80
+        supplier.raw_data = {
+            "supplier_rank_score": 0.70,
+            "supplier_candidate_score": 0.20,
+            "spec_match": {"score": 0.80, "conflicts": []},
+        }
+        sb = score_product(
+            product=_MockProduct(),
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, _MockSupplier(), _MockSupplier()],
+        )
+        assert "supplier_candidate_too_low" not in sb.rejection_reasons
 
     def test_all_dimension_scores_in_range(self):
         sb = score_product(
@@ -426,3 +660,37 @@ class TestScoreProduct:
         for dim in (sb.profit_score, sb.demand_score, sb.competition_score,
                     sb.supply_score, sb.logistics_score, sb.risk_score):
             assert 0.0 <= dim <= 1.0
+
+    def test_bulky_target_category_uses_its_own_logistics_profile_and_hard_gate(self):
+        product = _MockProduct(
+            title="9 FT Market Patio Umbrella",
+            category="Patio Umbrellas & Shade",
+            weight_kg=18.0,
+            length_cm=180.0,
+            width_cm=35.0,
+            height_cm=35.0,
+        )
+        product.raw_data = {
+            "target_category_profile": {"category_id": "patio_umbrellas_shade"}
+        }
+        supplier = _MockSupplier()
+        supplier.match_quality_score = 0.9
+        supplier.raw_data = {
+            "supplier_candidate_score": 0.9,
+            "spec_match": {"score": 0.95, "conflicts": []},
+            "strict_match_evidence": {"decision": "keep"},
+        }
+
+        result = score_product(
+            product=product,
+            profit_breakdown=_make_profit(0.35),
+            market_analysis=_MockMarket(),
+            suppliers=[supplier, supplier, supplier],
+        )
+        generic = score_logistics(
+            18.0, 180.0, 35.0, 35.0, [],
+            load_weights_config()["scoring_curves"]["logistics"],
+        )
+
+        assert result.logistics_score > generic
+        assert "target_supplier_contract_not_passed" not in result.rejection_reasons

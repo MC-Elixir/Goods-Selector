@@ -112,7 +112,7 @@ class Alibaba1688TextSearch:
 
         logger.debug(f"[1688] search keyword={keyword!r}")
         resp = requests.post(
-            f"{self.gateway}{_SEARCH_METHOD}/",
+            f"{self.gateway}/{_SEARCH_METHOD}/",  # gateway 已 rstrip("/")，需补一个 /
             data=params,
             timeout=15,
         )
@@ -228,7 +228,8 @@ def _item_to_dto(item: dict) -> SupplierDTO:
         is_factory=bool(sup.get("isFactory", False)),
         delivery_days=None,       # 需调详情接口补充
         fba_ready=None,           # 需人工确认或详情接口
-        raw_data=item,
+        title_cn=subject or None,
+        raw_data={**item, "source": "alibaba_text_search"},
     )
 
 

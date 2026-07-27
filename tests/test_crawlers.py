@@ -6,17 +6,21 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from scrapling.parser import Adaptor
 
-from crawlers.amazon_bsr import ProductDTO, _resolve_backend, crawl_best_sellers
-from crawlers.amazon_playwright import (
-    AmazonPlaywrightScraper,
+from crawlers._amazon_extractors import (
     _parse_float,
     _parse_int,
-    _extract_dimensions,
+    extract_dimensions,
+    parse_bsr_page,
 )
-
-_parse_bsr_page = AmazonPlaywrightScraper._parse_bsr_page
+from crawlers._amazon_page import ScraplingPage
+from crawlers.amazon_bsr import ProductDTO, _resolve_backend, crawl_best_sellers
 from crawlers.amazon_rainforest import _rainforest_to_dto
+
+
+def _page(html: str) -> ScraplingPage:
+    return ScraplingPage(Adaptor(html))
 
 
 # ============================================================
@@ -29,11 +33,15 @@ class TestResolveBackend:
     def test_explicit_keepa(self):
         assert _resolve_backend("keepa") == "keepa"
 
-    def test_auto_no_keys_uses_playwright(self):
+    def test_auto_no_keys_uses_scrapling(self):
+        # "auto" 默认走 Scrapling（无需 Key，抗检测）
         with patch("crawlers.amazon_bsr.settings") as m:
             m.keepa_api_key = ""
             m.rainforest_api_key = ""
-            assert _resolve_backend("auto") == "playwright"
+            assert _resolve_backend("auto") == "scrapling"
+
+    def test_explicit_scrapling(self):
+        assert _resolve_backend("scrapling") == "scrapling"
 
     def test_auto_keepa_key_prefers_keepa(self):
         with patch("crawlers.amazon_bsr.settings") as m:
@@ -100,69 +108,58 @@ class TestParseInt:
 
 
 class TestParseBsrPage:
-    def _mock_page(self, hrefs: list[str]):
-        """构造一个返回指定 hrefs 的 mock page 对象。"""
-        page = MagicMock()
-        page.eval_on_selector_all.return_value = hrefs
-        return page
-
     def test_extracts_asins(self):
-        hrefs = [
-            "/dp/B0TEST0001/ref=zg_bs_1",
-            "/dp/B0TEST0002",
-            "/gp/something-else",
-        ]
-        asins = _parse_bsr_page(self._mock_page(hrefs))
+        html = """
+        <a href="/dp/B0TEST0001/ref=zg_bs_1">x</a>
+        <a href="/dp/B0TEST0002">x</a>
+        <a href="/gp/something-else">x</a>
+        """
+        asins = parse_bsr_page(_page(html))
         assert "B0TEST0001" in asins
         assert "B0TEST0002" in asins
         assert len(asins) == 2
 
     def test_deduplicates(self):
-        hrefs = ["/dp/B0TEST0001/ref=1", "/dp/B0TEST0001/ref=2"]
-        asins = _parse_bsr_page(self._mock_page(hrefs))
+        html = '<a href="/dp/B0TEST0001/ref=1">x</a><a href="/dp/B0TEST0001/ref=2">x</a>'
+        asins = parse_bsr_page(_page(html))
         assert asins.count("B0TEST0001") == 1
 
     def test_non_dp_hrefs_ignored(self):
-        hrefs = ["/gp/buy", "/Best-Sellers/", None, ""]
-        asins = _parse_bsr_page(self._mock_page(hrefs))
-        assert asins == []
-
-    def test_empty(self):
-        assert _parse_bsr_page(self._mock_page([])) == []
+        assert parse_bsr_page(_page("<html></html>")) == []
 
 
 class TestExtractDimensions:
-    def _mock_page(self, text: str):
-        page = MagicMock()
-        el = MagicMock()
-        el.inner_text.return_value = text
-        page.query_selector.return_value = el
-        return page
-
     def test_inches_converted_to_cm(self):
-        text = "Product Dimensions: 12 x 8 x 4 inches"
-        page = self._mock_page(text)
-        _, l, w, h = _extract_dimensions(page)
+        html = """
+        <table class="a-keyvalue prodDetTable">
+          <tr><th> Package Dimensions </th><td> 12 x 8 x 4 inches </td></tr>
+        </table>
+        """
+        _, l, w, h = extract_dimensions(_page(html))
         assert l == pytest.approx(12 * 2.54, rel=0.01)
         assert w == pytest.approx(8 * 2.54, rel=0.01)
         assert h == pytest.approx(4 * 2.54, rel=0.01)
 
     def test_pounds_converted_to_kg(self):
-        text = "Item Weight: 1.5 Pounds"
-        page = self._mock_page(text)
-        weight, _, _, _ = _extract_dimensions(page)
+        html = """
+        <table class="a-keyvalue prodDetTable">
+          <tr><th> Item Weight </th><td> 1.5 Pounds </td></tr>
+        </table>
+        """
+        weight, _, _, _ = extract_dimensions(_page(html))
         assert weight == pytest.approx(1.5 * 0.453592, rel=0.01)
 
     def test_kg_direct(self):
-        text = "Item Weight: 0.8 kilograms"
-        page = self._mock_page(text)
-        weight, _, _, _ = _extract_dimensions(page)
+        html = """
+        <table class="a-keyvalue prodDetTable">
+          <tr><th> Item Weight </th><td> 0.8 kilograms </td></tr>
+        </table>
+        """
+        weight, _, _, _ = extract_dimensions(_page(html))
         assert weight == pytest.approx(0.8)
 
     def test_no_data_returns_none(self):
-        page = MagicMock()
-        page.query_selector.return_value = None
-        w, l, wd, h = _extract_dimensions(page)
+        w, l, wd, h = extract_dimensions(_page("<html></html>"))
         assert all(v is None for v in (w, l, wd, h))
 
 

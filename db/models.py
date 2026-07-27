@@ -121,6 +121,15 @@ class Supplier(Base):
     repeat_buyer_rate: Mapped[Optional[float]] = mapped_column(Float)
     is_factory: Mapped[Optional[bool]] = mapped_column(Boolean)    # 实力商家 / 工厂
 
+    # ── 匹配验证相关 ──────────────────────────────────────
+    title_cn: Mapped[Optional[str]] = mapped_column(String(500))           # 1688 中文标题
+    product_dimensions_cm: Mapped[Optional[str]] = mapped_column(String(100))  # 规格尺寸
+    product_weight_g: Mapped[Optional[float]] = mapped_column(Float)           # 重量（克）
+    material: Mapped[Optional[str]] = mapped_column(String(100))               # 材质
+    color: Mapped[Optional[str]] = mapped_column(String(50))                   # 颜色
+    match_quality_score: Mapped[Optional[float]] = mapped_column(Float)        # 匹配质量 0-1
+    match_verification_method: Mapped[Optional[str]] = mapped_column(String(20))  # "heuristic"|"llm"|"unverified"
+
     matched_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
@@ -170,6 +179,8 @@ class ProfitSnapshot(Base):
     # 用了哪一版参数（便于回溯）
     params_version: Mapped[Optional[str]] = mapped_column(String(40))
     params_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Stable execution idempotency key. Legacy rows intentionally remain NULL.
+    result_key: Mapped[Optional[str]] = mapped_column(String(160), unique=True, index=True)
 
     snapshot_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
@@ -207,6 +218,8 @@ class Score(Base):
 
     weights_version: Mapped[Optional[str]] = mapped_column(String(40))
     weights_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Stable execution idempotency key. Legacy rows intentionally remain NULL.
+    result_key: Mapped[Optional[str]] = mapped_column(String(160), unique=True, index=True)
 
     scored_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
@@ -242,6 +255,8 @@ class MarketAnalysis(Base):
     seasonality: Mapped[Optional[dict]] = mapped_column(JSON)  # {"month_1": 0.8, ...}
 
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON)  # 原始返回保留
+    # Stable execution idempotency key. Legacy rows intentionally remain NULL.
+    result_key: Mapped[Optional[str]] = mapped_column(String(160), unique=True, index=True)
 
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
@@ -279,3 +294,171 @@ class RunLog(Base):
     status: Mapped[str] = mapped_column(String(20), default="running")
     # running | success | failed | aborted
     error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+
+# ============================================================
+# 7. RunEvent — Agent loop 事件流
+# ============================================================
+class RunEvent(Base):
+    __tablename__ = "run_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    job_id: Mapped[Optional[str]] = mapped_column(String(40), index=True)
+
+    event: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    stage: Mapped[Optional[str]] = mapped_column(String(40), index=True)
+    asin: Mapped[Optional[str]] = mapped_column(String(20), index=True)
+    message: Mapped[Optional[str]] = mapped_column(Text)
+    index: Mapped[Optional[int]] = mapped_column(Integer)
+    total: Mapped[Optional[int]] = mapped_column(Integer)
+    payload: Mapped[Optional[dict]] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+
+
+# ============================================================
+# 8. ExecutionNode — recoverable run/ASIN stage current state
+# ============================================================
+class ExecutionNode(Base):
+    __tablename__ = "execution_nodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("run_logs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    scope_type: Mapped[str] = mapped_column(String(12), nullable=False)
+    scope_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    stage: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    input_fingerprint: Mapped[Optional[str]] = mapped_column(String(64))
+    output_fingerprint: Mapped[Optional[str]] = mapped_column(String(64))
+    input_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
+    output_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
+    evidence_refs: Mapped[Optional[list]] = mapped_column(JSON)
+
+    worker_id: Mapped[Optional[str]] = mapped_column(String(120), index=True)
+    lease_token: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
+    timeout_seconds: Mapped[Optional[float]] = mapped_column(Float)
+
+    error_code: Mapped[Optional[str]] = mapped_column(String(120), index=True)
+    error_detail: Mapped[Optional[str]] = mapped_column(Text)
+    human_action_required: Mapped[Optional[dict]] = mapped_column(JSON)
+    resume_token: Mapped[Optional[str]] = mapped_column(String(64))
+
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    attempts: Mapped[list["ExecutionAttempt"]] = relationship(
+        back_populates="node", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "scope_type", "scope_key", "stage",
+            name="uq_execution_node_identity",
+        ),
+        Index("ix_execution_node_runnable", "status", "next_retry_at"),
+    )
+
+
+# ============================================================
+# 9. ExecutionAttempt — immutable execution attempt history
+# ============================================================
+class ExecutionAttempt(Base):
+    __tablename__ = "execution_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    node_id: Mapped[int] = mapped_column(
+        ForeignKey("execution_nodes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    worker_id: Mapped[Optional[str]] = mapped_column(String(120), index=True)
+    lease_token: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    input_fingerprint: Mapped[Optional[str]] = mapped_column(String(64))
+    output_fingerprint: Mapped[Optional[str]] = mapped_column(String(64))
+    input_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
+    output_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    error_code: Mapped[Optional[str]] = mapped_column(String(120), index=True)
+    error_detail: Mapped[Optional[str]] = mapped_column(Text)
+    finish_reason: Mapped[Optional[str]] = mapped_column(String(80), index=True)
+
+    node: Mapped[ExecutionNode] = relationship(back_populates="attempts")
+
+    __table_args__ = (
+        UniqueConstraint("node_id", "attempt_no", name="uq_execution_attempt_number"),
+    )
+
+
+# ============================================================
+# 10. ExecutionOperation — auditable manual/system operations
+# ============================================================
+class ExecutionOperation(Base):
+    __tablename__ = "execution_operations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("run_logs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    node_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("execution_nodes.id", ondelete="SET NULL"), index=True
+    )
+    operation: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    actor_type: Mapped[str] = mapped_column(String(40), nullable=False, default="system")
+    actor_ref: Mapped[Optional[str]] = mapped_column(String(120))
+    reason: Mapped[Optional[str]] = mapped_column(Text)
+    before_status: Mapped[Optional[str]] = mapped_column(String(24))
+    after_status: Mapped[Optional[str]] = mapped_column(String(24))
+    payload: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ============================================================
+# 11. ArtifactManifest — file-set integrity and recovery record
+# ============================================================
+class ArtifactManifest(Base):
+    __tablename__ = "artifact_manifests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("run_logs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    node_id: Mapped[int] = mapped_column(
+        ForeignKey("execution_nodes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    attempt_id: Mapped[int] = mapped_column(
+        ForeignKey("execution_attempts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    artifact_set_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    logical_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    artifact_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    temporary_path: Mapped[Optional[str]] = mapped_column(Text)
+    final_path: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="writing", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    committed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_set_id", "logical_name", name="uq_artifact_set_logical_name"
+        ),
+    )

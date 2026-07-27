@@ -50,6 +50,15 @@ class SupplierDTO:
     fba_ready: Optional[bool] = None       # 工厂是否支持 FBA 代发
     raw_data: dict = field(default_factory=dict)
 
+    # ── 匹配验证相关 ──────────────────────────────────────
+    title_cn: Optional[str] = None          # 1688 产品中文标题
+    product_dimensions_cm: Optional[str] = None  # 规格尺寸，如 "25x15x10"
+    product_weight_g: Optional[float] = None     # 重量（克）
+    material: Optional[str] = None               # 材质
+    color: Optional[str] = None                  # 颜色
+    match_quality_score: Optional[float] = None  # 匹配质量 0.0-1.0
+    match_verification_method: Optional[str] = None  # "heuristic"|"llm"|"unverified"
+
 
 # ============================================================
 # 签名工具

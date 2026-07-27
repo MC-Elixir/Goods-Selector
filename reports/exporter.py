@@ -12,13 +12,106 @@ candidates 为 PipelineRecord 列表（见 pipeline/orchestrator.py）。
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
 from config.settings import settings
+
+
+def _supplier_raw_score(supplier, key: str):
+    raw = getattr(supplier, "raw_data", None) if supplier else None
+    value = (raw or {}).get(key)
+    return round(float(value), 3) if value is not None else None
+
+
+def _display_score(value) -> str:
+    return "-" if value is None else f"{value:.3f}"
+
+
+def _raw_sourcing_payload(record) -> dict[str, Any]:
+    product = getattr(record, "product", None)
+    raw = getattr(product, "raw_data", None)
+    payload = (raw or {}).get("sourcing_evidence") if isinstance(raw, dict) else None
+    return payload if isinstance(payload, dict) else {}
+
+
+def _record_rejection_reasons(record) -> list[str]:
+    reasons = getattr(record, "rejection_reasons", None)
+    if not reasons:
+        score = getattr(record, "score", None)
+        reasons = getattr(score, "rejection_reasons", None) or []
+    recommendation = getattr(getattr(record, "sourcing_slice", None), "recommendation", None)
+    raw_recommendation = _raw_sourcing_payload(record).get("recommendation") or {}
+    evidence_reasons = (
+        getattr(recommendation, "rejection_reasons", None)
+        or raw_recommendation.get("rejection_reasons")
+        or []
+    )
+    return list(dict.fromkeys([*reasons, *evidence_reasons]))
+
+
+def _record_review_status(record) -> str:
+    reasons = _record_rejection_reasons(record)
+    score = getattr(record, "score", None)
+    if score is None and reasons:
+        return "insufficient_evidence"
+    if score is not None and getattr(score, "passed_hard_filter", False):
+        return "passed"
+    return "rejected"
+
+
+def _evidence_payload(record) -> dict[str, Any]:
+    slice_result = getattr(record, "sourcing_slice", None)
+    raw_payload = _raw_sourcing_payload(record)
+    if not slice_result and raw_payload:
+        recommendation = raw_payload.get("recommendation") or {}
+        return {
+            "schema_version": raw_payload.get("schema_version") or "target-sourcing-evidence-v1",
+            "run_ref": raw_payload.get("run_ref"),
+            "query_plan_and_hit_rates": raw_payload.get("query_attempts") or [],
+            "match_evidence": raw_payload.get("evaluated_matches") or [],
+            "recommendation_status": recommendation.get("status"),
+            "recommendation_reasons": recommendation.get("recommendation_reasons") or [],
+            "evidence_rejection_reasons": recommendation.get("rejection_reasons") or [],
+            "manual_verification_tasks": recommendation.get("manual_verification_tasks") or [],
+        }
+    recommendation = getattr(slice_result, "recommendation", None)
+    status = getattr(recommendation, "status", None)
+    status = getattr(status, "value", status)
+
+    def _model(value):
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        if is_dataclass(value):
+            return asdict(value)
+        return value
+
+    matches = []
+    if slice_result:
+        evaluated = getattr(slice_result, "evaluated_matches", None)
+        values = evaluated if evaluated is not None else [
+            *getattr(slice_result, "accepted_matches", []),
+            *getattr(slice_result, "rejected_matches", []),
+        ]
+        matches = [_model(item) for item in values]
+    return {
+        "schema_version": "2.0",
+        "run_ref": getattr(slice_result, "run_ref", None),
+        "query_plan_and_hit_rates": getattr(slice_result, "query_attempts", []),
+        "match_evidence": matches,
+        "recommendation_status": status,
+        "recommendation_reasons": list(getattr(recommendation, "recommendation_reasons", []) or []),
+        "evidence_rejection_reasons": list(getattr(recommendation, "rejection_reasons", []) or []),
+        "manual_verification_tasks": list(getattr(recommendation, "manual_verification_tasks", []) or []),
+    }
+
+
+def _json_cell(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 # ============================================================
@@ -50,7 +143,10 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
         "利润得分", "需求得分", "竞争得分", "供应得分", "物流得分", "风险得分",
         "采购成本($)", "头程($)", "FBA费($)", "佣金($)", "广告费($)", "退货损耗($)",
         "供应商数", "Top1供应商", "Top1货源链接", "Top1采购价(CNY)", "Top1 MOQ",
-        "通过筛选", "拒绝原因",
+        "Top1来源", "Top1视觉相似", "Top1匹配分", "Top1候选分", "Top1供应商质量分", "Top1业务条件分",
+        "通过筛选", "审核状态", "拒绝原因",
+        "Schema版本", "Run Ref", "查询计划与命中率", "匹配证据", "推荐状态",
+        "推荐原因", "证据拒绝原因", "人工核验任务",
     ]
 
     header_fill = PatternFill("solid", fgColor="1F4E79")
@@ -79,6 +175,14 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
         def _v(obj, attr, default=""):
             v = getattr(obj, attr, default)
             return v if v is not None else default
+
+        def _score(obj, attr):
+            value = getattr(obj, attr, None) if obj else None
+            return round(float(value), 3) if value is not None else ""
+
+        def _raw_score(obj, key):
+            value = _supplier_raw_score(obj, key)
+            return value if value is not None else ""
 
         row_data = [
             _v(p, "asin"),
@@ -109,9 +213,25 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
             _v(top_sup, "offer_url") if top_sup else "",
             _v(top_sup, "base_price_cny") if top_sup else "",
             _v(top_sup, "moq") if top_sup else "",
+            _supplier_source(top_sup),
+            _score(top_sup, "image_similarity"),
+            _score(top_sup, "match_quality_score"),
+            _raw_score(top_sup, "supplier_candidate_score"),
+            _raw_score(top_sup, "supplier_quality_score"),
+            _raw_score(top_sup, "supplier_business_score"),
             "✓" if passed else "✗",
-            ", ".join(sc.rejection_reasons) if sc else "",
+            _record_review_status(rec),
+            ", ".join(_record_rejection_reasons(rec)),
         ]
+        evidence = _evidence_payload(rec)
+        row_data.extend([
+            evidence["schema_version"], evidence["run_ref"],
+            _json_cell(evidence["query_plan_and_hit_rates"]),
+            _json_cell(evidence["match_evidence"]), evidence["recommendation_status"],
+            _json_cell(evidence["recommendation_reasons"]),
+            _json_cell(evidence["evidence_rejection_reasons"]),
+            _json_cell(evidence["manual_verification_tasks"]),
+        ])
 
         for col, val in enumerate(row_data, 1):
             cell = ws.cell(row=row_idx, column=col, value=val)
@@ -124,7 +244,9 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
                   10, 10, 10, 10, 10, 10,
                   10, 8, 8, 8, 8, 10,
                   8, 25, 40, 12, 8,
-                  8, 25]
+                  12, 10, 10, 10, 12, 12,
+                  8, 24, 25]
+    col_widths.extend([12, 18, 35, 35, 24, 30, 30, 30])
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -221,23 +343,30 @@ def export_markdown(candidates: list, output_dir: Optional[Path] = None) -> list
         img_url = getattr(p, "main_image_url", None)
         image_section = f"![{asin}]({img_url})" if img_url else ""
 
-        rejection_section = ""
-        if sc and sc.rejection_reasons:
+        rejection_section = f"> 审核状态：{_record_review_status(rec)}"
+        rejection_reasons = _record_rejection_reasons(rec)
+        if rejection_reasons:
             rejection_section = (
-                f"> ⚠️ 未通过硬性筛选：{', '.join(sc.rejection_reasons)}"
+                f"> 审核状态：{_record_review_status(rec)}\n> ⚠️ 未通过硬性筛选：{', '.join(rejection_reasons)}"
             )
 
         # 货源表格
-        sup_lines = ["| # | 供应商 | 货源链接 | 采购价(CNY) | MOQ | 月销 | 回头率 |",
-                     "|---|---|---|---|---|---|---|"]
+        sup_lines = [
+            "| # | 来源 | 供应商 | 货源链接 | 采购价(CNY) | MOQ | 月销 | 回头率 | 匹配分 | 候选分 | 供应商质量分 |",
+            "|---|---|---|---|---|---|---|---|---|---|---|",
+        ]
         for i, s in enumerate(sups[:5], 1):
             sup_lines.append(
-                f"| {i} | {getattr(s,'supplier_name','-')} "
+                f"| {i} | {_supplier_source(s)} "
+                f"| {getattr(s,'supplier_name','-')} "
                 f"| [{getattr(s,'alibaba_offer_id','-')}]({getattr(s,'offer_url','#')}) "
                 f"| {getattr(s,'base_price_cny','-')} "
                 f"| {getattr(s,'moq','-')} "
                 f"| {getattr(s,'monthly_sales','-')} "
-                f"| {getattr(s,'repeat_buyer_rate','-')} |"
+                f"| {getattr(s,'repeat_buyer_rate','-')} "
+                f"| {_display_score(getattr(s,'match_quality_score', None))} "
+                f"| {_display_score(_supplier_raw_score(s, 'supplier_candidate_score'))} "
+                f"| {_display_score(_supplier_raw_score(s, 'supplier_quality_score'))} |"
             )
 
         content = _MD_TEMPLATE.format(
@@ -274,6 +403,19 @@ def export_markdown(candidates: list, output_dir: Optional[Path] = None) -> list
             suppliers_section="\n".join(sup_lines),
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
+        evidence = _evidence_payload(rec)
+        evidence_section = (
+            "\n## 证据链\n\n"
+            f"- Schema version: `{evidence['schema_version']}`\n"
+            f"- Run ref: `{evidence['run_ref'] or '-'}`\n"
+            f"- Recommendation status: `{evidence['recommendation_status'] or '-'}`\n"
+            f"- Query plan and hit rates: `{_json_cell(evidence['query_plan_and_hit_rates'])}`\n"
+            f"- Match evidence: `{_json_cell(evidence['match_evidence'])}`\n"
+            f"- Recommendation reasons: `{_json_cell(evidence['recommendation_reasons'])}`\n"
+            f"- Rejection reasons: `{_json_cell(evidence['evidence_rejection_reasons'])}`\n"
+            f"- Manual verification tasks: `{_json_cell(evidence['manual_verification_tasks'])}`\n\n"
+        )
+        content = content.replace("\n---\n\n*生成时间", f"{evidence_section}\n---\n\n*生成时间")
 
         out = output_dir / f"{asin}.md"
         out.write_text(content, encoding="utf-8")
@@ -297,9 +439,14 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
         p = rec.product
         pb = rec.profit
         sc = rec.score
+        market = getattr(rec, "market", None)
         sups = rec.suppliers or []
+        raw = getattr(p, "raw_data", None) if p else None
+        raw = raw if isinstance(raw, dict) else {}
 
-        return {
+        payload = {
+            "review_status": _record_review_status(rec),
+            "rejection_reasons": _record_rejection_reasons(rec),
             "product": {
                 k: getattr(p, k, None)
                 for k in ("asin", "marketplace", "title", "brand", "category",
@@ -307,6 +454,12 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
                           "weight_kg", "length_cm", "width_cm", "height_cm",
                           "main_image_url", "listing_url")
             },
+            "source_mode": raw.get("source_mode"),
+            "source_query": raw.get("source_query") or raw.get("source_keyword") or raw.get("source_category"),
+            "source_keyword": raw.get("source_keyword"),
+            "keyword_normalized": raw.get("keyword_normalized"),
+            "source_rank": raw.get("source_rank"),
+            "source_warning": raw.get("keyword_warning"),
             "profit": {
                 "selling_price": pb.selling_price,
                 "purchase_cost": pb.purchase_cost,
@@ -330,16 +483,11 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
                 "passed_hard_filter": sc.passed_hard_filter,
                 "rejection_reasons": sc.rejection_reasons,
             } if sc else None,
-            "suppliers": [
-                {
-                    k: getattr(s, k, None)
-                    for k in ("alibaba_offer_id", "supplier_name", "offer_url",
-                              "base_price_cny", "moq", "monthly_sales",
-                              "repeat_buyer_rate", "is_factory", "delivery_days")
-                }
-                for s in sups[:10]
-            ],
+            "market": _market_payload(market),
+            "suppliers": [_supplier_payload(s) for s in sups[:10]],
         }
+        payload.update(_evidence_payload(rec))
+        return payload
 
     data = [_serialize(r) for r in candidates]
     output_path.write_text(
@@ -348,3 +496,74 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
     )
     logger.info(f"JSON 导出完成：{output_path}（{len(data)} 条）")
     return output_path
+
+
+def _supplier_payload(supplier) -> dict[str, Any]:
+    payload = {
+        k: getattr(supplier, k, None)
+        for k in ("alibaba_offer_id", "supplier_name", "offer_url",
+                  "base_price_cny", "moq", "monthly_sales",
+                  "repeat_buyer_rate", "is_factory", "delivery_days",
+                  "title_cn", "offer_image_url", "image_similarity",
+                  "match_quality_score",
+                  "match_verification_method", "raw_data")
+    }
+    payload["supplier_quality_score"] = _supplier_raw_score(supplier, "supplier_quality_score")
+    payload["supplier_business_score"] = _supplier_raw_score(supplier, "supplier_business_score")
+    payload["candidate_score"] = _supplier_raw_score(supplier, "supplier_candidate_score")
+    payload["sourcing_source"] = _supplier_source(supplier)
+    payload["invalid_for_decision"] = _supplier_invalid_for_decision(supplier)
+    return payload
+
+
+def _supplier_source(supplier) -> str:
+    if not supplier:
+        return ""
+    raw = getattr(supplier, "raw_data", None) or {}
+    source = getattr(supplier, "sourcing_source", None) or raw.get("source")
+    if source:
+        return str(source)
+    method = str(getattr(supplier, "match_verification_method", "") or "").lower()
+    if method == "mock":
+        return "mock"
+    return "unknown"
+
+
+def _supplier_invalid_for_decision(supplier) -> bool:
+    if not supplier:
+        return False
+    raw = getattr(supplier, "raw_data", None) or {}
+    source = _supplier_source(supplier).lower()
+    method = str(getattr(supplier, "match_verification_method", "") or "").lower()
+    name = str(getattr(supplier, "supplier_name", "") or "").lower()
+    offer_id = str(getattr(supplier, "alibaba_offer_id", "") or "")
+    return bool(
+        raw.get("invalid_for_decision")
+        or source == "mock"
+        or method == "mock"
+        or "mock" in name
+        or (offer_id and not offer_id.isdigit())
+    )
+
+
+def _market_payload(market) -> dict[str, Any] | None:
+    if not market:
+        return None
+    if is_dataclass(market):
+        data = asdict(market)
+    else:
+        keys = (
+            "asin", "marketplace", "brand", "seller_name", "title",
+            "bsr", "bsr_category", "est_daily_sales", "est_monthly_sales",
+            "price", "currency", "rating", "review_count", "available_date",
+            "has_a_plus", "is_best_seller", "is_amazon_choice",
+            "competing_listings", "avg_price_top10", "avg_review_count_top10",
+            "top10_revenue_share", "main_keyword", "search_volume_monthly",
+            "monthly_purchases", "purchase_rate", "keyword_difficulty",
+            "opportunity_score", "seasonality", "raw_data",
+        )
+        data = {key: getattr(market, key, None) for key in keys}
+    available = data.get("available_date")
+    if isinstance(available, datetime):
+        data["available_date"] = available.isoformat()
+    return {key: value for key, value in data.items() if value not in (None, "", [], {})}

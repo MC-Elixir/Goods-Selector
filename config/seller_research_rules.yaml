@@ -1,0 +1,196 @@
+# ============================================================
+# 卖家研究规则（可热加载，无需重启）
+# ------------------------------------------------------------
+# 用途：把卖家精灵「查竞品 / 选市场」导出的竞品级数据，按卖家聚合后，
+#       判定哪些卖家/产品更适合中小卖家研究参考。
+#
+# 判定链：先按 exclusions 硬性排除头部/垄断/数据不足的卖家，
+#         再对剩余卖家逐条匹配 categories（命中即归类），
+#         最后用 fit_score 给出 0–100 的综合适合度。
+#
+# 所有阈值均以真实导出证据为准；缺失字段不臆造，只影响可判定性。
+# version: 0.1.0
+# ============================================================
+
+version: "0.1.0"
+
+# ------------------------------------------------------------
+# 按卖家聚合的口径
+# ------------------------------------------------------------
+aggregation:
+  # 代表产品的选择口径：按月销售额（revenue）取该卖家最高的一条
+  representative_by: "monthly_revenue"
+  # 一个卖家至少要有多少条可用产品行才纳入统计（低于此值仍保留，标记数据薄弱）
+  min_rows_per_seller: 1
+
+# ------------------------------------------------------------
+# 硬性排除（命中任一即判定为不适合中小卖家参考，附排除原因）
+# ------------------------------------------------------------
+exclusions:
+  # 头部卖家：代表产品评论数过高，说明壁垒已建立，中小卖家难以正面竞争
+  head_seller_review_count: 5000
+  # 头部体量：卖家在该类目月销售额过高，属于成熟大卖
+  head_seller_monthly_revenue: 200000
+  # 品牌垄断：同一品牌在样本中出现占比过高时，视为品牌垄断类目
+  brand_monopoly_share: 0.35
+  # 品牌垄断触发所需的最小样本量（样本太小时占比不可靠，不触发）
+  brand_monopoly_min_samples: 8
+  # 数据不足：代表产品缺少这些关键字段时无法判定，直接排除并说明
+  require_fields:
+    - "monthly_sales"
+    - "price"
+
+# ------------------------------------------------------------
+# 适合类型（按顺序匹配，命中第一个即归类；均未命中则归 stable_niche）
+# ------------------------------------------------------------
+categories:
+
+  # 低竞争高效型：产品数少但销量不错 —— “少而精”，最值得中小卖家研究
+  low_competition_efficient:
+    label_zh: "低竞争高效型"
+    max_seller_product_count: 15      # 卖家在该类目在售商品数 <= 15
+    min_monthly_revenue: 5000         # 代表产品月销售额 >= $5000
+    min_monthly_sales: 150            # 代表产品月销量 >= 150
+
+  # 新品起量型：上架时间短、评论还不多、但已经跑出销量
+  new_rising:
+    label_zh: "新品起量型"
+    max_launch_months: 12             # 上架 <= 12 个月
+    max_review_count: 300             # 评论数 <= 300（尚未形成壁垒）
+    min_monthly_sales: 100            # 月销量 >= 100（已验证需求）
+
+  # 差异化切入型：评分有改进空间，说明现有产品有痛点可切入
+  differentiation_opportunity:
+    label_zh: "差异化切入型"
+    min_rating: 3.5                   # 评分下限（低于此值多为质量硬伤，不参考）
+    max_rating: 4.3                   # 评分 <= 4.3 视为“有改进空间”
+    min_monthly_sales: 120            # 仍需有真实需求
+    max_review_count: 1500
+
+  # 稳健利基型：兜底类别，指标平稳、体量适中，适合稳妥切入
+  stable_niche:
+    label_zh: "稳健利基型"
+    min_monthly_sales: 80
+
+# ------------------------------------------------------------
+# 综合适合度评分（0–100，越高越适合中小卖家）
+# 每个因子输出 0–1 的子分，加权求和后 ×100
+# 权重需加和 = 1.0（加载时校验）
+# ------------------------------------------------------------
+fit_score:
+  weights:
+    demand_proven: 0.30        # 需求已验证：月销量/销售额越高越好
+    low_competition: 0.30      # 竞争低：评论数越少、产品数越少越好
+    freshness: 0.20            # 新鲜度：上架越近越好（红海产品多为老链接）
+    differentiation_room: 0.20 # 差异化空间：评分越接近“有改进空间”越好
+
+  curves:
+    # 需求已验证：月销量达到 target 记满分
+    demand_monthly_sales_target: 500
+    # 竞争低：评论数 <= good 记高分，>= poor 记低分
+    competition_review_count_good: 200
+    competition_review_count_poor: 3000
+    # 竞争低：卖家产品数 <= good 记高分，>= poor 记低分
+    competition_product_count_good: 10
+    competition_product_count_poor: 60
+    # 新鲜度：上架 <= good 个月记满分，>= poor 个月记 0 分
+    freshness_launch_months_good: 6
+    freshness_launch_months_poor: 36
+    # 差异化空间：评分落在 [ideal_low, ideal_high] 记满分，越靠近 5.0 越低
+    differentiation_ideal_low: 3.8
+    differentiation_ideal_high: 4.3
+
+# ------------------------------------------------------------
+# 品类专属覆盖（深合并到基础规则之上）
+# ------------------------------------------------------------
+# 四个目标户外品类都是“客单价高、月销量低”的大件：一个庭院家具套装
+# 月销 40 件已是强卖家，用鸟屋那套 150+/月 的阈值会误杀。这里按品类
+# 下调销量门槛、上调头部体量与客单价预期。key 用 domain.target_categories
+# 的规范 id，服务层会用 classify_target_category 自动匹配。
+category_profiles:
+
+  outdoor_storage:            # Outdoor Storage（户外储物：甲板箱/储物棚/储物柜）
+    exclusions:
+      head_seller_review_count: 4000
+      head_seller_monthly_revenue: 300000
+    categories:
+      low_competition_efficient:
+        max_seller_product_count: 20
+        min_monthly_revenue: 8000
+        min_monthly_sales: 60
+      new_rising:
+        max_launch_months: 15
+        max_review_count: 250
+        min_monthly_sales: 40
+      differentiation_opportunity:
+        min_monthly_sales: 40
+      stable_niche:
+        min_monthly_sales: 25
+    fit_score:
+      curves:
+        demand_monthly_sales_target: 250
+
+  patio_heater:               # Patio Heater（户外取暖器：金字塔/蘑菇头/桌面）
+    exclusions:
+      head_seller_review_count: 3000
+      head_seller_monthly_revenue: 250000
+    categories:
+      low_competition_efficient:
+        max_seller_product_count: 15
+        min_monthly_revenue: 8000
+        min_monthly_sales: 40
+      new_rising:
+        max_launch_months: 15
+        max_review_count: 200
+        min_monthly_sales: 30
+      differentiation_opportunity:
+        min_monthly_sales: 30
+        max_review_count: 1200
+      stable_niche:
+        min_monthly_sales: 20
+    fit_score:
+      curves:
+        demand_monthly_sales_target: 180
+
+  patio_furniture_sets:       # Patio Furniture Sets（户外家具套装：客单价最高、量最低）
+    exclusions:
+      head_seller_review_count: 3000
+      head_seller_monthly_revenue: 400000
+    categories:
+      low_competition_efficient:
+        max_seller_product_count: 15
+        min_monthly_revenue: 15000
+        min_monthly_sales: 25
+      new_rising:
+        max_launch_months: 15
+        max_review_count: 200
+        min_monthly_sales: 20
+      differentiation_opportunity:
+        min_monthly_sales: 20
+        max_review_count: 1200
+      stable_niche:
+        min_monthly_sales: 12
+    fit_score:
+      curves:
+        demand_monthly_sales_target: 120
+
+  patio_umbrellas_shade:      # Patio Umbrellas & Shade（遮阳伞/遮阳帆/凉亭）
+    exclusions:
+      head_seller_review_count: 4000
+      head_seller_monthly_revenue: 300000
+    categories:
+      low_competition_efficient:
+        max_seller_product_count: 18
+        min_monthly_revenue: 8000
+        min_monthly_sales: 60
+      new_rising:
+        max_launch_months: 15
+        max_review_count: 250
+        min_monthly_sales: 40
+      differentiation_opportunity:
+        min_monthly_sales: 40
+      stable_niche:
+        min_monthly_sales: 25
+    fit_score:
+      curves:
+        demand_monthly_sales_target: 250

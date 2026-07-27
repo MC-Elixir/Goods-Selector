@@ -1,0 +1,225 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - heading "Amazon Selector" [level=1] [ref=e5]
+    - paragraph [ref=e6]: 7阶段选品流水线数据分析平台
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - generic [ref=e9]: 总产品数
+      - generic [ref=e10]: "3"
+      - generic [ref=e11]: 已分析
+    - generic [ref=e12]:
+      - generic [ref=e13]: 通过筛选
+      - generic [ref=e14]: "1"
+      - generic [ref=e15]: 33.3% 通过率
+    - generic [ref=e16]:
+      - generic [ref=e17]: 平均评分
+      - generic [ref=e18]: "51.2"
+      - generic [ref=e19]: 满分 100
+    - generic [ref=e20]:
+      - generic [ref=e21]: 平均利润率
+      - generic [ref=e22]: "-60.7%"
+      - generic [ref=e23]: 1 个盈利产品
+    - generic [ref=e24]:
+      - generic [ref=e25]: 供应商总数
+      - generic [ref=e26]: "30"
+      - generic [ref=e27]: 平均 10.0 个/产品
+  - generic [ref=e28]:
+    - generic [ref=e29]:
+      - generic [ref=e30]:
+        - heading "📊 产品排名" [level=2] [ref=e31]:
+          - generic [ref=e32]: 📊
+          - text: 产品排名
+        - button "导出数据" [ref=e34] [cursor=pointer]
+      - generic [ref=e35]:
+        - generic [ref=e36]:
+          - generic [ref=e37]: 筛选状态
+          - combobox [ref=e38]:
+            - option "全部" [selected]
+            - option "已通过"
+            - option "未通过"
+        - generic [ref=e39]:
+          - generic [ref=e40]: 排序方式
+          - combobox [ref=e41]:
+            - option "综合评分" [selected]
+            - option "净利润"
+            - option "售价"
+            - option "评论数"
+        - generic [ref=e42]:
+          - generic [ref=e43]: 搜索
+          - textbox "搜索产品名称或ASIN..." [ref=e44]
+      - table [ref=e46]:
+        - rowgroup [ref=e47]:
+          - row "评分 产品 售价 评分 利润 状态" [ref=e48]:
+            - columnheader "评分" [ref=e49] [cursor=pointer]
+            - columnheader "产品" [ref=e50] [cursor=pointer]
+            - columnheader "售价" [ref=e51] [cursor=pointer]
+            - columnheader "评分" [ref=e52] [cursor=pointer]
+            - columnheader "利润" [ref=e53] [cursor=pointer]
+            - columnheader "状态" [ref=e54] [cursor=pointer]
+        - rowgroup [ref=e55]:
+          - row "54.4 TERRO Ant Killer Bait Stations T300B - Liquid Bait to Eliminate Ants - Bait System - 12 Count Stations for Effective Indoor Ant Control TERRO Ant Killer Bait Stations T300B - Liquid Bait to Eliminate Ants - Bait System - 12 Count Stations for Effective Indoor Ant Control B00E4GACB8 $22.99 ★★★★½ 151.8k +$5.27 通过" [ref=e226] [cursor=pointer]:
+            - cell "54.4" [ref=e227]:
+              - generic [ref=e228]: "54.4"
+            - cell "TERRO Ant Killer Bait Stations T300B - Liquid Bait to Eliminate Ants - Bait System - 12 Count Stations for Effective Indoor Ant Control TERRO Ant Killer Bait Stations T300B - Liquid Bait to Eliminate Ants - Bait System - 12 Count Stations for Effective Indoor Ant Control B00E4GACB8" [ref=e229]:
+              - generic [ref=e230]:
+                - img "TERRO Ant Killer Bait Stations T300B - Liquid Bait to Eliminate Ants - Bait System - 12 Count Stations for Effective Indoor Ant Control" [ref=e231]
+                - generic [ref=e232]:
+                  - generic [ref=e233]: TERRO Ant Killer Bait Stations T300B - Liquid Bait to Eliminate Ants - Bait System - 12 Count Stations for Effective Indoor Ant Control
+                  - generic [ref=e234]: B00E4GACB8
+            - cell "$22.99" [ref=e235]
+            - cell "★★★★½ 151.8k" [ref=e236]:
+              - generic [ref=e237]:
+                - generic [ref=e238]: ★★★★½
+                - generic [ref=e239]: 151.8k
+            - cell "+$5.27" [ref=e240]:
+              - generic [ref=e242]: +$5.27
+            - cell "通过" [ref=e245]:
+              - generic [ref=e246]: 通过
+          - row "49.6 upsimples 11x14 Picture Frame, Display Pictures 8x10 with Mat or 11x14 Without Mat, Wall Hanging Photo Frame, Black, 1 Pack upsimples 11x14 Picture Frame, Display Pictures 8x10 with Mat or 11x14 Without Mat, Wall Hanging Photo Frame, Black, 1 Pack B0BQR2BQYZ $6.29 ★★★★½ 38.6k $-7.13 未通过" [ref=e248] [cursor=pointer]:
+            - cell "49.6" [ref=e249]:
+              - generic [ref=e250]: "49.6"
+            - cell "upsimples 11x14 Picture Frame, Display Pictures 8x10 with Mat or 11x14 Without Mat, Wall Hanging Photo Frame, Black, 1 Pack upsimples 11x14 Picture Frame, Display Pictures 8x10 with Mat or 11x14 Without Mat, Wall Hanging Photo Frame, Black, 1 Pack B0BQR2BQYZ" [ref=e251]:
+              - generic [ref=e252]:
+                - img "upsimples 11x14 Picture Frame, Display Pictures 8x10 with Mat or 11x14 Without Mat, Wall Hanging Photo Frame, Black, 1 Pack" [ref=e253]
+                - generic [ref=e254]:
+                  - generic [ref=e255]: upsimples 11x14 Picture Frame, Display Pictures 8x10 with Mat or 11x14 Without Mat, Wall Hanging Photo Frame, Black, 1 Pack
+                  - generic [ref=e256]: B0BQR2BQYZ
+            - cell "$6.29" [ref=e257]
+            - cell "★★★★½ 38.6k" [ref=e258]:
+              - generic [ref=e259]:
+                - generic [ref=e260]: ★★★★½
+                - generic [ref=e261]: 38.6k
+            - cell "$-7.13" [ref=e262]:
+              - generic [ref=e264]: $-7.13
+            - cell "未通过" [ref=e267]:
+              - generic [ref=e268]: 未通过
+          - row "49.7 Owala FreeSip Insulated Stainless Steel Water Bottle with Straw, BPA-Free Sports Water Bottle, Great for Travel, 24 Oz, Denim Owala FreeSip Insulated Stainless Steel Water Bottle with Straw, BPA-Free Sports Water Bottle, Great for Travel, 24 Oz, Denim B0BZYCJK89 $7.99 ★★★★½ 120.1k $-7.34 未通过" [ref=e270] [cursor=pointer]:
+            - cell "49.7" [ref=e271]:
+              - generic [ref=e272]: "49.7"
+            - cell "Owala FreeSip Insulated Stainless Steel Water Bottle with Straw, BPA-Free Sports Water Bottle, Great for Travel, 24 Oz, Denim Owala FreeSip Insulated Stainless Steel Water Bottle with Straw, BPA-Free Sports Water Bottle, Great for Travel, 24 Oz, Denim B0BZYCJK89" [ref=e273]:
+              - generic [ref=e274]:
+                - img "Owala FreeSip Insulated Stainless Steel Water Bottle with Straw, BPA-Free Sports Water Bottle, Great for Travel, 24 Oz, Denim" [ref=e275]
+                - generic [ref=e276]:
+                  - generic [ref=e277]: Owala FreeSip Insulated Stainless Steel Water Bottle with Straw, BPA-Free Sports Water Bottle, Great for Travel, 24 Oz, Denim
+                  - generic [ref=e278]: B0BZYCJK89
+            - cell "$7.99" [ref=e279]
+            - cell "★★★★½ 120.1k" [ref=e280]:
+              - generic [ref=e281]:
+                - generic [ref=e282]: ★★★★½
+                - generic [ref=e283]: 120.1k
+            - cell "$-7.34" [ref=e284]:
+              - generic [ref=e286]: $-7.34
+            - cell "未通过" [ref=e289]:
+              - generic [ref=e290]: 未通过
+    - complementary [ref=e123]:
+      - generic [ref=e292]:
+        - generic [ref=e293]:
+          - heading "📋 产品详情" [level=2] [ref=e294]:
+            - generic [ref=e295]: 📋
+            - text: 产品详情
+          - generic [ref=e296]: "49.6"
+        - generic [ref=e297]:
+          - img "upsimples 11x14 Picture Frame, Display Pictures 8x10 with Mat or 11x14 Without Mat, Wall Hanging Photo Frame, Black, 1 Pack" [ref=e298]
+          - generic [ref=e299]:
+            - generic [ref=e300]: upsimples 11x14 Picture Frame, Display Pictures 8x10 with Mat or 11x14 Without Mat, Wall Hanging Photo Frame, Black, 1 Pack
+            - generic [ref=e301]:
+              - generic [ref=e302]: 🏷️ B0BQR2BQYZ
+              - generic [ref=e303]: 💰 $6.29
+              - generic [ref=e304]: ⭐ 4.5
+              - generic [ref=e305]: 💬 38.6k
+        - link "查看 Amazon 链接 →" [ref=e307] [cursor=pointer]:
+          - /url: https://www.amazon.com/dp/B0BQR2BQYZ?language=en_US&currency=USD
+        - generic [ref=e308]:
+          - generic [ref=e309]: ⚠️ 未通过原因
+          - list [ref=e310]:
+            - listitem [ref=e311]: 利润率过低
+            - listitem [ref=e312]: 综合评分过低
+            - listitem [ref=e313]: 售价过低
+        - heading "评分维度" [level=3] [ref=e315]
+        - generic [ref=e318]:
+          - heading "利润明细" [level=3] [ref=e319]
+          - generic [ref=e320]:
+            - generic [ref=e321]:
+              - generic [ref=e322]: 售价
+              - generic [ref=e323]: +$6.29
+            - generic [ref=e324]:
+              - generic [ref=e325]: 采购成本
+              - generic [ref=e326]: $1.23
+            - generic [ref=e327]:
+              - generic [ref=e328]: 头程物流
+              - generic [ref=e329]: $4.80
+            - generic [ref=e330]:
+              - generic [ref=e331]: FBA 费用
+              - generic [ref=e332]: $5.95
+            - generic [ref=e333]:
+              - generic [ref=e334]: 平台佣金
+              - generic [ref=e335]: $0.94
+            - generic [ref=e336]:
+              - generic [ref=e337]: 广告费
+              - generic [ref=e338]: $0.31
+            - generic [ref=e339]:
+              - generic [ref=e340]: 退货损耗
+              - generic [ref=e341]: $0.11
+            - generic [ref=e342]:
+              - generic [ref=e343]: 汇率损耗
+              - generic [ref=e344]: $0.06
+            - generic [ref=e345]:
+              - generic [ref=e346]: 净利润
+              - generic [ref=e347]: $-7.13
+            - generic [ref=e348]:
+              - generic [ref=e349]: 利润率
+              - generic [ref=e350]: "-113.3%"
+        - generic [ref=e351]:
+          - heading "推荐货源 (Top 5)" [level=3] [ref=e352]
+          - generic [ref=e353]:
+            - 'link "1 潍坊科扬工艺品有限公司 回头率: 57% 月销: 11,000 MOQ: 1 ¥8.50" [ref=e354] [cursor=pointer]':
+              - /url: https://detail.1688.com/offer/795896256764.html
+              - generic [ref=e355]:
+                - generic [ref=e356]: "1"
+                - generic [ref=e357]:
+                  - generic [ref=e358]: 潍坊科扬工艺品有限公司
+                  - generic [ref=e359]:
+                    - generic [ref=e360]: "回头率: 57%"
+                    - generic [ref=e361]: "月销: 11,000"
+                    - generic [ref=e362]: "MOQ: 1"
+                - generic [ref=e363]: ¥8.50
+            - 'link "2 蓝途日用品（义乌）有限公司 回头率: 53% MOQ: 1 ¥0.73" [ref=e364] [cursor=pointer]':
+              - /url: https://detail.1688.com/offer/964297467397.html
+              - generic [ref=e365]:
+                - generic [ref=e366]: "2"
+                - generic [ref=e367]:
+                  - generic [ref=e368]: 蓝途日用品（义乌）有限公司
+                  - generic [ref=e369]:
+                    - generic [ref=e370]: "回头率: 53%"
+                    - generic [ref=e371]: "MOQ: 1"
+                - generic [ref=e372]: ¥0.73
+            - 'link "3 义乌市耳潮纸制品厂 回头率: 55% MOQ: 1 ¥1.90" [ref=e373] [cursor=pointer]':
+              - /url: https://detail.1688.com/offer/803367765374.html
+              - generic [ref=e374]:
+                - generic [ref=e375]: "3"
+                - generic [ref=e376]:
+                  - generic [ref=e377]: 义乌市耳潮纸制品厂
+                  - generic [ref=e378]:
+                    - generic [ref=e379]: "回头率: 55%"
+                    - generic [ref=e380]: "MOQ: 1"
+                - generic [ref=e381]: ¥1.90
+            - 'link "4 黑卡纸相框 纸质卡通相框批发 公司创意礼品纸画框批发 回头率: 57% MOQ: 1 ¥2.83" [ref=e382] [cursor=pointer]':
+              - /url: https://detail.1688.com/offer/555108646822.html
+              - generic [ref=e383]:
+                - generic [ref=e384]: "4"
+                - generic [ref=e385]:
+                  - generic [ref=e386]: 黑卡纸相框 纸质卡通相框批发 公司创意礼品纸画框批发
+                  - generic [ref=e387]:
+                    - generic [ref=e388]: "回头率: 57%"
+                    - generic [ref=e389]: "MOQ: 1"
+                - generic [ref=e390]: ¥2.83
+            - 'link "5 义乌市初凡工艺品有限公司 回头率: 47% MOQ: 1 ¥2.69" [ref=e391] [cursor=pointer]':
+              - /url: https://detail.1688.com/offer/1045992631337.html
+              - generic [ref=e392]:
+                - generic [ref=e393]: "5"
+                - generic [ref=e394]:
+                  - generic [ref=e395]: 义乌市初凡工艺品有限公司
+                  - generic [ref=e396]:
+                    - generic [ref=e397]: "回头率: 47%"
+                    - generic [ref=e398]: "MOQ: 1"
+                - generic [ref=e399]: ¥2.69
