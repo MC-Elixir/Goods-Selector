@@ -31,6 +31,27 @@ _REQUIRED_LOCATOR_NAMES = (
 _SUPPORTED_LOCATOR_PREFIXES = frozenset(
     {"css", "text", "role", "id", "name", "iframe", "shadow"}
 )
+# Optional locators keep older profiles compatible; each is validated only when
+# present.  The competitor_* group drives the «查竞品 / 选市场» export flow.
+_OPTIONAL_LOCATOR_NAMES = (
+    "quota_required",
+    "export_overflow",
+    "competitor_lookup",
+    "competitor_keyword_input",
+    "competitor_submit",
+    "competitor_results_ready",
+    "competitor_export_menu",
+    "competitor_export",
+    "competitor_export_overflow",
+)
+# The minimum locators required to run one competitor-products export.
+_COMPETITOR_REQUIRED_LOCATORS = (
+    "competitor_keyword_input",
+    "competitor_submit",
+    "competitor_results_ready",
+    "competitor_export_menu",
+    "competitor_export",
+)
 
 
 def _canonical_uuid(value: object, field_name: str) -> str:
@@ -108,6 +129,19 @@ class SellerSpriteLocatorProfile:
     # Responsive extension layouts hide the desktop footer actions behind an
     # explicit overflow button. Empty keeps older locator profiles compatible.
     export_overflow: str = ""
+    # Competitor / market export flow («查竞品 / 选市场»).  All optional so the
+    # reverse-keyword-only profiles remain valid; validated when provided.
+    competitor_lookup: str = ""
+    competitor_keyword_input: str = ""
+    competitor_submit: str = ""
+    competitor_results_ready: str = ""
+    competitor_export_menu: str = ""
+    competitor_export: str = ""
+    competitor_export_overflow: str = ""
+
+    def has_competitor_locators(self) -> bool:
+        """True when every locator required for a competitor export is present."""
+        return all(getattr(self, name, "") for name in _COMPETITOR_REQUIRED_LOCATORS)
 
     @classmethod
     def from_json(cls, path: Path) -> "SellerSpriteLocatorProfile":
@@ -131,30 +165,18 @@ class SellerSpriteLocatorProfile:
             ):
                 raise ValueError(f"locator '{name}' must use a supported locator syntax")
             locators[name] = value
-        quota_required = payload.get("quota_required", "")
-        if not isinstance(quota_required, str):
-            raise ValueError("locator 'quota_required' must be a string when provided")
-        if quota_required:
-            prefix, separator, payload_value = quota_required.partition("=")
-            if (
-                not separator
-                or prefix not in _SUPPORTED_LOCATOR_PREFIXES
-                or not payload_value.strip()
-            ):
-                raise ValueError("locator 'quota_required' must use a supported locator syntax")
-        export_overflow = payload.get("export_overflow", "")
-        if not isinstance(export_overflow, str):
-            raise ValueError("locator 'export_overflow' must be a string when provided")
-        if export_overflow:
-            prefix, separator, payload_value = export_overflow.partition("=")
-            if (
-                not separator
-                or prefix not in _SUPPORTED_LOCATOR_PREFIXES
-                or not payload_value.strip()
-            ):
-                raise ValueError("locator 'export_overflow' must use a supported locator syntax")
-        return cls(
-            **locators,
-            quota_required=quota_required,
-            export_overflow=export_overflow,
-        )
+        optional_locators: dict[str, str] = {}
+        for name in _OPTIONAL_LOCATOR_NAMES:
+            value = payload.get(name, "")
+            if not isinstance(value, str):
+                raise ValueError(f"locator '{name}' must be a string when provided")
+            if value:
+                prefix, separator, payload_value = value.partition("=")
+                if (
+                    not separator
+                    or prefix not in _SUPPORTED_LOCATOR_PREFIXES
+                    or not payload_value.strip()
+                ):
+                    raise ValueError(f"locator '{name}' must use a supported locator syntax")
+            optional_locators[name] = value
+        return cls(**locators, **optional_locators)

@@ -66,6 +66,10 @@ docker compose up -d --build amazon-selector
 WebUI 能做：
 
 - 运行前 preflight：检查 PPIO、Amazon cookies、1688 cookies、数据库、导出目录、1688 cooldown。
+- 当 Amazon/1688 cookies 缺失时，主动显示登录态补充卡：先尝试从用户授权的
+  9222 专用 Chrome 捕获站点 cookies；如尚未登录，则在该 Chrome 中打开登录页，
+  用户完成扫码/验证码后点击“已登录，保存并检查”即可原子写入 `data/` 并刷新
+  preflight。cookies 值不会返回浏览器前端。
 - 启动 sourcing agent run：填写 category / marketplace / limit，默认 No-Mock 模式，避免正式结果混入 mock 供应商。
 - 查看 Recent Runs：读取 `data/exports/candidates_*.json` / `.xlsx`。
 - 查看和搜索历史候选商品：按 ASIN、标题、供应商搜索，并下载对应 Excel。
@@ -91,6 +95,11 @@ Docker 中 `browser-use` 已内置，但它需要连接到一个已启用 remote
 ```bash
 BU_CDP_HTTP=http://host.docker.internal:9222
 ```
+
+Chrome 136+ 不再允许对默认用户目录启用 remote debugging，因此应启动一个专用、
+非默认 profile。WebUI 的 Settings → Dedicated Chrome on port 9222 会检测连通性，
+并提供 Windows/macOS/Linux 启动命令与一键复制。不要把 9222 暴露到公网或局域网；
+Agent 能访问这个专用 profile 中的页面、cookies 和登录态。
 
 系统会从 `${BU_CDP_HTTP}/json/version` 自动解析当前 `webSocketDebuggerUrl`，所以 Chrome 重启后通常不需要重新复制 `/devtools/browser/<id>`。`BU_CDP_WS=ws://.../devtools/browser/<id>` 仍可用于高级固定端点，但 browser id 可能随 Chrome 重启变化。
 

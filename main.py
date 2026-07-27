@@ -89,6 +89,72 @@ def smoke_run_cmd(
         raise click.exceptions.Exit(2)
 
 
+@cli.command("seller-research")
+@click.option("--file", "file_", required=True, help="卖家精灵「查竞品/选市场」导出的 CSV/XLSX；可用绝对路径或 data/imports 下的文件名")
+@click.option("--niche", default="", help="细分类目标签，如 'patio heater'")
+@click.option("--keyword", default="", help="关键词（用于自动识别目标品类）")
+@click.option(
+    "--category",
+    type=click.Choice(["outdoor_storage", "patio_heater", "patio_furniture_sets", "patio_umbrellas_shade"]),
+    default=None,
+    help="显式指定目标品类；不填则按 niche/keyword 自动识别",
+)
+@click.option("--marketplace", default="US", type=click.Choice(["US", "UK", "DE", "JP"]))
+@click.option("--no-ai", is_flag=True, default=False, help="跳过 AI 适合理由（仅用规则理由）")
+@click.option("--no-export", is_flag=True, default=False, help="只算不导出 Excel/JSON")
+def seller_research_cmd(
+    file_: str,
+    niche: str,
+    keyword: str,
+    category: str | None,
+    marketplace: str,
+    no_ai: bool,
+    no_export: bool,
+):
+    """从卖家精灵竞品导出生成中小卖家卖家清单（落库 + 导出 Excel/JSON）。"""
+    from pathlib import Path
+    from db.migrate import run_migrations
+    from db.session import engine
+    from agent.seller_research_service import run_seller_research_from_file
+
+    path = Path(file_)
+    if not path.is_file():
+        candidate = PROJECT_ROOT / "data" / "imports" / file_
+        if candidate.is_file():
+            path = candidate
+        else:
+            raise click.ClickException(f"找不到导出文件：{file_}（可放到 data/imports/ 下）")
+
+    run_migrations(engine)
+    payload = run_seller_research_from_file(
+        path,
+        niche_label=niche,
+        keyword=keyword,
+        marketplace=marketplace,
+        category=category,
+        engine=engine,
+        generate_ai_reasons=not no_ai,
+        export=not no_export,
+    )
+    summary = {
+        "run_id": payload.get("run_id"),
+        "niche_label": payload.get("niche_label"),
+        "category": payload.get("category"),
+        "ai_reasons": (payload.get("ai_reasons") or {}).get("status"),
+        "eligible": len(payload.get("items") or []),
+        "excluded": len(payload.get("excluded_items") or []),
+        "exports": {k: Path(v).name for k, v in (payload.get("exports") or {}).items()},
+    }
+    click.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    for index, item in enumerate(payload.get("items") or [], 1):
+        reason = item.get("ai_reason") or "；".join(item.get("fit_reasons") or [])
+        click.echo(
+            f"{index:>2}. {item['seller']} [{item['fit_category_label']}] "
+            f"score={item['fit_score']} 月销={item.get('monthly_sales')} "
+            f"月销售额=${item.get('monthly_revenue')} — {reason}"
+        )
+
+
 @cli.command("seller-sprite-check")
 @click.option("--asin", default="B01M16WBW1", help="用于 ASIN/竞品能力探针的 ASIN")
 @click.option("--marketplace", default="US", type=click.Choice(["US", "UK", "DE", "JP"]))

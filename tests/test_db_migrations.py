@@ -18,6 +18,7 @@ def test_migration_is_additive_idempotent_and_enables_foreign_keys(tmp_path):
         "0002_repair_evidence_semantics",
         "0003_sellersprite_browser_imports",
         "0004_recoverable_execution",
+        "0005_seller_research",
     ]
     assert run_migrations(engine) == []
     names = set(inspect(engine).get_table_names())
@@ -318,6 +319,7 @@ def test_legacy_0001_database_is_repaired_without_losing_history(tmp_path):
         "0002_repair_evidence_semantics",
         "0003_sellersprite_browser_imports",
         "0004_recoverable_execution",
+        "0005_seller_research",
     ]
     assert run_migrations(engine) == []
 

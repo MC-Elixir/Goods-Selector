@@ -178,6 +178,26 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("ASIN_MISMATCH")
         self._ensure_not_cancelled()
 
+    def open_sellersprite_page(self, url: str) -> None:
+        """Navigate to a SellerSprite web-app page for the competitor flow."""
+        target = (url or "").strip()
+        if not target:
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        self._ensure_not_cancelled()
+        try:
+            self.page.goto(
+                target,
+                wait_until="domcontentloaded",
+                timeout=self.page_timeout_seconds * 1000,
+            )
+            self.page.wait_for_timeout(3000)
+        except SellerSpriteWorkflowError:
+            raise
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+        self._ensure_not_cancelled()
+        self._raise_if_human_terminal()
+
     def check_sellersprite_extension(self) -> None:
         self._ensure_not_cancelled()
         if not _profile_is_valid(self.profile):
@@ -261,6 +281,71 @@ class PlaywrightSellerSpriteSession:
 
         self._raise_if_human_terminal()
         self._click_required("export")
+        self._ensure_not_cancelled()
+        return self.wait_for_browser_download(snapshot)
+
+    def export_competitor_products(self, keyword: str) -> DownloadedArtifact:
+        """Run exactly one profile-defined competitor/market export.
+
+        Mirrors the reverse-keyword export but starts from a keyword search on
+        the SellerSprite «查竞品 / 选市场» surface.  Selectors come only from the
+        human-validated competitor_* locators; none are discovered here.
+        """
+        keyword = (keyword or "").strip()
+        if not keyword:
+            raise SellerSpriteWorkflowError("INVALID_EXPORT")
+        if not self.profile.has_competitor_locators():
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+
+        self._ensure_not_cancelled()
+        self._raise_if_human_terminal()
+        if getattr(self.profile, "competitor_lookup", ""):
+            self._click_required("competitor_lookup")
+            self._raise_if_human_terminal()
+        self._fill_required("competitor_keyword_input", keyword)
+        self._click_required("competitor_submit")
+        self._raise_if_human_terminal()
+        results_timeout = max(int(self.page_timeout_seconds), int(self.export_timeout_seconds))
+        if not self._wait_until_visible("competitor_results_ready", timeout_seconds=results_timeout):
+            self._raise_if_human_terminal()
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        self._ensure_not_cancelled()
+
+        overflow_locator = getattr(self.profile, "competitor_export_overflow", "")
+        overflow_opened = False
+        if overflow_locator and self._is_visible("competitor_export_overflow"):
+            self._click_required("competitor_export_overflow")
+            overflow_opened = True
+        export_visible = self._wait_until_visible("competitor_export_menu", timeout_seconds=results_timeout)
+        if not export_visible and not overflow_opened and overflow_locator:
+            self._click_required("competitor_export_overflow")
+            export_visible = self._wait_until_visible(
+                "competitor_export_menu", timeout_seconds=int(self.page_timeout_seconds)
+            )
+        if not export_visible:
+            self._raise_if_human_terminal()
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+
+        self._ensure_not_cancelled()
+        self._raise_if_human_terminal()
+        self._configure_download_behavior()
+        self._ensure_not_cancelled()
+        direct_export = self.profile.competitor_export_menu == self.profile.competitor_export
+        if not direct_export:
+            self._click_required("competitor_export_menu")
+        self._ensure_not_cancelled()
+        try:
+            snapshot = self._download_observer.snapshot(self.download_dir)
+        except SellerSpriteWorkflowError:
+            raise
+        except DownloadError as exc:
+            raise SellerSpriteWorkflowError(exc.error_code) from exc
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("INVALID_EXPORT") from exc
+        self._ensure_not_cancelled()
+
+        self._raise_if_human_terminal()
+        self._click_required("competitor_export")
         self._ensure_not_cancelled()
         return self.wait_for_browser_download(snapshot)
 

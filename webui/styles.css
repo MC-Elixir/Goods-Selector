@@ -469,6 +469,48 @@ select:focus {
   background: var(--amber);
 }
 
+.session-setup-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid #f2c3c0;
+  border-radius: 10px;
+  background: #fff8f7;
+}
+
+.session-setup-panel p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.session-setup-items {
+  display: grid;
+  gap: 8px;
+}
+
+.session-setup-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.session-setup-item > span {
+  display: grid;
+  gap: 2px;
+}
+
+.session-setup-item small {
+  color: var(--muted);
+}
+
 .check.error .mark {
   background: var(--red);
 }
@@ -1894,6 +1936,89 @@ td {
   margin-bottom: 0.9rem;
 }
 
+.browser-readiness-card {
+  display: grid;
+  gap: 12px;
+  margin: 0 18px 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.browser-readiness-head,
+.browser-readiness-actions,
+.browser-command-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.browser-readiness-head h4 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.browser-readiness-head p,
+.browser-setup-guide p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.browser-setup-guide {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.browser-command-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.browser-command-tabs button {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: #fff;
+  cursor: pointer;
+}
+
+.browser-command-tabs button.active {
+  color: #fff;
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.browser-command-row code {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #0f172a;
+  background: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.browser-prerequisite {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .sellersprite-import-history {
   margin-top: 1rem;
   border-top: 1px solid var(--border);
@@ -2180,4 +2305,89 @@ pre {
   .spec-comparison-row small {
     justify-self: start;
   }
+}
+
+/* ============================================================
+   Market Research — seller shortlist
+   ============================================================ */
+.research-panel .research-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.research-summary {
+  margin: 8px 0 16px;
+}
+
+.research-summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.research-exports {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.research-results {
+  overflow-x: auto;
+}
+
+.research-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.research-table th,
+.research-table td {
+  border-bottom: 1px solid var(--hairline, #23252a);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.research-table thead th {
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--ink-subtle, #8a8f98);
+}
+
+.research-table.research-eligible tbody tr:hover {
+  background: rgba(94, 106, 210, 0.08);
+}
+
+.research-reason {
+  max-width: 320px;
+}
+
+.research-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: rgba(94, 106, 210, 0.16);
+  color: var(--primary, #5e6ad2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.research-excluded {
+  margin-top: 8px;
+}
+
+.research-excluded summary {
+  cursor: pointer;
+  color: var(--ink-subtle, #8a8f98);
+  margin-bottom: 8px;
+}
+
+.muted {
+  color: var(--ink-subtle, #8a8f98);
+  font-size: 13px;
 }

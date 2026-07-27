@@ -11,6 +11,7 @@ from agent.alibaba_diagnostics import (
 from agent.browser_agent import allowed_domains as browser_agent_allowed_domains
 from agent.browser_agent import browser_agent_available
 from agent.env_file import set_env_values
+from agent.preflight import check_seller_sprite_browser
 from agent.seller_sprite_diagnostics import (
     load_seller_sprite_diagnostic,
     save_seller_sprite_diagnostic,
@@ -32,11 +33,8 @@ def get_config_status() -> dict[str, Any]:
         and settings.alibaba_access_token
     )
     browser_config = load_sellersprite_browser_config(PROJECT_ROOT, settings)
-    browser_ready = bool(
-        browser_config.enabled
-        and browser_config.locator_profile_path
-        and browser_config.download_dir
-    )
+    browser_check = check_seller_sprite_browser()
+    browser_ready = browser_check.get("level") == "ok"
     return {
         "seller_sprite": {
             "configured": seller_sprite_configured,
@@ -82,6 +80,8 @@ def get_config_status() -> dict[str, Any]:
         "seller_sprite_browser": {
             "enabled": browser_config.enabled,
             "status": "ready" if browser_ready else "disabled" if not browser_config.enabled else "unavailable",
+            "readiness_label": str(browser_check.get("label") or ""),
+            "readiness_detail": str(browser_check.get("detail") or ""),
             "locator_profile_configured": bool(browser_config.locator_profile_path),
             "download_dir_configured": bool(browser_config.download_dir),
             "host_download_dir_configured": bool(browser_config.host_download_dir),

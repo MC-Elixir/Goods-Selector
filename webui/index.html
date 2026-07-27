@@ -25,6 +25,10 @@
             <span class="icon">▦</span>
             <span data-i18n="nav.results">Results Library</span>
           </button>
+          <button class="nav-item" data-section="research">
+            <span class="icon">◎</span>
+            <span data-i18n="nav.research">Market Research</span>
+          </button>
           <button class="nav-item" data-section="settings">
             <span class="icon">⚙</span>
             <span data-i18n="nav.settings">Settings</span>
@@ -136,6 +140,14 @@
                   <h3 data-i18n="preflight.title">Preflight Checklist</h3>
                   <span id="preflightBadge" class="badge muted">Checking</span>
                 </div>
+                <section class="session-setup-panel hidden" id="sessionSetupPanel" aria-labelledby="sessionSetupTitle">
+                  <div>
+                    <strong id="sessionSetupTitle" data-i18n="session.title">Complete browser sessions</strong>
+                    <p data-i18n="session.subtitle">The agent can open the login page and securely save site-scoped cookies after you finish login.</p>
+                  </div>
+                  <div class="session-setup-items" id="sessionSetupItems" aria-live="polite"></div>
+                  <small id="sessionSetupStatus" role="status" aria-live="polite"></small>
+                </section>
                 <div id="preflightList" class="check-list"></div>
               </div>
               <div class="ready-card" id="readyCard">
@@ -238,6 +250,32 @@
               </div>
             </div>
             <p class="sellersprite-browser-capability" id="sellerSpriteBrowserCapability" role="status" aria-live="polite"></p>
+            <section class="browser-readiness-card" aria-labelledby="browserReadinessTitle">
+              <div class="browser-readiness-head">
+                <div>
+                  <h4 id="browserReadinessTitle" data-i18n="browserSetup.title">Dedicated Chrome on port 9222</h4>
+                  <p id="browserSetupDetail">Checking Chrome remote debugging…</p>
+                </div>
+                <span class="badge muted" id="browserSetupBadge" data-i18n="preflight.checking">Checking</span>
+              </div>
+              <div class="browser-readiness-actions">
+                <button class="ghost-button" id="checkBrowserSetupButton" type="button" data-i18n="browserSetup.check">Check 9222</button>
+                <button class="link-button" id="toggleBrowserGuideButton" type="button" aria-expanded="false" data-i18n="browserSetup.guide">Setup guide</button>
+              </div>
+              <div class="browser-setup-guide hidden" id="browserSetupGuide">
+                <p data-i18n="browserSetup.profileNote">Chrome 136+ requires a non-default user data directory. Use this dedicated profile only for Amazon, 1688, and SellerSprite automation.</p>
+                <div class="browser-command-tabs" role="group" aria-label="Operating system">
+                  <button class="active" type="button" data-browser-os="windows">Windows</button>
+                  <button type="button" data-browser-os="macos">macOS</button>
+                  <button type="button" data-browser-os="linux">Linux</button>
+                </div>
+                <div class="browser-command-row">
+                  <code id="browserLaunchCommand"></code>
+                  <button class="ghost-button" id="copyBrowserCommandButton" type="button" data-i18n="browserSetup.copy">Copy command</button>
+                </div>
+                <small data-i18n="browserSetup.security">Keep port 9222 local. The agent can access pages and login sessions in this dedicated profile.</small>
+              </div>
+            </section>
             <form class="settings-config-form sellersprite-browser-config-form" id="sellerSpriteBrowserConfigForm">
               <label>
                 <span>Locator profile</span>
@@ -403,6 +441,95 @@
             <h3 data-i18n="settings.promptTitle">Runtime Prompt</h3>
           </div>
           <pre id="promptBox"></pre>
+        </section>
+        <section class="panel research-panel" id="researchSection" style="display:none">
+          <div class="panel-head">
+            <div>
+              <h2 data-i18n="research.title">Market Research — Seller Shortlist</h2>
+              <p data-i18n="research.subtitle">Turn a SellerSprite competitor export into a small-seller-friendly shortlist: seller, representative product, price, rating, reviews, launch date, monthly sales/revenue, and the fit reason.</p>
+            </div>
+          </div>
+          <div class="research-cards">
+            <section class="sellersprite-keyword-card">
+              <div class="sellersprite-keyword-card-head">
+                <div>
+                  <h3 data-i18n="research.import.title">Analyze a competitor export</h3>
+                  <p data-i18n="research.import.subtitle">Place the SellerSprite «查竞品 / 选市场» CSV/XLSX under data/imports, then enter its file name.</p>
+                </div>
+              </div>
+              <form class="settings-config-form" id="researchImportForm">
+                <label>
+                  <span data-i18n="research.niche">Niche label</span>
+                  <input name="niche_label" autocomplete="off" placeholder="patio heater">
+                </label>
+                <label>
+                  <span data-i18n="research.category">Target category</span>
+                  <select name="category">
+                    <option value="auto" data-i18n="research.categoryAuto">Auto-detect</option>
+                    <option value="outdoor_storage">Outdoor Storage</option>
+                    <option value="patio_heater">Patio Heater</option>
+                    <option value="patio_furniture_sets">Patio Furniture Sets</option>
+                    <option value="patio_umbrellas_shade">Patio Umbrellas &amp; Shade</option>
+                  </select>
+                </label>
+                <label>
+                  <span data-i18n="research.keyword">Keyword</span>
+                  <input name="keyword" autocomplete="off" placeholder="patio heater">
+                </label>
+                <label>
+                  <span data-i18n="research.file">Export file name</span>
+                  <input name="file" autocomplete="off" placeholder="patio_heater_competitors.csv" required>
+                </label>
+                <label class="checkbox-label">
+                  <input name="generate_ai_reasons" type="checkbox" checked>
+                  <span data-i18n="research.aiReasons">Generate AI fit reasons (falls back to rules)</span>
+                </label>
+                <button class="primary-button" type="submit" data-i18n="research.analyze">Build shortlist</button>
+                <small id="researchImportStatus" role="status" aria-live="polite"></small>
+              </form>
+            </section>
+            <section class="sellersprite-keyword-card">
+              <div class="sellersprite-keyword-card-head">
+                <div>
+                  <h3 data-i18n="research.browser.title">Or drive the browser export</h3>
+                  <p data-i18n="research.browser.subtitle">Requires the SellerSprite browser flow with competitor_* locators configured.</p>
+                </div>
+              </div>
+              <form class="settings-config-form" id="researchBrowserForm">
+                <p class="browser-prerequisite" id="researchBrowserPrerequisite" role="status" aria-live="polite"></p>
+                <label>
+                  <span data-i18n="research.keyword">Keyword</span>
+                  <input name="keyword" autocomplete="off" placeholder="patio heater" required>
+                </label>
+                <label>
+                  <span data-i18n="research.niche">Niche label</span>
+                  <input name="niche_label" autocomplete="off" placeholder="patio heater">
+                </label>
+                <label>
+                  <span data-i18n="research.category">Target category</span>
+                  <select name="category">
+                    <option value="auto" data-i18n="research.categoryAuto">Auto-detect</option>
+                    <option value="outdoor_storage">Outdoor Storage</option>
+                    <option value="patio_heater">Patio Heater</option>
+                    <option value="patio_furniture_sets">Patio Furniture Sets</option>
+                    <option value="patio_umbrellas_shade">Patio Umbrellas &amp; Shade</option>
+                  </select>
+                </label>
+                <label>
+                  <span data-i18n="research.url">SellerSprite page URL (optional)</span>
+                  <input name="sellersprite_url" autocomplete="off" placeholder="https://www.sellersprite.com/...">
+                </label>
+                <button class="ghost-button" type="submit" data-i18n="research.runBrowser">Run browser export</button>
+                <small id="researchBrowserStatus" role="status" aria-live="polite"></small>
+              </form>
+            </section>
+          </div>
+          <div class="research-summary" id="researchSummary" aria-live="polite"></div>
+          <div class="research-results" id="researchResults" aria-live="polite"></div>
+          <section class="sellersprite-import-history">
+            <h4 data-i18n="research.history">Recent research runs</h4>
+            <div id="researchHistory" aria-live="polite"></div>
+          </section>
         </section>
       </main>
     </div>

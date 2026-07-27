@@ -94,6 +94,12 @@ def test_browser_readiness_is_independent_of_mjjl_api_key(monkeypatch):
     monkeypatch.setattr(settings, "sellersprite_browser_export_timeout_seconds", 120)
     monkeypatch.setattr(settings, "sellersprite_browser_min_interval_seconds", 5)
     monkeypatch.setattr(settings, "sellersprite_browser_max_retries", 1)
+    monkeypatch.setattr(config_status_module, "check_seller_sprite_browser", lambda: {
+        "key": "seller_sprite_browser",
+        "label": "SellerSprite browser ready",
+        "detail": "Chrome CDP, locator profile, and download directory verified",
+        "level": "ok",
+    })
 
     status = get_config_status()
 
@@ -101,6 +107,8 @@ def test_browser_readiness_is_independent_of_mjjl_api_key(monkeypatch):
     assert browser == {
         "enabled": True,
         "status": "ready",
+        "readiness_label": "SellerSprite browser ready",
+        "readiness_detail": "Chrome CDP, locator profile, and download directory verified",
         "locator_profile_configured": True,
         "download_dir_configured": True,
         "host_download_dir_configured": True,
@@ -130,6 +138,12 @@ def test_browser_configuration_persists_only_project_local_safe_state(monkeypatc
         "export": "css=#export",
     }), encoding="utf-8")
     monkeypatch.setattr(config_status_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(config_status_module, "check_seller_sprite_browser", lambda: {
+        "key": "seller_sprite_browser",
+        "label": "SellerSprite browser ready",
+        "detail": "Chrome CDP, locator profile, and download directory verified",
+        "level": "ok",
+    })
 
     result = config_status_module.configure_sellersprite_browser(
         locator_profile_path="/app/data/live-locators.json",

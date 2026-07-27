@@ -16,6 +16,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from agent.categories import canonical_category, list_categories
 from agent.browser_agent import run_browser_task
+from agent.browser_setup import (
+    capture_browser_cookies,
+    get_browser_setup_status,
+    open_login_page,
+)
 from agent.chat_tools import answer_chat
 from agent.config_status import (
     check_alibaba_pifatuan,
@@ -31,6 +36,7 @@ from agent.manual_queue import list_manual_queue, update_manual_item
 from agent.review_decisions import set_supplier_review
 from agent.runner import AGENT_SYSTEM_PROMPT, AgentRuntime
 from agent.run_events import list_run_events
+from agent.seller_research_service import run_competitor_export, run_seller_research_from_file
 from agent.state import AgentRunConfig
 from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
 from agent.sellersprite_models import SellerSpriteResult
@@ -38,6 +44,7 @@ from agent.sellersprite_policy import validate_sellersprite_asin
 from agent.sellersprite_service import run_reverse_keyword_export
 from agent.sellersprite_batch import run_reverse_keyword_batch
 from db.sellersprite_repository import list_sellersprite_imports
+from db.seller_research_repository import get_seller_research_run, list_seller_research_runs
 from db.session import engine as db_engine
 from config.settings import settings
 from crawlers.amazon_search import keyword_preview, normalize_keyword
@@ -71,6 +78,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             return self._json(self.runtime.preflight())
         if parsed.path == "/api/config/status":
             return self._json(get_config_status())
+        if parsed.path == "/api/browser-setup/status":
+            return self._json(get_browser_setup_status())
         if parsed.path == "/api/categories":
             return self._json({"marketplace": "US", "categories": list_categories()})
         if parsed.path == "/api/keyword-preview":
@@ -133,6 +142,17 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             except (TypeError, ValueError):
                 return self._json({"error": "limit must be an integer"}, HTTPStatus.BAD_REQUEST)
             return self._json({"items": list_sellersprite_imports(db_engine, limit=limit)})
+        if parsed.path == "/api/seller-research/lists":
+            raw_limit = (parse_qs(parsed.query).get("limit") or [20])[0]
+            try:
+                limit = int(raw_limit)
+            except (TypeError, ValueError):
+                return self._json({"error": "limit must be an integer"}, HTTPStatus.BAD_REQUEST)
+            return self._json({"items": list_seller_research_runs(db_engine, limit=limit)})
+        if parsed.path.startswith("/api/seller-research/lists/"):
+            run_id = unquote(parsed.path.rsplit("/", 1)[-1])
+            run = get_seller_research_run(db_engine, run_id)
+            return self._json(run or {"error": "not found"}, HTTPStatus.OK if run else HTTPStatus.NOT_FOUND)
         if parsed.path == "/api/prompt":
             return self._json({"system_prompt": AGENT_SYSTEM_PROMPT})
         if parsed.path.startswith("/api/exports/"):
@@ -168,10 +188,22 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/browser-agent":
                 status, payload = _handle_browser_agent_request(body)
                 return self._json(payload, status)
+            if parsed.path == "/api/browser-setup":
+                action = str(body.get("action") or "").strip()
+                site = str(body.get("site") or "").strip().lower()
+                if action == "open_login":
+                    return self._json(open_login_page(site))
+                if action == "save_cookies":
+                    return self._json(capture_browser_cookies(site))
+                raise ValueError("action must be open_login or save_cookies")
             if parsed.path == "/api/sellersprite/reverse-keywords":
                 return self._json(_handle_sellersprite_reverse_keyword_request(body))
             if parsed.path == "/api/sellersprite/reverse-keywords-batch":
                 return self._json(_handle_sellersprite_reverse_keyword_batch_request(body))
+            if parsed.path == "/api/seller-research/import":
+                return self._json(_handle_seller_research_import(body))
+            if parsed.path == "/api/seller-research/browser-export":
+                return self._json(_handle_seller_research_browser_export(body))
             if parsed.path == "/api/sellersprite/browser-config":
                 enabled = body.get("enabled")
                 if not isinstance(enabled, bool):
@@ -430,6 +462,82 @@ def _handle_sellersprite_reverse_keyword_batch_request(body: dict) -> dict:
             "stop_reason": batch.stop_reason,
         },
     }
+
+
+def _handle_seller_research_import(body: dict) -> dict:
+    """Analyze one already-downloaded SellerSprite competitor export file."""
+    filename = str(body.get("file") or body.get("filename") or "").strip()
+    if not filename:
+        raise ValueError("file is required (place the export under data/imports)")
+    path = _resolve_seller_research_import(filename)
+    if path is None:
+        raise ValueError("import file not found under data/imports or data/imports/sellersprite")
+    payload = run_seller_research_from_file(
+        path,
+        niche_label=str(body.get("niche_label") or "").strip(),
+        keyword=str(body.get("keyword") or "").strip(),
+        marketplace=str(body.get("marketplace") or "US").strip().upper() or "US",
+        category=_optional_target_category(body.get("category")),
+        engine=db_engine,
+        generate_ai_reasons=_bool_default(body.get("generate_ai_reasons"), True),
+        export=True,
+    )
+    return _seller_research_public_payload(payload)
+
+
+def _handle_seller_research_browser_export(body: dict) -> dict:
+    """Drive the SellerSprite browser competitor export, then build the shortlist."""
+    keyword = str(body.get("keyword") or "").strip()
+    if not keyword:
+        raise ValueError("keyword is required")
+    payload = run_competitor_export(
+        keyword,
+        niche_label=str(body.get("niche_label") or "").strip(),
+        marketplace=str(body.get("marketplace") or "US").strip().upper() or "US",
+        category=_optional_target_category(body.get("category")),
+        sellersprite_url=str(body.get("sellersprite_url") or "").strip(),
+        engine=db_engine,
+        generate_ai_reasons=_bool_default(body.get("generate_ai_reasons"), True),
+        export=True,
+    )
+    return _seller_research_public_payload(payload)
+
+
+_TARGET_CATEGORY_IDS = frozenset(
+    {"outdoor_storage", "patio_heater", "patio_furniture_sets", "patio_umbrellas_shade"}
+)
+
+
+def _optional_target_category(value: object) -> str | None:
+    if value in (None, "", "auto"):
+        return None
+    if not isinstance(value, str) or value not in _TARGET_CATEGORY_IDS:
+        raise ValueError("category must be one of the four target category ids")
+    return value
+
+
+def _resolve_seller_research_import(filename: str) -> Path | None:
+    safe_name = Path(unquote(filename)).name
+    if not safe_name:
+        return None
+    import_dir = settings.sellersprite_import_dir
+    for base in (import_dir, import_dir.parent):
+        candidate = base / safe_name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _seller_research_public_payload(payload: dict) -> dict:
+    """Expose export files as download basenames served by /api/exports/."""
+    safe = dict(payload)
+    exports = payload.get("exports") or {}
+    safe["exports"] = {kind: Path(str(value)).name for kind, value in exports.items()}
+    return safe
+
+
+def _bool_default(value: object, default: bool) -> bool:
+    return default if value is None else bool(value)
 
 
 def _optional_sellersprite_sourcing_run_id(value: object) -> str | None:

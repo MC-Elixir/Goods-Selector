@@ -8,6 +8,9 @@ const state = {
   manualQueue: [],
   importedSuppliers: [],
   configStatus: null,
+  browserSetup: null,
+  cookieSetupPhase: {},
+  selectedBrowserOs: "windows",
   reviewFilter: "all",
   expandedReviews: new Set(),
   selectedAsin: "",
@@ -44,6 +47,15 @@ const I18N = {
     "browser.supplierDetail": "1688 detail enrich",
     "browser.taskType": "Browser task",
     "browser.url": "Page URL",
+    "browserSetup.title": "Dedicated Chrome on port 9222",
+    "browserSetup.check": "Check 9222",
+    "browserSetup.guide": "Setup guide",
+    "browserSetup.profileNote": "Chrome 136+ requires a non-default user data directory. Use this dedicated profile only for Amazon, 1688, and SellerSprite automation.",
+    "browserSetup.copy": "Copy command",
+    "browserSetup.copied": "Command copied",
+    "browserSetup.security": "Keep port 9222 local. The agent can access pages and login sessions in this dedicated profile.",
+    "browserSetup.ready": "Chrome 9222 ready",
+    "browserSetup.missing": "Chrome 9222 unavailable",
     "sellersprite.reverseKeywords.title": "SellerSprite Reverse Keyword Export",
     "sellersprite.reverseKeywords.subtitle": "Export and import up to 20 structured reverse-keyword rows for one Amazon US ASIN.",
     "sellersprite.reverseKeywords.asin": "Amazon US ASIN",
@@ -85,7 +97,24 @@ const I18N = {
     "metrics.cookieHealth": "Cookie Health",
     "nav.results": "Results Library",
     "nav.run": "Run Agent",
+    "nav.research": "Market Research",
     "nav.settings": "Settings",
+    "research.title": "Market Research — Seller Shortlist",
+    "research.subtitle": "Turn a SellerSprite competitor export into a small-seller-friendly shortlist: seller, representative product, price, rating, reviews, launch date, monthly sales/revenue, and the fit reason.",
+    "research.import.title": "Analyze a competitor export",
+    "research.import.subtitle": "Place the SellerSprite competitor CSV/XLSX under data/imports, then enter its file name.",
+    "research.browser.title": "Or drive the browser export",
+    "research.browser.subtitle": "Requires the SellerSprite browser flow with competitor_* locators configured.",
+    "research.niche": "Niche label",
+    "research.keyword": "Keyword",
+    "research.category": "Target category",
+    "research.categoryAuto": "Auto-detect",
+    "research.file": "Export file name",
+    "research.url": "SellerSprite page URL (optional)",
+    "research.aiReasons": "Generate AI fit reasons (falls back to rules)",
+    "research.analyze": "Build shortlist",
+    "research.runBrowser": "Run browser export",
+    "research.history": "Recent research runs",
     "preflight.actionRequired": "Action required",
     "preflight.allPassed": "All blocking checks passed. Start a new sourcing run when ready.",
     "preflight.checking": "Checking",
@@ -97,6 +126,14 @@ const I18N = {
     "preflight.review": "Review",
     "preflight.title": "Preflight Checklist",
     "preflight.waiting": "Waiting for preflight",
+    "session.title": "Complete browser sessions",
+    "session.subtitle": "The agent can open the login page and securely save site-scoped cookies after you finish login.",
+    "session.auto": "Auto complete",
+    "session.save": "Login complete — save cookies",
+    "session.opened": "{site} login opened in the dedicated Chrome. Complete login, then click save.",
+    "session.saved": "{site} cookies saved. Preflight has been refreshed.",
+    "session.needsChrome": "Start the dedicated 9222 Chrome first, then retry.",
+    "session.working": "Working…",
     "recent.avgScore": "avg score",
     "recent.manual": "manual",
     "recent.market": "market",
@@ -343,6 +380,15 @@ const I18N = {
     "browser.supplierDetail": "1688 详情补采",
     "browser.taskType": "浏览器任务",
     "browser.url": "页面链接",
+    "browserSetup.title": "9222 专用 Chrome",
+    "browserSetup.check": "检测 9222",
+    "browserSetup.guide": "启动指引",
+    "browserSetup.profileNote": "Chrome 136+ 必须使用非默认用户目录。这个专用浏览器只用于 Amazon、1688 和卖家精灵自动化。",
+    "browserSetup.copy": "复制命令",
+    "browserSetup.copied": "命令已复制",
+    "browserSetup.security": "不要把 9222 暴露到公网或局域网。Agent 可访问此专用浏览器中的页面和登录态。",
+    "browserSetup.ready": "Chrome 9222 已就绪",
+    "browserSetup.missing": "Chrome 9222 不可用",
     "sellersprite.reverseKeywords.title": "卖家精灵反查关键词导出",
     "sellersprite.reverseKeywords.subtitle": "为一个 Amazon US ASIN 导出并导入最多 20 条结构化反查关键词数据。",
     "sellersprite.reverseKeywords.asin": "Amazon US ASIN",
@@ -384,7 +430,24 @@ const I18N = {
     "metrics.cookieHealth": "Cookie 状态",
     "nav.results": "结果库",
     "nav.run": "运行 Agent",
+    "nav.research": "市场研究",
     "nav.settings": "设置",
+    "research.title": "市场研究 —— 卖家清单",
+    "research.subtitle": "把卖家精灵「查竞品 / 选市场」导出，整理成更适合中小卖家研究的清单：卖家、代表产品、价格、评分、评论数、上架时间、月销量/月销售额，以及是否适合的理由。",
+    "research.import.title": "分析竞品导出文件",
+    "research.import.subtitle": "把卖家精灵竞品 CSV/XLSX 放到 data/imports 目录，然后填写文件名。",
+    "research.browser.title": "或直接驱动浏览器导出",
+    "research.browser.subtitle": "需已配置带 competitor_* 定位符的卖家精灵浏览器流程。",
+    "research.niche": "细分类目标签",
+    "research.keyword": "关键词",
+    "research.category": "目标品类",
+    "research.categoryAuto": "自动识别",
+    "research.file": "导出文件名",
+    "research.url": "卖家精灵页面 URL（可选）",
+    "research.aiReasons": "生成 AI 适合理由（无 key 时回退规则理由）",
+    "research.analyze": "生成清单",
+    "research.runBrowser": "运行浏览器导出",
+    "research.history": "最近的研究记录",
     "preflight.actionRequired": "需要处理",
     "preflight.allPassed": "所有阻塞项已通过。可以开始新的选品任务。",
     "preflight.checking": "检查中",
@@ -396,6 +459,14 @@ const I18N = {
     "preflight.review": "检查",
     "preflight.title": "运行前检查",
     "preflight.waiting": "等待检查结果",
+    "session.title": "补充浏览器登录态",
+    "session.subtitle": "Agent 可打开登录页，并在你完成登录后安全保存当前站点的 Cookies。",
+    "session.auto": "一键补充",
+    "session.save": "已登录，保存并检查",
+    "session.opened": "已在专用 Chrome 中打开 {site} 登录页。完成登录后点击保存。",
+    "session.saved": "{site} Cookies 已保存，运行前检查已刷新。",
+    "session.needsChrome": "请先启动 9222 专用 Chrome，然后重试。",
+    "session.working": "处理中…",
     "recent.avgScore": "平均分",
     "recent.manual": "需复核",
     "recent.market": "市场",
@@ -632,6 +703,7 @@ const PREFLIGHT_LABELS = {
     "1688_circuit": "1688 熔断已清除",
     disk: "存储空间可用",
     seller_sprite: "卖家精灵 API Key 已配置",
+    seller_sprite_browser: "卖家精灵浏览器自动化",
   },
 };
 
@@ -668,9 +740,16 @@ function bindNavigation() {
       $$(".nav-item").forEach((b) => b.classList.remove("active"));
       button.classList.add("active");
       state.activeSection = button.dataset.section;
-      $("#runSection").style.display = state.activeSection === "run" ? "grid" : "none";
-      $("#resultsSection").style.display = state.activeSection === "settings" ? "none" : "grid";
-      $("#settingsSection").style.display = state.activeSection === "settings" ? "block" : "none";
+      const section = state.activeSection;
+      $("#runSection").style.display = section === "run" ? "grid" : "none";
+      $("#resultsSection").style.display = section === "run" || section === "results" ? "grid" : "none";
+      $("#settingsSection").style.display = section === "settings" ? "block" : "none";
+      const researchSection = $("#researchSection");
+      if (researchSection) {
+        researchSection.style.display = section === "research" ? "block" : "none";
+        if (section === "research") refreshResearchHistory();
+      }
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     });
   });
 }
@@ -715,6 +794,14 @@ function bindActions() {
   $("#browserAgentForm").addEventListener("submit", sendBrowserAgentTask);
   $("#sellerSpriteReverseKeywordForm").addEventListener("submit", runSellerSpriteReverseKeywords);
   $("#sellerSpriteBrowserConfigForm").addEventListener("submit", configureSellerSpriteBrowser);
+  $("#checkBrowserSetupButton").addEventListener("click", refreshBrowserSetup);
+  $("#toggleBrowserGuideButton").addEventListener("click", toggleBrowserSetupGuide);
+  $("#copyBrowserCommandButton").addEventListener("click", copyBrowserLaunchCommand);
+  $$("[data-browser-os]").forEach((button) => {
+    button.addEventListener("click", () => selectBrowserOs(button.dataset.browserOs));
+  });
+  $("#researchImportForm").addEventListener("submit", runResearchImport);
+  $("#researchBrowserForm").addEventListener("submit", runResearchBrowserExport);
   $("#chatForm").addEventListener("submit", sendChatMessage);
 }
 
@@ -723,6 +810,7 @@ async function refreshAll() {
     refreshCategories(),
     refreshPreflight(),
     refreshConfigStatus(),
+    refreshBrowserSetup(),
     refreshJobs(),
     refreshRuns(),
     refreshPrompt(),
@@ -793,6 +881,80 @@ async function refreshConfigStatus() {
   fillAlibabaSearchApiForm(data.alibaba_open || {});
   renderConfigStatus();
   renderSellerSpriteBrowserCapability(data.seller_sprite_browser || {});
+}
+
+async function refreshBrowserSetup() {
+  try {
+    state.browserSetup = await getJson("/api/browser-setup/status");
+  } catch (error) {
+    state.browserSetup = {
+      configured: false,
+      reachable: false,
+      detail: error.message,
+      launch_commands: {},
+    };
+  }
+  renderBrowserSetup();
+  renderPreflight();
+}
+
+function renderBrowserSetup() {
+  const setup = state.browserSetup || {};
+  const reachable = Boolean(setup.reachable);
+  const badge = $("#browserSetupBadge");
+  const detail = $("#browserSetupDetail");
+  if (badge) {
+    badge.className = `badge ${reachable ? "ok" : "err"}`;
+    badge.textContent = reachable ? t("browserSetup.ready") : t("browserSetup.missing");
+  }
+  if (detail) {
+    detail.textContent = reachable
+      ? (state.lang === "zh" ? "Chrome 远程调试连接正常" : "Chrome remote debugging is reachable")
+      : (state.lang === "zh" ? "请使用下方命令启动 9222 专用 Chrome" : (setup.detail || t("browserSetup.missing")));
+  }
+  renderBrowserLaunchCommand();
+  renderSellerSpriteResearchPrerequisite();
+}
+
+function toggleBrowserSetupGuide() {
+  const guide = $("#browserSetupGuide");
+  const button = $("#toggleBrowserGuideButton");
+  if (!guide || !button) return;
+  const willOpen = guide.classList.contains("hidden");
+  guide.classList.toggle("hidden", !willOpen);
+  button.setAttribute("aria-expanded", String(willOpen));
+}
+
+function selectBrowserOs(osName) {
+  state.selectedBrowserOs = ["windows", "macos", "linux"].includes(osName) ? osName : "windows";
+  $$("[data-browser-os]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.browserOs === state.selectedBrowserOs);
+  });
+  renderBrowserLaunchCommand();
+}
+
+function renderBrowserLaunchCommand() {
+  const target = $("#browserLaunchCommand");
+  if (!target) return;
+  target.textContent = state.browserSetup?.launch_commands?.[state.selectedBrowserOs] || "";
+}
+
+async function copyBrowserLaunchCommand() {
+  const command = $("#browserLaunchCommand")?.textContent || "";
+  if (!command) return;
+  try {
+    await navigator.clipboard.writeText(command);
+    $("#copyBrowserCommandButton").textContent = t("browserSetup.copied");
+  } catch (_error) {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents($("#browserLaunchCommand"));
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  setTimeout(() => {
+    $("#copyBrowserCommandButton").textContent = t("browserSetup.copy");
+  }, 1400);
 }
 
 async function refreshSellerSpriteImportHistory() {
@@ -1012,18 +1174,43 @@ function renderSellerSpriteBrowserCapability(browser) {
   const status = browser?.status || "disabled";
   target.className = status === "ready" ? "status-ok sellersprite-browser-capability" : "status-error sellersprite-browser-capability";
   target.textContent = status === "ready"
-    ? "Browser export available: Chrome CDP, local locator profile, and download directory are configured."
+    ? (state.lang === "zh"
+      ? "浏览器导出已就绪：Chrome CDP、定位符配置和下载目录均已验证。"
+      : "Browser export is ready: Chrome CDP, locator profile, and download directory are verified.")
     : status === "disabled"
-      ? "Browser export is disabled. Save the local browser configuration to enable it."
-      : "Browser export configuration is incomplete. Check the local locator profile and download directory.";
+      ? (state.lang === "zh"
+        ? "浏览器导出已关闭。准备好 9222 Chrome 和定位符后再启用。"
+        : "Browser export is disabled. Prepare Chrome 9222 and the locator profile before enabling it.")
+      : (browser?.readiness_detail || (state.lang === "zh"
+        ? "浏览器导出尚未就绪，请检查 9222 Chrome、定位符和下载目录。"
+        : "Browser export is not ready. Check Chrome 9222, the locator profile, and download directory."));
   const form = $("#sellerSpriteBrowserConfigForm");
   if (form) form.elements.enabled.checked = Boolean(browser?.enabled);
   updateSellerSpriteExportAvailability();
+  renderSellerSpriteResearchPrerequisite();
 }
 
 function updateSellerSpriteExportAvailability() {
   const button = $("#sellerSpriteReverseKeywordForm button[type='submit']");
   if (button) button.disabled = state.configStatus?.seller_sprite_browser?.status !== "ready";
+}
+
+function renderSellerSpriteResearchPrerequisite() {
+  const target = $("#researchBrowserPrerequisite");
+  const button = $("#researchBrowserForm button[type='submit']");
+  if (!target || !button) return;
+  const browser = state.configStatus?.seller_sprite_browser || {};
+  const chromeReady = Boolean(state.browserSetup?.reachable);
+  const ready = browser.status === "ready" && chromeReady;
+  target.className = `browser-prerequisite ${ready ? "status-ok" : "status-error"}`;
+  target.textContent = ready
+    ? (state.lang === "zh"
+      ? "卖家精灵自动化已就绪：9222 Chrome、扩展配置和下载目录均可用。"
+      : "SellerSprite automation is ready: Chrome 9222, extension configuration, and downloads are available.")
+    : (state.lang === "zh"
+      ? "自动导出需要：9222 专用 Chrome、已登录的卖家精灵、已安装扩展、已审核定位符和可写下载目录。"
+      : "Browser export requires dedicated Chrome 9222, a signed-in SellerSprite session, the extension, a reviewed locator profile, and a writable download directory.");
+  button.disabled = !ready;
 }
 
 function renderSellerSpriteImportHistory(items) {
@@ -1205,6 +1392,8 @@ function applyLanguage() {
   renderResults();
   renderManualQueue();
   renderConfigStatus();
+  renderBrowserSetup();
+  renderSellerSpriteBrowserCapability(state.configStatus?.seller_sprite_browser || {});
   renderChatContext();
   renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
 }
@@ -1331,7 +1520,92 @@ function renderPreflight() {
   readyCard.querySelector("p").textContent = ready
     ? t("preflight.allPassed")
     : state.preflight ? t("preflight.resolveFailed") : t("preflight.initialBody");
+  renderSessionSetup();
   updateRunAvailability();
+}
+
+function renderSessionSetup() {
+  const panel = $("#sessionSetupPanel");
+  const items = $("#sessionSetupItems");
+  if (!panel || !items) return;
+  const checks = state.preflight?.checks || [];
+  const missing = ["amazon", "1688"].filter((site) => {
+    const key = site === "amazon" ? "amazon_cookies" : "1688_cookies";
+    return checks.some((check) => check.key === key && check.level !== "ok");
+  });
+  panel.classList.toggle("hidden", !missing.length);
+  items.replaceChildren();
+  missing.forEach((site) => {
+    const label = site === "amazon" ? "Amazon" : "1688";
+    const phase = state.cookieSetupPhase[site] || "idle";
+    const row = document.createElement("div");
+    row.className = "session-setup-item";
+    const text = document.createElement("span");
+    text.innerHTML = `<strong>${label}</strong><small>${
+      escapeHtml(site === "amazon"
+        ? (state.lang === "zh" ? "缺少或不完整" : "Missing or incomplete")
+        : (state.lang === "zh" ? "登录态缺失" : "Login session missing"))
+    }</small>`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost-button";
+    button.dataset.cookieSite = site;
+    button.textContent = phase === "awaiting_login" ? t("session.save") : t("session.auto");
+    button.disabled = phase === "working";
+    button.addEventListener("click", () => completeCookieSetup(site));
+    row.append(text, button);
+    items.appendChild(row);
+  });
+}
+
+async function completeCookieSetup(site) {
+  const status = $("#sessionSetupStatus");
+  if (!state.browserSetup?.reachable) {
+    status.className = "status-error";
+    status.textContent = t("session.needsChrome");
+    $(".nav-item[data-section='settings']")?.click();
+    const guide = $("#browserSetupGuide");
+    if (guide) guide.classList.remove("hidden");
+    $("#toggleBrowserGuideButton")?.setAttribute("aria-expanded", "true");
+    return;
+  }
+  const phase = state.cookieSetupPhase[site] || "idle";
+  state.cookieSetupPhase[site] = "working";
+  status.className = "";
+  status.textContent = t("session.working");
+  renderSessionSetup();
+  try {
+    const captured = await postJson("/api/browser-setup", {
+      action: "save_cookies",
+      site,
+    });
+    if (captured.ok) {
+      state.cookieSetupPhase[site] = "saved";
+      status.className = "status-ok";
+      status.textContent = t("session.saved").replace("{site}", captured.label || site);
+      await Promise.all([refreshPreflight(), refreshBrowserSetup()]);
+      return;
+    }
+    if (phase !== "awaiting_login") {
+      const opened = await postJson("/api/browser-setup", {
+        action: "open_login",
+        site,
+      });
+      state.cookieSetupPhase[site] = "awaiting_login";
+      status.className = "status-ok";
+      status.textContent = t("session.opened").replace("{site}", opened.label || site);
+    } else {
+      state.cookieSetupPhase[site] = "awaiting_login";
+      status.className = "status-error";
+      status.textContent = captured.message || t("session.opened").replace("{site}", site);
+    }
+  } catch (error) {
+    state.cookieSetupPhase[site] = phase === "awaiting_login" ? phase : "idle";
+    status.className = "status-error";
+    status.textContent = error.message;
+  } finally {
+    renderSessionSetup();
+  }
 }
 
 function renderJobs() {
@@ -1980,6 +2254,207 @@ async function postJson(url, payload) {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || response.statusText);
   return data;
+}
+
+// ---- Market research (seller shortlist) ----
+async function runResearchImport(event) {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const status = $("#researchImportStatus");
+  const payload = {
+    file: String(form.get("file") || "").trim(),
+    niche_label: String(form.get("niche_label") || "").trim(),
+    keyword: String(form.get("keyword") || "").trim(),
+    category: String(form.get("category") || "auto"),
+    generate_ai_reasons: form.get("generate_ai_reasons") === "on",
+  };
+  if (!payload.file) {
+    status.textContent = "Export file name is required.";
+    return;
+  }
+  status.textContent = "Analyzing export…";
+  try {
+    const data = await postJson("/api/seller-research/import", payload);
+    status.textContent = `Done: ${(data.items || []).length} eligible sellers.`;
+    renderResearchResult(data);
+    refreshResearchHistory();
+  } catch (error) {
+    status.textContent = `Failed: ${error.message}`;
+  }
+}
+
+async function runResearchBrowserExport(event) {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const status = $("#researchBrowserStatus");
+  const payload = {
+    keyword: String(form.get("keyword") || "").trim(),
+    niche_label: String(form.get("niche_label") || "").trim(),
+    category: String(form.get("category") || "auto"),
+    sellersprite_url: String(form.get("sellersprite_url") || "").trim(),
+  };
+  if (!payload.keyword) {
+    status.textContent = "Keyword is required.";
+    return;
+  }
+  status.textContent = "Running browser export… (Chrome must be attached)";
+  try {
+    const data = await postJson("/api/seller-research/browser-export", payload);
+    if (data.status && data.status !== "SUCCESS") {
+      status.textContent = `Needs action: ${data.status}${data.message ? " — " + data.message : ""}`;
+      renderResearchResult(data);
+      return;
+    }
+    status.textContent = `Done: ${(data.items || []).length} eligible sellers.`;
+    renderResearchResult(data);
+    refreshResearchHistory();
+  } catch (error) {
+    status.textContent = `Failed: ${error.message}`;
+  }
+}
+
+async function refreshResearchHistory() {
+  const container = $("#researchHistory");
+  if (!container) return;
+  try {
+    const data = await getJson("/api/seller-research/lists?limit=20");
+    renderResearchHistory(data.items || []);
+  } catch (error) {
+    container.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderResearchHistory(items) {
+  const container = $("#researchHistory");
+  if (!container) return;
+  if (!items.length) {
+    container.innerHTML = `<p class="muted">No research runs yet.</p>`;
+    return;
+  }
+  const rows = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.niche_label || "-")}</td>
+      <td>${escapeHtml(item.keyword || "-")}</td>
+      <td>${item.eligible_count ?? 0}</td>
+      <td>${item.excluded_count ?? 0}</td>
+      <td>${escapeHtml(String(item.imported_at || "").replace("T", " ").slice(0, 19))}</td>
+      <td><button class="link-button" data-run="${escapeAttr(item.id)}">Open</button></td>
+    </tr>`).join("");
+  container.innerHTML = `
+    <table class="research-table">
+      <thead><tr><th>Niche</th><th>Keyword</th><th>Eligible</th><th>Excluded</th><th>Imported</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  container.querySelectorAll("button[data-run]").forEach((button) => {
+    button.addEventListener("click", () => openResearchRun(button.dataset.run));
+  });
+}
+
+async function openResearchRun(runId) {
+  try {
+    const data = await getJson(`/api/seller-research/lists/${encodeURIComponent(runId)}`);
+    renderResearchResult(data);
+  } catch (error) {
+    const summary = $("#researchSummary");
+    if (summary) summary.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderResearchResult(payload) {
+  const summary = $("#researchSummary");
+  const results = $("#researchResults");
+  if (!payload || (!payload.items && !payload.excluded_items)) {
+    if (summary) {
+      summary.innerHTML = payload && payload.status
+        ? `<p class="muted">Status: ${escapeHtml(payload.status)}${payload.message ? " — " + escapeHtml(payload.message) : ""}</p>`
+        : "";
+    }
+    if (results) results.innerHTML = "";
+    return;
+  }
+  const items = payload.items || [];
+  const excluded = payload.excluded_items || [];
+  const ai = payload.ai_reasons || {};
+  const aiNote = ai.status === "success"
+    ? `AI reasons ${ai.applied_count}/${ai.requested_count}`
+    : `AI reasons: ${ai.status || "n/a"}`;
+  if (summary) {
+    summary.innerHTML = `
+      <div class="research-summary-head">
+        <strong>${escapeHtml(payload.niche_label || payload.keyword || "Seller shortlist")}</strong>
+        <span class="muted">${items.length} eligible · ${excluded.length} excluded · ${escapeHtml(aiNote)}</span>
+        ${renderResearchExports(payload.exports)}
+      </div>`;
+  }
+  if (results) {
+    results.innerHTML = renderResearchTable(items) + (excluded.length ? renderExcludedTable(excluded) : "");
+  }
+}
+
+function renderResearchExports(exports) {
+  if (!exports) return "";
+  const links = Object.entries(exports).map(([kind, name]) =>
+    `<a class="link-button" href="/api/exports/${encodeURIComponent(name)}">${escapeHtml(String(kind).toUpperCase())}</a>`).join(" ");
+  return links ? `<span class="research-exports">${links}</span>` : "";
+}
+
+function renderResearchTable(items) {
+  if (!items.length) return `<p class="muted">No sellers passed the small-seller rules.</p>`;
+  const rows = items.map((item, index) => `
+    <tr>
+      <td>${index + 1}</td>
+      <td>${escapeHtml(item.seller || "-")}</td>
+      <td><span class="research-tag">${escapeHtml(item.fit_category_label || item.fit_category || "-")}</span></td>
+      <td>${item.fit_score ?? "-"}</td>
+      <td>${escapeHtml(item.representative_title || "-")}</td>
+      <td>${escapeHtml(item.brand || "-")}</td>
+      <td>${fmtResearchNum(item.price)}</td>
+      <td>${fmtResearchNum(item.rating)}</td>
+      <td>${item.review_count ?? "-"}</td>
+      <td>${escapeHtml(item.launch_date || "-")}</td>
+      <td>${item.monthly_sales ?? "-"}</td>
+      <td>${fmtResearchNum(item.monthly_revenue)}</td>
+      <td>${item.seller_product_count ?? "-"}</td>
+      <td class="research-reason">${escapeHtml(researchReason(item))}</td>
+    </tr>`).join("");
+  return `
+    <table class="research-table research-eligible">
+      <thead><tr>
+        <th>#</th><th>Seller</th><th>Fit</th><th>Score</th><th>Representative product</th>
+        <th>Brand</th><th>Price</th><th>Rating</th><th>Reviews</th><th>Launch</th>
+        <th>Mo. sales</th><th>Mo. revenue</th><th>#Products</th><th>Why suitable</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderExcludedTable(items) {
+  const rows = items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.seller || "-")}</td>
+      <td>${escapeHtml(item.representative_title || "-")}</td>
+      <td>${item.review_count ?? "-"}</td>
+      <td>${item.monthly_sales ?? "-"}</td>
+      <td>${escapeHtml((item.exclusion_reasons || []).join("；") || "-")}</td>
+    </tr>`).join("");
+  return `
+    <details class="research-excluded"><summary>${items.length} excluded sellers</summary>
+    <table class="research-table">
+      <thead><tr><th>Seller</th><th>Product</th><th>Reviews</th><th>Mo. sales</th><th>Excluded because</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></details>`;
+}
+
+function researchReason(item) {
+  if (item.ai_reason && String(item.ai_reason).trim()) return String(item.ai_reason).trim();
+  const reasons = item.fit_reasons || [];
+  return reasons.length ? reasons.join("；") : "-";
+}
+
+function fmtResearchNum(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toLocaleString() : "-";
 }
 
 function offerLink(item) {
