@@ -77,8 +77,14 @@ def get_browser_setup_status() -> dict[str, Any]:
         ),
         "launch_commands": {
             "windows": (
-                'start "" chrome.exe --remote-debugging-port=9222 '
-                '--user-data-dir="%LOCALAPPDATA%\\AmazonSelector\\ChromeProfile"'
+                '$chrome = @("$env:ProgramFiles\\Google\\Chrome\\Application\\chrome.exe", '
+                '"${env:ProgramFiles(x86)}\\Google\\Chrome\\Application\\chrome.exe", '
+                '"$env:LOCALAPPDATA\\Google\\Chrome\\Application\\chrome.exe") '
+                '| Where-Object { Test-Path $_ } | Select-Object -First 1; '
+                'if (-not $chrome) { throw "Chrome executable not found" }; '
+                'Start-Process -FilePath $chrome -ArgumentList '
+                "'--remote-debugging-port=9222', "
+                '"--user-data-dir=$env:LOCALAPPDATA\\AmazonSelector\\ChromeProfile"'
             ),
             "macos": (
                 'open -na "Google Chrome" --args --remote-debugging-port=9222 '

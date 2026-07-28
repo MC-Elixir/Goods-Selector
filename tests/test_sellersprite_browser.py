@@ -42,6 +42,12 @@ class FakeLocator:
         if callback:
             callback()
 
+    def hover(self, **_kwargs) -> None:
+        self.page.hovered.append(self.name)
+        callback = self.page.on_hover.get(self.name)
+        if callback:
+            callback()
+
     def fill(self, value: str, **_kwargs) -> None:
         self.page.filled[self.name] = value
 
@@ -55,8 +61,10 @@ class FakePage:
         self.visible_markers = visible_markers
         self.goto_calls: list[str] = []
         self.clicked: list[str] = []
+        self.hovered: list[str] = []
         self.filled: dict[str, str] = {}
         self.on_click: dict[str, object] = {}
+        self.on_hover: dict[str, object] = {}
         self.on_goto: object | None = None
         self.timeout_calls: list[int] = []
         self.url = f"https://www.amazon.com/dp/{asin}"
@@ -183,7 +191,8 @@ def test_adapter_attaches_only_through_injected_cdp_resolver(tmp_path):
         assert attached.page is page
 
     assert playwright.connected_to == "ws://host.docker.internal:9222/devtools/browser/1"
-    assert browser.closed and playwright.stopped
+    assert browser.closed is False
+    assert playwright.stopped
 
 
 def test_adapter_stops_for_human_terminal_state_without_clicking(tmp_path):
@@ -338,6 +347,73 @@ def test_adapter_sets_temporary_cdp_download_policy_before_snapshot_and_export(t
     assert browser.cdp_session.detached is True
     assert observer.snapshots == [tmp_path]
     assert page.clicked[-1] == "export"
+
+
+def test_competitor_export_uses_reviewed_overflow_hover_at_compact_viewport(tmp_path):
+    artifact = object()
+    observer = FakeObserver(artifact)
+    profile = replace(
+        valid_profile(),
+        competitor_results_ready="css=competitor_results_ready",
+        competitor_export_menu="css=competitor_export",
+        competitor_export="css=competitor_export",
+        competitor_export_overflow="css=competitor_export_overflow",
+    )
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"competitor_results_ready", "competitor_export_overflow"},
+    )
+    page.on_hover["competitor_export_overflow"] = lambda: page.visible_markers.add(
+        "competitor_export"
+    )
+    session = PlaywrightSellerSpriteSession(
+        profile=profile,
+        download_dir=tmp_path,
+        page=page,
+        download_observer=observer,
+    )
+
+    assert session.export_competitor_products("current-amazon-list") is artifact
+
+    assert page.hovered == ["competitor_export_overflow"]
+    assert page.clicked == ["competitor_export"]
+    assert observer.snapshots == [tmp_path]
+
+
+def test_competitor_export_expands_compact_sellersprite_panel_before_waiting_for_table(tmp_path):
+    artifact = object()
+    observer = FakeObserver(artifact)
+    profile = replace(
+        valid_profile(),
+        competitor_results_ready="css=competitor_results_ready",
+        competitor_export_menu="css=competitor_export",
+        competitor_export="css=competitor_export",
+    )
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"panel_open"},
+    )
+
+    def expand_panel():
+        page.visible_markers.update({
+            "ready",
+            "competitor_results_ready",
+            "competitor_export",
+        })
+
+    page.on_click["panel_open"] = expand_panel
+    session = PlaywrightSellerSpriteSession(
+        profile=profile,
+        download_dir=tmp_path,
+        page=page,
+        download_observer=observer,
+    )
+
+    assert session.export_competitor_products("current-amazon-list") is artifact
+
+    assert page.clicked == ["panel_open", "competitor_export"]
+    assert page.timeout_calls == [1000]
+    assert observer.snapshots == [tmp_path]
 
 
 def test_adapter_stops_for_configured_quota_state_before_any_export_click(tmp_path):

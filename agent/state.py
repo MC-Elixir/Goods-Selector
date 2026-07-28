@@ -9,9 +9,10 @@ from uuid import uuid4
 
 JobStatus = Literal[
     "queued", "running", "success", "failed", "retry_wait",
-    "human_required", "cancel_requested", "cancelled",
+    "human_required", "review_required", "cancel_requested", "cancelled",
 ]
 SourceMode = Literal["category", "keyword"]
+WorkflowMode = Literal["standard", "full_research"]
 
 
 @dataclass
@@ -25,6 +26,11 @@ class AgentRunConfig:
     llm_verification: bool | None = None
     require_market_data: bool = False
     require_supplier_evidence: bool = False
+    workflow_mode: WorkflowMode = "standard"
+    research_keyword: str = ""
+    research_niche_label: str = ""
+    research_category: str | None = None
+    generate_ai_reasons: bool = False
 
 
 @dataclass
@@ -39,6 +45,7 @@ class AgentJob:
     message: str = "Queued"
     error: str | None = None
     exports: dict[str, str] = field(default_factory=dict)
+    research: dict[str, Any] = field(default_factory=dict)
     audit: dict[str, Any] = field(default_factory=dict)
     result_summary: dict[str, Any] = field(default_factory=dict)
     queue_position: int | None = None

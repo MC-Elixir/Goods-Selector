@@ -140,8 +140,20 @@ class SellerSpriteLocatorProfile:
     competitor_export_overflow: str = ""
 
     def has_competitor_locators(self) -> bool:
-        """True when every locator required for a competitor export is present."""
-        return all(getattr(self, name, "") for name in _COMPETITOR_REQUIRED_LOCATORS)
+        """True for either keyword-search or current-list market export mode."""
+        export_ready = all(
+            getattr(self, name, "")
+            for name in ("competitor_results_ready", "competitor_export_menu", "competitor_export")
+        )
+        search_locators = (
+            self.competitor_keyword_input,
+            self.competitor_submit,
+        )
+        # A profile may export the product list already visible in the attached
+        # Amazon tab. In that mode no search field is touched; the keyword is
+        # retained solely as the research label. A half-configured search flow
+        # remains invalid.
+        return export_ready and (all(search_locators) or not any(search_locators))
 
     @classmethod
     def from_json(cls, path: Path) -> "SellerSpriteLocatorProfile":

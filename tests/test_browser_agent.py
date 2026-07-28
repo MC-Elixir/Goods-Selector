@@ -189,6 +189,7 @@ def test_browser_agent_prefers_http_resolution_over_stale_ws(monkeypatch):
 
 def test_cdp_websocket_uses_windows_loopback_inside_wsl(monkeypatch):
     monkeypatch.setattr(browser_agent, "_running_in_wsl", lambda: True)
+    monkeypatch.setattr(browser_agent, "_running_in_container", lambda: False)
 
     assert (
         browser_agent._normalize_cdp_ws_host(
@@ -196,6 +197,26 @@ def test_cdp_websocket_uses_windows_loopback_inside_wsl(monkeypatch):
             "http://host.docker.internal:9222",
         )
         == "ws://127.0.0.1:9222/devtools/browser/current"
+    )
+
+
+def test_cdp_websocket_keeps_docker_host_inside_wsl_container(monkeypatch):
+    monkeypatch.setattr(browser_agent, "_running_in_wsl", lambda: True)
+    monkeypatch.setattr(browser_agent, "_running_in_container", lambda: True)
+    monkeypatch.setattr(
+        browser_agent.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.65.254", 9222)),
+        ],
+    )
+
+    assert (
+        browser_agent._normalize_cdp_ws_host(
+            "ws://127.0.0.1:9222/devtools/browser/current",
+            "http://host.docker.internal:9222",
+        )
+        == "ws://192.168.65.254:9222/devtools/browser/current"
     )
 
 

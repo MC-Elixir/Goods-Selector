@@ -236,6 +236,508 @@ h3 {
   font-size: 14px;
 }
 
+.trial-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(360px, 0.88fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.trial-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 26px 28px 22px;
+  border-bottom: 1px solid var(--line-soft);
+  background:
+    radial-gradient(circle at 92% 10%, rgba(16, 163, 90, 0.12), transparent 28%),
+    linear-gradient(135deg, #ffffff, #f4fbf7);
+}
+
+.trial-hero h2 {
+  margin-top: 7px;
+  font-size: 23px;
+  letter-spacing: -0.02em;
+}
+
+.trial-hero p {
+  max-width: 760px;
+  margin-top: 9px;
+  color: #526173;
+  line-height: 1.65;
+}
+
+.trial-kicker {
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+
+.trial-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 24px 28px 28px;
+}
+
+.trial-source-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.trial-contract {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #cfe9da;
+  border-radius: 8px;
+  background: #f2faf6;
+}
+
+.trial-contract > span {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--green);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.trial-contract p {
+  color: #35604a;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.trial-start-button {
+  height: 48px;
+  font-size: 16px;
+}
+
+.trial-hint {
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.trial-progress-panel {
+  position: static;
+  overflow: hidden;
+}
+
+.trial-readiness {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 16px 20px 0;
+}
+
+.trial-readiness span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.trial-readiness span::before {
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: var(--amber);
+  content: "";
+}
+
+.trial-readiness span.ready {
+  color: #0f6a3d;
+  border-color: #bde7ce;
+  background: var(--green-soft);
+}
+
+.trial-readiness span.ready::before {
+  background: var(--green);
+}
+
+.trial-stages {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 20px;
+  list-style: none;
+}
+
+.trial-stages li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 76px;
+  color: #94a3b8;
+}
+
+.trial-stages li:not(:last-child)::after {
+  position: absolute;
+  top: 34px;
+  bottom: 0;
+  left: 16px;
+  width: 2px;
+  background: #e2e8f0;
+  content: "";
+}
+
+.trial-stages li > span {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 2px solid #dbe3eb;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.trial-stages li strong,
+.trial-stages li small {
+  display: block;
+}
+
+.trial-stages li strong {
+  padding-top: 2px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.trial-stages li small {
+  margin-top: 5px;
+  line-height: 1.35;
+}
+
+.trial-stages li.active > span,
+.trial-stages li.complete > span {
+  color: #fff;
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.trial-stages li.active strong,
+.trial-stages li.complete strong {
+  color: #153e2b;
+}
+
+.trial-stages li.complete:not(:last-child)::after {
+  background: #8fd0aa;
+}
+
+.trial-stages li.error > span {
+  color: #fff;
+  border-color: var(--red);
+  background: var(--red);
+}
+
+.trial-stages li.error strong {
+  color: var(--red);
+}
+
+.trial-stages li.human > span {
+  color: #fff;
+  border-color: var(--amber);
+  background: var(--amber);
+}
+
+.trial-stages li.human strong {
+  color: #a65d05;
+}
+
+.trial-alert {
+  margin: 0 20px 14px;
+  padding: 12px 14px;
+  border: 1px solid #f2c3c0;
+  border-radius: 8px;
+  color: #9d2f2a;
+  background: #fff7f6;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.trial-alert.human {
+  color: #8a4b00;
+  border-color: #f5d7a5;
+  background: #fffaf0;
+}
+
+#trialContinueButton {
+  width: calc(100% - 40px);
+  margin: 0 20px 16px;
+}
+
+.trial-deliverables {
+  margin: 0 20px 20px;
+  padding: 15px;
+  border: 1px solid #bde7ce;
+  border-radius: 8px;
+  background: var(--green-soft);
+}
+
+.trial-deliverables > strong {
+  display: block;
+  margin-bottom: 10px;
+  color: #0f5132;
+  font-size: 13px;
+}
+
+.trial-deliverables > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trial-feedback {
+  margin: 0 20px 20px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.trial-feedback > strong,
+.trial-feedback > p {
+  display: block;
+}
+
+.trial-feedback > strong {
+  color: #173a2a;
+  font-size: 13px;
+}
+
+.trial-feedback > p {
+  margin: 4px 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.trial-feedback-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.trial-feedback label span {
+  display: block;
+  margin-bottom: 4px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.trial-feedback select,
+.trial-feedback textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.trial-feedback select {
+  min-height: 34px;
+  padding: 5px 8px;
+}
+
+.trial-feedback textarea {
+  min-height: 52px;
+  padding: 8px;
+  resize: vertical;
+}
+
+.trial-feedback-comment {
+  display: block;
+  margin-top: 9px;
+}
+
+.trial-feedback > button {
+  margin-top: 9px;
+}
+
+#trialFeedbackStatus {
+  display: block;
+  margin-top: 7px;
+  color: #0f6a3d;
+  font-size: 11px;
+}
+
+.trial-validation-panel {
+  grid-column: 1 / -1;
+  overflow: hidden;
+}
+
+.trial-validation-body {
+  padding: 20px;
+}
+
+.trial-validation-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.trial-validation-metrics > div {
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.trial-validation-metrics span,
+.trial-validation-metrics strong {
+  display: block;
+}
+
+.trial-validation-metrics span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.trial-validation-metrics strong {
+  margin-top: 6px;
+  color: #173a2a;
+  font-size: 19px;
+}
+
+.trial-validation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.trial-validation-label {
+  display: block;
+  margin-bottom: 9px;
+  color: #334155;
+  font-size: 12px;
+}
+
+.trial-validation-criteria {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trial-validation-criteria > div {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.trial-validation-criteria > div > span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: #64748b;
+  background: #e2e8f0;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.trial-validation-criteria > div > strong {
+  color: #475569;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.trial-validation-criteria > div.pass {
+  border-color: #bde7ce;
+  background: var(--green-soft);
+}
+
+.trial-validation-criteria > div.pass > span {
+  color: #fff;
+  background: var(--green);
+}
+
+.trial-validation-criteria > div.fail {
+  border-color: #f2c3c0;
+  background: #fff7f6;
+}
+
+.trial-validation-criteria > div.fail > span {
+  color: #fff;
+  background: var(--red);
+}
+
+.trial-validation-blockers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trial-validation-blockers > span {
+  padding: 7px 9px;
+  border: 1px solid #f5d7a5;
+  border-radius: 999px;
+  color: #8a4b00;
+  background: #fffaf0;
+  font-size: 11px;
+}
+
+.trial-validation-blockers > span.clear {
+  color: #0f6a3d;
+  border-color: #bde7ce;
+  background: var(--green-soft);
+}
+
+.trial-validation-blockers small {
+  color: var(--muted);
+}
+
+.trial-validation-decision {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-left: 3px solid #94a3b8;
+  color: #475569;
+  background: #f8fafc;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.trial-validation-decision.ready_for_installer {
+  color: #0f5132;
+  border-left-color: var(--green);
+  background: var(--green-soft);
+}
+
+.trial-validation-decision.needs_improvement {
+  color: #9d2f2a;
+  border-left-color: var(--red);
+  background: #fff7f6;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.65fr);
@@ -1971,6 +2473,7 @@ td {
 
 .browser-setup-guide {
   display: grid;
+  min-width: 0;
   gap: 10px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
@@ -2007,6 +2510,15 @@ td {
   background: #fff;
   font-size: 11px;
   white-space: nowrap;
+}
+
+.browser-command-row {
+  min-width: 0;
+  width: 100%;
+}
+
+.browser-command-row .ghost-button {
+  flex: 0 0 auto;
 }
 
 .browser-prerequisite {
@@ -2236,12 +2748,31 @@ pre {
   }
 
   .workspace,
+  .trial-workspace,
   .results-workspace,
   .preflight-wrap,
   .run-form,
   .settings-config-form,
   .settings-config-form.three-col {
     grid-template-columns: 1fr;
+  }
+
+  .trial-progress-panel {
+    position: static;
+  }
+
+  .trial-form {
+    grid-template-columns: 1fr;
+  }
+
+  .trial-validation-metrics,
+  .trial-validation-grid,
+  .trial-validation-criteria {
+    grid-template-columns: 1fr;
+  }
+
+  .trial-readiness {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .source-mode-options {

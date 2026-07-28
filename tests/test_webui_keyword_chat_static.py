@@ -37,6 +37,28 @@ def test_webui_exposes_job_cancel_and_retry_actions():
     assert "job-action" in app
 
 
+def test_webui_exposes_controlled_one_click_research_workflow():
+    index = (ROOT / "webui" / "index.html").read_text(encoding="utf-8")
+    app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "webui" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'data-section="trial"' in index
+    assert 'id="trialForm"' in index
+    assert 'id="trialStages"' in index
+    assert 'id="trialContinueButton"' in index
+    assert 'id="trialFeedbackForm"' in index
+    assert 'id="trialValidationPanel"' in index
+    assert "/api/trial/full-research" in app
+    assert "/api/trial/feedback/summary" in app
+    assert "startFullResearch" in app
+    assert "continueTrialJob" in app
+    assert "renderTrialFeedbackSummary" in app
+    assert "job.research?.exports?.xlsx" in app
+    assert ".trial-workspace" in styles
+    assert ".trial-stages" in styles
+    assert ".trial-validation-panel" in styles
+
+
 def test_webui_exposes_recoverable_node_status_and_operations():
     app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "webui" / "styles.css").read_text(encoding="utf-8")

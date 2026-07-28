@@ -975,6 +975,7 @@ def run_pipeline(
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
     stage_timeouts: dict[str, float] | None = None,
+    seed_products: list[dict] | None = None,
 ) -> int:
     from pipeline.recoverable import run_recoverable_pipeline
 
@@ -991,6 +992,7 @@ def run_pipeline(
         progress_callback=progress_callback,
         cancel_check=cancel_check,
         stage_timeouts=stage_timeouts,
+        seed_products=seed_products,
     )
 
 

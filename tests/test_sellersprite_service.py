@@ -13,7 +13,7 @@ from agent.sellersprite_service import (
 )
 from agent.tools.sellersprite_browser import SellerSpriteWorkflowError
 from agent.tools.sellersprite_importer import SellerSpriteImportError
-from config.settings import settings
+from config.settings import PROJECT_ROOT, settings
 
 
 def test_dependencies_map_container_download_path_for_host_cli(monkeypatch, tmp_path):
@@ -57,8 +57,37 @@ def test_dependencies_use_explicit_windows_host_download_dir_in_wsl(monkeypatch)
         browser_enabled=True,
     )
 
-    assert dependencies.download_dir == Path("/mnt/c/Users/dell/Downloads")
+    assert dependencies.download_dir == PROJECT_ROOT / "data" / "imports" / "sellersprite"
     assert dependencies.browser_download_dir == "C:\\Users\\dell\\Downloads"
+
+
+def test_dependencies_map_docker_volume_source_to_windows_wsl_share(monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    monkeypatch.setenv(
+        "SELLERSPRITE_BROWSER_WSL_DOWNLOAD_DIR",
+        "/home/dell/code/goods-selector/data/imports/sellersprite",
+    )
+    monkeypatch.setattr(
+        "agent.sellersprite_service.load_sellersprite_browser_config",
+        lambda *_args: SimpleNamespace(
+            enabled=True,
+            locator_profile_path="",
+            download_dir="/app/data/imports/sellersprite",
+            host_download_dir="configured",
+        ),
+    )
+
+    dependencies = SellerSpriteDependencies(
+        profile=valid_profile(),
+        session_factory=lambda: FakeSession(),
+        browser_enabled=True,
+    )
+
+    assert dependencies.download_dir == PROJECT_ROOT / "data" / "imports" / "sellersprite"
+    assert dependencies.browser_download_dir == (
+        "\\\\wsl.localhost\\Ubuntu\\home\\dell\\code\\goods-selector"
+        "\\data\\imports\\sellersprite"
+    )
 
 
 def test_dotenv_host_download_dir_overrides_persisted_config_sentinel(

@@ -257,12 +257,12 @@ def test_asin_policy_rejects_non_amazon_identifier():
         validate_sellersprite_asin("not-an-asin")
 
 
-def test_sellersprite_browser_settings_default_to_disabled_and_create_import_dir(monkeypatch, tmp_path):
+def test_sellersprite_browser_settings_default_to_enabled_and_create_import_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(settings_module, "DATA_DIR", tmp_path)
 
     settings = Settings(_env_file=None)
 
-    assert settings.sellersprite_browser_enabled is False
+    assert settings.sellersprite_browser_enabled is True
     assert settings.sellersprite_browser_locator_profile_path == ""
     assert settings.sellersprite_browser_download_dir == ""
     assert settings.sellersprite_browser_host_download_dir == ""

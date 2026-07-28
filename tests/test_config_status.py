@@ -163,6 +163,27 @@ def test_browser_configuration_persists_only_project_local_safe_state(monkeypatc
     assert "C:/Users/dell/Downloads" not in str(result)
 
 
+def test_browser_configuration_saves_enabled_state_before_locator_profile_exists(monkeypatch, tmp_path):
+    monkeypatch.setattr(config_status_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(config_status_module, "check_seller_sprite_browser", lambda: {
+        "key": "seller_sprite_browser",
+        "label": "SellerSprite browser locator profile unavailable",
+        "detail": "Configure a valid locator profile",
+        "level": "warning",
+    })
+
+    result = config_status_module.configure_sellersprite_browser(
+        locator_profile_path="/app/data/sellersprite_live_locators.json",
+        download_dir="/app/data/imports/sellersprite",
+        host_download_dir="Chrome-managed",
+        enabled=True,
+    )
+
+    stored = json.loads((tmp_path / "data" / "sellersprite_browser_config.json").read_text(encoding="utf-8"))
+    assert stored["enabled"] is True
+    assert result["status"] == "unavailable"
+
+
 def test_browser_configuration_rejects_paths_escaping_the_data_volume(monkeypatch, tmp_path):
     monkeypatch.setattr(config_status_module, "PROJECT_ROOT", tmp_path)
 

@@ -287,9 +287,9 @@ class PlaywrightSellerSpriteSession:
     def export_competitor_products(self, keyword: str) -> DownloadedArtifact:
         """Run exactly one profile-defined competitor/market export.
 
-        Mirrors the reverse-keyword export but starts from a keyword search on
-        the SellerSprite «查竞品 / 选市场» surface.  Selectors come only from the
-        human-validated competitor_* locators; none are discovered here.
+        Uses either a profile-defined keyword search, or the product list
+        already visible in the attached Amazon tab. Selectors come only from
+        the human-validated competitor_* locators; none are discovered here.
         """
         keyword = (keyword or "").strip()
         if not keyword:
@@ -299,12 +299,24 @@ class PlaywrightSellerSpriteSession:
 
         self._ensure_not_cancelled()
         self._raise_if_human_terminal()
+        if not self._is_visible("competitor_results_ready"):
+            # Amazon search pages often start with SellerSprite's compact
+            # toolbar only. Expand the reviewed extension panel before waiting
+            # for the competitor table; otherwise the UI can look configured
+            # while the export waits until timeout for a table that is never
+            # rendered.
+            self.check_sellersprite_extension()
         if getattr(self.profile, "competitor_lookup", ""):
             self._click_required("competitor_lookup")
             self._raise_if_human_terminal()
-        self._fill_required("competitor_keyword_input", keyword)
-        self._click_required("competitor_submit")
-        self._raise_if_human_terminal()
+        search_input = getattr(self.profile, "competitor_keyword_input", "")
+        search_submit = getattr(self.profile, "competitor_submit", "")
+        if bool(search_input) != bool(search_submit):
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        if search_input:
+            self._fill_required("competitor_keyword_input", keyword)
+            self._click_required("competitor_submit")
+            self._raise_if_human_terminal()
         results_timeout = max(int(self.page_timeout_seconds), int(self.export_timeout_seconds))
         if not self._wait_until_visible("competitor_results_ready", timeout_seconds=results_timeout):
             self._raise_if_human_terminal()
@@ -312,11 +324,23 @@ class PlaywrightSellerSpriteSession:
         self._ensure_not_cancelled()
 
         overflow_locator = getattr(self.profile, "competitor_export_overflow", "")
+        export_visible = self._is_visible("competitor_export_menu")
         overflow_opened = False
-        if overflow_locator and self._is_visible("competitor_export_overflow"):
-            self._click_required("competitor_export_overflow")
+        if (
+            not export_visible
+            and overflow_locator
+            and self._is_visible("competitor_export_overflow")
+        ):
+            # At compact Chrome viewports SellerSprite exposes the footer
+            # actions in a reviewed hover popover, rather than after a click.
+            # Hover first; retain the click fallback below for profiles whose
+            # explicit overflow control is click-driven.
+            self._hover_required("competitor_export_overflow")
             overflow_opened = True
-        export_visible = self._wait_until_visible("competitor_export_menu", timeout_seconds=results_timeout)
+        if not export_visible:
+            export_visible = self._wait_until_visible(
+                "competitor_export_menu", timeout_seconds=int(self.page_timeout_seconds)
+            )
         if not export_visible and not overflow_opened and overflow_locator:
             self._click_required("competitor_export_overflow")
             export_visible = self._wait_until_visible(
@@ -417,6 +441,20 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
         self._ensure_not_cancelled()
 
+    def _hover_required(self, locator_name: str) -> None:
+        self._ensure_not_cancelled()
+        if not self._wait_until_visible(locator_name):
+            self._raise_if_human_terminal()
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        self._ensure_not_cancelled()
+        try:
+            self._locator(locator_name).hover(timeout=self.page_timeout_seconds * 1000)
+        except SellerSpriteWorkflowError:
+            raise
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+        self._ensure_not_cancelled()
+
     def _fill_required(self, locator_name: str, value: str) -> None:
         self._ensure_not_cancelled()
         if not self._wait_until_visible(locator_name):
@@ -507,14 +545,13 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("CANCELLED")
 
     def _close(self) -> None:
-        browser, playwright = self._browser, self._playwright
+        _browser, playwright = self._browser, self._playwright
         self._browser = None
         self._playwright = None
-        if browser is not None:
-            try:
-                browser.close()
-            except Exception:
-                pass
+        # This is a CDP attachment to the user's visible Chrome session.
+        # ``browser.close()`` would instruct Chrome to close, rather than just
+        # disconnecting this client. Stopping Playwright below releases the
+        # connection without touching the user's browser, pages, or downloads.
         if playwright is not None:
             try:
                 playwright.stop()

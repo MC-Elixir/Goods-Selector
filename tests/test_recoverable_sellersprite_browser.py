@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from agent.sellersprite_models import SellerSpriteContext, SellerSpriteResult
 from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
-from db.models import MarketAnalysis, RunLog
+from db.models import ExecutionNode, MarketAnalysis, RunLog
 from matchers.alibaba_pailitao import SupplierDTO
 from pipeline.orchestrator import run_pipeline
 from tests.test_recoverable_pipeline import _memory_session_scope, _profit, _score
@@ -112,3 +112,51 @@ def test_recoverable_market_falls_back_to_sellersprite_browser(monkeypatch):
         assert market.search_volume_monthly == 4200
         assert market.competing_listings == 1800
         assert market.raw_data["source_type"] == "browser_extension_export"
+
+
+def test_sellersprite_human_required_is_a_barrier_before_supplier_matching(monkeypatch):
+    Session, session_scope = _memory_session_scope()
+    product = ProductDTO(
+        asin="B00Q7OAN50",
+        marketplace="US",
+        title="Insulated Bottle",
+        price=25.0,
+    )
+    matched = []
+
+    def human_export(asin, *, sourcing_run_id, dependencies):
+        return SellerSpriteResult.needs_human(
+            SellerSpriteContext.create(asin, sourcing_run_id),
+            "CAPTCHA",
+        )
+
+    monkeypatch.setattr("pipeline.orchestrator.session_scope", session_scope)
+    monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
+    monkeypatch.setattr(
+        "matchers.match_suppliers",
+        lambda *_args, **_kwargs: matched.append(True),
+    )
+    monkeypatch.setattr(
+        "agent.sellersprite_service.SellerSpriteDependencies", _BrowserDependencies
+    )
+    monkeypatch.setattr(
+        "agent.sellersprite_service.run_reverse_keyword_export", human_export
+    )
+    monkeypatch.setattr(settings, "mjjl_max_products_per_run", 1)
+    monkeypatch.setattr(settings, "alibaba_allow_mock_suppliers", False)
+
+    run_id = run_pipeline("Home & Kitchen", limit=1, export=False)
+
+    assert matched == []
+    with Session() as session:
+        assert session.get(RunLog, run_id).status == "human_required"
+        market = session.query(ExecutionNode).filter_by(
+            run_id=run_id,
+            scope_key="B00Q7OAN50",
+            stage="market",
+        ).one()
+        assert market.status == "human_required"
+        assert session.query(ExecutionNode).filter_by(
+            run_id=run_id,
+            stage="match",
+        ).count() == 0

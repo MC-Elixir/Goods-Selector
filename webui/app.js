@@ -9,12 +9,14 @@ const state = {
   importedSuppliers: [],
   configStatus: null,
   browserSetup: null,
+  trialFeedbackSummary: null,
   cookieSetupPhase: {},
   selectedBrowserOs: "windows",
   reviewFilter: "all",
   expandedReviews: new Set(),
   selectedAsin: "",
-  activeSection: "run",
+  activeSection: "trial",
+  activeTrialJobId: localStorage.getItem("activeTrialJobId") || "",
   sellerSpriteKeywordRows: [],
   sellerSpriteImportHistory: [],
   lang: localStorage.getItem("agentLang") || "en",
@@ -97,6 +99,7 @@ const I18N = {
     "metrics.cookieHealth": "Cookie Health",
     "nav.results": "Results Library",
     "nav.run": "Run Agent",
+    "nav.trial": "One-click Research",
     "nav.research": "Market Research",
     "nav.settings": "Settings",
     "research.title": "Market Research — Seller Shortlist",
@@ -115,6 +118,76 @@ const I18N = {
     "research.analyze": "Build shortlist",
     "research.runBrowser": "Run browser export",
     "research.history": "Recent research runs",
+    "trial.kicker": "CONTROLLED TRIAL · REAL DATA",
+    "trial.title": "One-click market research and 1688 sourcing",
+    "trial.subtitle": "First open the target Amazon category or search list in the dedicated Chrome on port 9222. The job exports SellerSprite data, scores the market, selects ASINs, finds 1688 suppliers, and produces two Excel reports.",
+    "trial.idle": "Ready to start",
+    "trial.sourceMode": "Research source",
+    "trial.categoryMode": "Amazon category list",
+    "trial.keywordMode": "Amazon search list",
+    "trial.englishHint": "Use the English query shown on Amazon US.",
+    "trial.limit": "Top scored candidates for sourcing",
+    "trial.aiReasons": "Generate optional AI research reasons",
+    "trial.contract": "The trial uses real Amazon, SellerSprite, and 1688 data only. Missing login, captcha, or supplier evidence pauses or fails explicitly; mock results are never inserted.",
+    "trial.start": "Start full research",
+    "trial.openListHint": "Confirm the dedicated Chrome is showing the target Amazon list and the SellerSprite table has loaded.",
+    "trial.progressTitle": "Workflow progress",
+    "trial.noJob": "No trial job has been created",
+    "trial.stagePreflight": "Environment and login checks",
+    "trial.stagePreflightHint": "Chrome, cookies, download directory",
+    "trial.stageResearch": "Market export and aggregate scoring",
+    "trial.stageResearchHint": "Real SellerSprite list → research Excel",
+    "trial.stageSourcing": "1688 sourcing and profit scoring",
+    "trial.stageSourcingHint": "Top ASINs → supplier evidence",
+    "trial.stageReport": "Candidate shortlist and delivery",
+    "trial.stageReportHint": "Downloadable Excel / JSON",
+    "trial.continue": "Handled — continue job",
+    "trial.deliverables": "Deliverables",
+    "trial.feedbackTitle": "Trial experience",
+    "trial.feedbackHint": "After the job ends, take 20 seconds to tell us what worked and what needs improvement.",
+    "trial.feedbackEase": "Ease of use (1–5)",
+    "trial.feedbackUsefulness": "Report usefulness (1–5)",
+    "trial.feedbackAgain": "Would use again",
+    "trial.feedbackYes": "Yes",
+    "trial.feedbackNo": "No",
+    "trial.feedbackBlocked": "Main blocker",
+    "trial.feedbackNone": "No blocker",
+    "trial.feedbackPreflight": "Login / environment",
+    "trial.feedbackResearch": "Market research",
+    "trial.feedbackSourcing": "1688 sourcing",
+    "trial.feedbackReport": "Understanding the report",
+    "trial.feedbackComment": "Additional feedback (optional)",
+    "trial.feedbackSubmit": "Submit feedback",
+    "trial.feedbackSaved": "Feedback saved. Thank you.",
+    "trial.validationTitle": "Trial acceptance",
+    "trial.validationSubtitle": "Use completed real-job feedback to decide whether to begin the local installer phase.",
+    "trial.validationNoData": "Waiting for real feedback",
+    "trial.validationCollecting": "Collecting evidence",
+    "trial.validationReady": "Ready for installer",
+    "trial.validationImprove": "Improve before packaging",
+    "trial.validationSamples": "Valid responses",
+    "trial.validationCoverage": "Entry modes covered",
+    "trial.validationDelivery": "Two-report delivery rate",
+    "trial.validationEase": "Average ease",
+    "trial.validationUsefulness": "Report usefulness",
+    "trial.validationAgain": "Would use again",
+    "trial.validationNoBlocker": "No main blocker",
+    "trial.validationGates": "Installer entry gates",
+    "trial.validationBlockers": "Blocker distribution",
+    "trial.validationNoDataHint": "No real client feedback yet. Do not begin the installer phase.",
+    "trial.validationCollectingHint": "{count} more completed trial response(s) required before a decision.",
+    "trial.validationReadyHint": "All experience gates passed. The local installer phase may begin.",
+    "trial.validationImproveHint": "The sample is sufficient, but one or more experience gates failed. Improve the workflow and trial again.",
+    "trial.validationEmptyBlockers": "No blocker data yet.",
+    "trial.validationGate.sample_size": "At least 3 completed trial responses",
+    "trial.validationGate.source_mode_count": "Both category and keyword entry modes tested",
+    "trial.validationGate.delivery_rate": "At least 2/3 deliver both report sets",
+    "trial.validationGate.average_ease": "Average ease ≥ 4.0 / 5",
+    "trial.validationGate.average_usefulness": "Report usefulness ≥ 4.0 / 5",
+    "trial.validationGate.would_use_again_rate": "At least 2/3 would use again",
+    "trial.validationGate.no_blocker_rate": "At least 2/3 report no main blocker",
+    "trial.queued": "The full research job is queued. You may keep this page open.",
+    "trial.ready": "All prerequisites detected. Keep the Amazon list open when starting.",
     "preflight.actionRequired": "Action required",
     "preflight.allPassed": "All blocking checks passed. Start a new sourcing run when ready.",
     "preflight.checking": "Checking",
@@ -331,6 +404,7 @@ const I18N = {
     "sidebar.systemStatus": "System Status",
     "status.failed": "failed",
     "status.human_required": "human action",
+    "status.review_required": "review required",
     "status.retry_wait": "retry wait",
     "status.timed_out": "timed out",
     "status.skipped": "skipped",
@@ -430,6 +504,7 @@ const I18N = {
     "metrics.cookieHealth": "Cookie 状态",
     "nav.results": "结果库",
     "nav.run": "运行 Agent",
+    "nav.trial": "一键研究",
     "nav.research": "市场研究",
     "nav.settings": "设置",
     "research.title": "市场研究 —— 卖家清单",
@@ -448,6 +523,76 @@ const I18N = {
     "research.analyze": "生成清单",
     "research.runBrowser": "运行浏览器导出",
     "research.history": "最近的研究记录",
+    "trial.kicker": "受控试用 · 真实数据",
+    "trial.title": "一键完成市场研究与 1688 找货",
+    "trial.subtitle": "先在 9222 专用 Chrome 打开目标 Amazon 类目或搜索列表。提交后系统会自动导出卖家精灵数据、汇总评分、筛选 ASIN、匹配 1688 货源并生成两份 Excel。",
+    "trial.idle": "等待开始",
+    "trial.sourceMode": "研究入口",
+    "trial.categoryMode": "Amazon 类目列表",
+    "trial.keywordMode": "Amazon 搜索列表",
+    "trial.englishHint": "Amazon US 请填写英文检索词。",
+    "trial.limit": "进入找货的高分候选数",
+    "trial.aiReasons": "生成 AI 研究理由（可选）",
+    "trial.contract": "正式试用只使用真实 Amazon、卖家精灵与 1688 数据；缺少登录、验证码或有效供应商证据时会暂停或明确失败，不会填充 Mock 结果。",
+    "trial.start": "开始完整研究",
+    "trial.openListHint": "请先确认 9222 Chrome 当前显示目标 Amazon 列表，且卖家精灵表格已加载。",
+    "trial.progressTitle": "任务进度",
+    "trial.noJob": "尚未创建试用任务",
+    "trial.stagePreflight": "运行环境与登录检查",
+    "trial.stagePreflightHint": "Chrome、Cookies、下载目录",
+    "trial.stageResearch": "市场数据导出与汇总评分",
+    "trial.stageResearchHint": "卖家精灵真实列表 → 研究 Excel",
+    "trial.stageSourcing": "1688 找货与利润评分",
+    "trial.stageSourcingHint": "高分 ASIN → 供应商证据",
+    "trial.stageReport": "候选清单与报告交付",
+    "trial.stageReportHint": "可下载 Excel / JSON",
+    "trial.continue": "我已处理，继续任务",
+    "trial.deliverables": "可交付文件",
+    "trial.feedbackTitle": "本次试用体验",
+    "trial.feedbackHint": "任务结束后用 20 秒告诉我们哪里顺畅、哪里需要改进。",
+    "trial.feedbackEase": "操作顺畅度（1–5）",
+    "trial.feedbackUsefulness": "报告帮助度（1–5）",
+    "trial.feedbackAgain": "愿意继续使用",
+    "trial.feedbackYes": "是",
+    "trial.feedbackNo": "否",
+    "trial.feedbackBlocked": "主要卡点",
+    "trial.feedbackNone": "没有卡点",
+    "trial.feedbackPreflight": "登录/环境检查",
+    "trial.feedbackResearch": "市场研究",
+    "trial.feedbackSourcing": "1688 找货",
+    "trial.feedbackReport": "报告理解",
+    "trial.feedbackComment": "补充意见（可选）",
+    "trial.feedbackSubmit": "提交体验反馈",
+    "trial.feedbackSaved": "反馈已保存，谢谢。",
+    "trial.validationTitle": "试用验收",
+    "trial.validationSubtitle": "用真实终态任务反馈判断是否进入本地安装包阶段。",
+    "trial.validationNoData": "等待真实反馈",
+    "trial.validationCollecting": "正在收集证据",
+    "trial.validationReady": "可进入安装包",
+    "trial.validationImprove": "先改进再打包",
+    "trial.validationSamples": "有效反馈",
+    "trial.validationCoverage": "入口覆盖",
+    "trial.validationDelivery": "双报告交付率",
+    "trial.validationEase": "平均顺畅度",
+    "trial.validationUsefulness": "报告帮助度",
+    "trial.validationAgain": "愿意继续使用",
+    "trial.validationNoBlocker": "无主要卡点",
+    "trial.validationGates": "进入安装包门槛",
+    "trial.validationBlockers": "卡点分布",
+    "trial.validationNoDataHint": "尚无甲方真实反馈，暂不进入安装包阶段。",
+    "trial.validationCollectingHint": "还需 {count} 次终态试用反馈，才能做进入安装包判断。",
+    "trial.validationReadyHint": "全部体验门槛已通过，可以进入本地安装包阶段。",
+    "trial.validationImproveHint": "样本已足够，但仍有体验门槛未通过；请先改进流程并再次试用。",
+    "trial.validationEmptyBlockers": "尚无卡点数据。",
+    "trial.validationGate.sample_size": "至少 3 次终态试用反馈",
+    "trial.validationGate.source_mode_count": "类目与关键词两种入口均已试用",
+    "trial.validationGate.delivery_rate": "至少 2/3 完成两组报告交付",
+    "trial.validationGate.average_ease": "平均顺畅度 ≥ 4.0 / 5",
+    "trial.validationGate.average_usefulness": "报告帮助度 ≥ 4.0 / 5",
+    "trial.validationGate.would_use_again_rate": "至少 2/3 愿意继续使用",
+    "trial.validationGate.no_blocker_rate": "至少 2/3 没有主要卡点",
+    "trial.queued": "完整研究任务已排队，可以保持此页面打开。",
+    "trial.ready": "前置条件已检测通过。开始时请保持 Amazon 列表页打开。",
     "preflight.actionRequired": "需要处理",
     "preflight.allPassed": "所有阻塞项已通过。可以开始新的选品任务。",
     "preflight.checking": "检查中",
@@ -664,6 +809,7 @@ const I18N = {
     "sidebar.systemStatus": "系统状态",
     "status.failed": "失败",
     "status.human_required": "等待人工处理",
+    "status.review_required": "待复核",
     "status.retry_wait": "等待重试",
     "status.timed_out": "已超时",
     "status.skipped": "已跳过",
@@ -710,7 +856,9 @@ const PREFLIGHT_LABELS = {
 const JOB_MESSAGE_LABELS = {
   zh: {
     "No candidates passed filters": "无候选通过筛选",
+    "Review report generated": "已生成复核报告",
     "No candidates passed hard filters; no export was generated": "无候选通过硬筛选，未生成正式候选导出",
+    "No candidates passed hard filters; a review report was generated": "无候选通过硬筛选，已生成包含供应商证据与淘汰原因的复核报告",
     "Cancellation requested": "取消中",
     "Cancelled before start": "启动前已取消",
     "Cancelled before pipeline": "进入流水线前已取消",
@@ -741,6 +889,7 @@ function bindNavigation() {
       button.classList.add("active");
       state.activeSection = button.dataset.section;
       const section = state.activeSection;
+      $("#trialSection").style.display = section === "trial" ? "grid" : "none";
       $("#runSection").style.display = section === "run" ? "grid" : "none";
       $("#resultsSection").style.display = section === "run" || section === "results" ? "grid" : "none";
       $("#settingsSection").style.display = section === "settings" ? "block" : "none";
@@ -760,6 +909,12 @@ function bindActions() {
   $("#loadRunsButton").addEventListener("click", refreshRuns);
   $("#reloadResultsButton").addEventListener("click", refreshResults);
   $("#runButton").addEventListener("click", startRun);
+  $("#trialForm").addEventListener("submit", startFullResearch);
+  $("#trialContinueButton").addEventListener("click", continueTrialJob);
+  $("#trialFeedbackForm").addEventListener("submit", submitTrialFeedback);
+  $$("input[name='trial_source_mode']").forEach((input) => {
+    input.addEventListener("change", updateTrialSourceModeFields);
+  });
   $("#resetButton").addEventListener("click", () => {
     $("#runForm").reset();
     updateSourceModeFields();
@@ -817,6 +972,7 @@ async function refreshAll() {
     refreshManualQueue(),
     refreshImportedSuppliers(),
     refreshSellerSpriteImportHistory(),
+    refreshTrialFeedbackSummary(),
   ]);
   await refreshResults();
 }
@@ -833,6 +989,15 @@ async function refreshPreflight() {
   renderPreflight();
 }
 
+async function refreshTrialFeedbackSummary() {
+  try {
+    state.trialFeedbackSummary = await getJson("/api/trial/feedback/summary");
+  } catch (_error) {
+    state.trialFeedbackSummary = null;
+  }
+  renderTrialFeedbackSummary();
+}
+
 async function refreshJobs() {
   const data = await getJson("/api/jobs");
   state.jobs = data.jobs || [];
@@ -847,6 +1012,7 @@ async function refreshJobs() {
   }));
   state.executionNodes = Object.fromEntries(nodeResults);
   renderJobs();
+  renderTrialWorkflow();
 }
 
 async function refreshRuns() {
@@ -914,6 +1080,7 @@ function renderBrowserSetup() {
   }
   renderBrowserLaunchCommand();
   renderSellerSpriteResearchPrerequisite();
+  renderTrialReadiness();
 }
 
 function toggleBrowserSetupGuide() {
@@ -976,7 +1143,11 @@ async function configureSellerSpriteBrowser(event) {
       enabled: Boolean(form.elements.enabled.checked),
     });
     status.className = result.status === "ready" ? "status-ok" : "status-error";
-    status.textContent = result.status === "ready" ? "Browser configuration saved." : "Browser configuration is incomplete.";
+    status.textContent = result.status === "ready"
+      ? "Browser configuration saved."
+      : result.enabled
+        ? "Browser export is enabled. Add a reviewed locator profile before exporting."
+        : "Browser export is disabled.";
     await Promise.all([refreshConfigStatus(), refreshPreflight()]);
   } catch (error) {
     status.className = "status-error";
@@ -1188,6 +1359,7 @@ function renderSellerSpriteBrowserCapability(browser) {
   if (form) form.elements.enabled.checked = Boolean(browser?.enabled);
   updateSellerSpriteExportAvailability();
   renderSellerSpriteResearchPrerequisite();
+  renderTrialReadiness();
 }
 
 function updateSellerSpriteExportAvailability() {
@@ -1368,6 +1540,8 @@ function toggleLanguage() {
   state.lang = state.lang === "en" ? "zh" : "en";
   localStorage.setItem("agentLang", state.lang);
   applyLanguage();
+  renderTrialWorkflow();
+  renderTrialFeedbackSummary();
 }
 
 function applyLanguage() {
@@ -1394,6 +1568,9 @@ function applyLanguage() {
   renderConfigStatus();
   renderBrowserSetup();
   renderSellerSpriteBrowserCapability(state.configStatus?.seller_sprite_browser || {});
+  updateTrialSourceModeFields();
+  renderTrialReadiness();
+  renderTrialWorkflow();
   renderChatContext();
   renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
 }
@@ -1408,18 +1585,26 @@ function tx(key, fallback) {
 }
 
 function renderCategorySelect() {
-  const select = $("#categorySelect");
-  if (!select || !state.categories.length) return;
-  const current = select.value || "Home & Kitchen";
-  select.innerHTML = state.categories.map((item) => {
-    const label = state.lang === "zh"
-      ? `${item.label_zh} / ${item.canonical}`
-      : `${item.label_en} / ${item.label_zh}`;
-    return `<option value="${escapeAttr(item.canonical)}">${escapeHtml(label)}</option>`;
-  }).join("");
-  select.value = state.categories.some((item) => item.canonical === current)
-    ? current
-    : state.categories[0].canonical;
+  for (const select of [$("#categorySelect"), $("#trialCategorySelect")].filter(Boolean)) {
+    if (!state.categories.length) continue;
+    const current = select.value || "Home & Kitchen";
+    select.innerHTML = state.categories.map((item) => {
+      const label = state.lang === "zh"
+        ? `${item.label_zh} / ${item.canonical}`
+        : `${item.label_en} / ${item.label_zh}`;
+      return `<option value="${escapeAttr(item.canonical)}">${escapeHtml(label)}</option>`;
+    }).join("");
+    select.value = state.categories.some((item) => item.canonical === current)
+      ? current
+      : state.categories[0].canonical;
+  }
+}
+
+function updateTrialSourceModeFields() {
+  const mode = $("#trialForm input[name='trial_source_mode']:checked")?.value || "category";
+  $$("[data-trial-source-field]").forEach((node) => {
+    node.classList.toggle("hidden", node.dataset.trialSourceField !== mode);
+  });
 }
 
 function activeSourceMode() {
@@ -1522,6 +1707,7 @@ function renderPreflight() {
     : state.preflight ? t("preflight.resolveFailed") : t("preflight.initialBody");
   renderSessionSetup();
   updateRunAvailability();
+  renderTrialReadiness();
 }
 
 function renderSessionSetup() {
@@ -1606,6 +1792,370 @@ async function completeCookieSetup(site) {
   } finally {
     renderSessionSetup();
   }
+}
+
+function renderTrialReadiness() {
+  const checks = state.preflight?.checks || [];
+  const checkReady = (key) => checks.some((item) => item.key === key && item.level === "ok");
+  const readiness = {
+    chrome: Boolean(state.browserSetup?.reachable),
+    sellersprite: state.configStatus?.seller_sprite_browser?.status === "ready"
+      || checkReady("seller_sprite_browser"),
+    amazon: checkReady("amazon_cookies"),
+    "1688": checkReady("1688_cookies"),
+  };
+  Object.entries(readiness).forEach(([key, ready]) => {
+    const node = $(`[data-readiness="${key}"]`);
+    if (!node) return;
+    node.classList.toggle("ready", ready);
+    node.classList.toggle("missing", !ready);
+    node.setAttribute("aria-label", `${node.textContent}: ${ready ? "ready" : "action required"}`);
+  });
+  const running = trialJob() && ["queued", "running", "cancel_requested", "retry_wait"].includes(trialJob().status);
+  const button = $("#trialStartButton");
+  if (button) button.disabled = !Object.values(readiness).every(Boolean) || Boolean(running);
+  const hint = $("#trialHint");
+  if (hint && hint.dataset.queued !== "true") {
+    const missing = Object.entries(readiness).filter(([, ready]) => !ready).map(([key]) => key);
+    hint.textContent = missing.length
+      ? (state.lang === "zh"
+        ? `还需处理：${missing.join("、")}。可在“设置”查看 9222 与浏览器配置。`
+        : `Action required: ${missing.join(", ")}. Open Settings for Chrome and browser configuration.`)
+      : t("trial.ready");
+  }
+}
+
+function trialJob() {
+  const selected = state.jobs.find((job) => job.id === state.activeTrialJobId);
+  const latest = state.jobs.find((job) => job.config?.workflow_mode === "full_research");
+  if (selected) {
+    // Follow retry descendants even when the retry was created by the API or
+    // another browser tab, so the controlled-trial screen never stays pinned
+    // to an obsolete failed attempt.
+    const byId = new Map(state.jobs.map((job) => [job.id, job]));
+    let ancestorId = latest?.retry_of;
+    while (ancestorId) {
+      if (ancestorId === selected.id) {
+        state.activeTrialJobId = latest.id;
+        localStorage.setItem("activeTrialJobId", latest.id);
+        return latest;
+      }
+      ancestorId = byId.get(ancestorId)?.retry_of;
+    }
+    return selected;
+  }
+  if (latest) {
+    state.activeTrialJobId = latest.id;
+    localStorage.setItem("activeTrialJobId", latest.id);
+  }
+  return latest || null;
+}
+
+async function startFullResearch(event) {
+  event.preventDefault();
+  const formElement = event.currentTarget;
+  const form = new FormData(formElement);
+  const sourceMode = String(form.get("trial_source_mode") || "category");
+  const payload = {
+    source_mode: sourceMode,
+    marketplace: "US",
+    limit: Number(form.get("limit") || 10),
+    no_mock: true,
+    generate_ai_reasons: Boolean(form.get("generate_ai_reasons")),
+    require_supplier_evidence: true,
+  };
+  if (sourceMode === "keyword") {
+    payload.keyword = String(form.get("keyword") || "").trim();
+    payload.research_keyword = payload.keyword;
+    payload.niche_label = payload.keyword;
+  } else {
+    payload.category = String(form.get("category") || "").trim();
+    payload.research_keyword = payload.category;
+    payload.niche_label = payload.category;
+  }
+  const button = $("#trialStartButton");
+  const hint = $("#trialHint");
+  button.disabled = true;
+  hint.dataset.queued = "true";
+  hint.textContent = t("trial.queued");
+  try {
+    const response = await postJson("/api/trial/full-research", payload);
+    state.activeTrialJobId = response.job.id;
+    localStorage.setItem("activeTrialJobId", response.job.id);
+    await refreshJobs();
+  } catch (error) {
+    hint.dataset.queued = "false";
+    hint.textContent = error.message;
+    renderTrialReadiness();
+  }
+}
+
+async function continueTrialJob() {
+  const job = trialJob();
+  if (!job) return;
+  const button = $("#trialContinueButton");
+  button.disabled = true;
+  try {
+    if (["failed", "cancelled"].includes(job.status) || !job.run_log_id) {
+      const response = await postJson(`/api/jobs/${encodeURIComponent(job.id)}/retry`, {});
+      state.activeTrialJobId = response.job.id;
+      localStorage.setItem("activeTrialJobId", response.job.id);
+    } else {
+      const nodes = state.executionNodes[String(job.run_log_id)] || [];
+      const node = nodes.find((item) => item.status === "human_required");
+      if (!node) throw new Error("No resumable browser action was found.");
+      await postJson(
+        `/api/jobs/${encodeURIComponent(job.id)}/nodes/${encodeURIComponent(node.id)}/resume`,
+        {
+          reason: "Trial user completed the required browser action",
+          resume_token: node.resume_token,
+        },
+      );
+    }
+    await refreshJobs();
+  } catch (error) {
+    const alert = $("#trialAlert");
+    alert.classList.remove("hidden");
+    alert.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderTrialWorkflow() {
+  const job = trialJob();
+  const badge = $("#trialStatusBadge");
+  const meta = $("#trialJobMeta");
+  const alert = $("#trialAlert");
+  const continueButton = $("#trialContinueButton");
+  const deliverables = $("#trialDeliverables");
+  const feedback = $("#trialFeedbackForm");
+  if (!badge || !meta || !alert || !continueButton || !deliverables || !feedback) return;
+
+  $$("#trialStages li").forEach((item) => {
+    item.classList.remove("active", "complete", "error", "human");
+  });
+  alert.classList.add("hidden");
+  continueButton.classList.add("hidden");
+  deliverables.classList.add("hidden");
+  feedback.classList.add("hidden");
+
+  if (!job) {
+    badge.className = "badge muted";
+    badge.textContent = t("trial.idle");
+    meta.textContent = t("trial.noJob");
+    renderTrialReadiness();
+    return;
+  }
+
+  const source = job.config?.source_mode === "keyword"
+    ? job.config.keyword
+    : job.config?.category;
+  meta.textContent = `${job.id} · ${source || "-"} · ${Number(job.config?.limit || 0)} ASIN`;
+  badge.className = `badge ${job.status === "success" ? "ok" : ["failed", "cancelled"].includes(job.status) ? "err" : "warn"}`;
+  badge.textContent = statusLabel(job.status);
+
+  const events = Array.isArray(job.events) ? job.events : [];
+  const hasResearch = job.research?.status === "SUCCESS";
+  const researchAttempted = Boolean(job.research?.status)
+    || events.some((event) => event.event === "market_research");
+  const pipelineStarted = Boolean(job.run_log_id) || events.some((event) => event.event === "pipeline");
+  const stageNodes = {
+    preflight: $("#trialStages [data-stage='preflight']"),
+    research: $("#trialStages [data-stage='research']"),
+    sourcing: $("#trialStages [data-stage='sourcing']"),
+    report: $("#trialStages [data-stage='report']"),
+  };
+  stageNodes.preflight.classList.add(
+    job.status === "queued" ? "active"
+      : job.status === "failed" && !researchAttempted && !pipelineStarted ? "error"
+        : "complete"
+  );
+  if (hasResearch) stageNodes.research.classList.add("complete");
+  else if (researchAttempted && (job.status === "running" || job.status === "human_required" || job.status === "failed")) {
+    stageNodes.research.classList.add(job.status === "human_required" ? "human" : job.status === "failed" ? "error" : "active");
+  }
+  if (pipelineStarted) {
+    stageNodes.sourcing.classList.add(
+      job.status === "success" ? "complete"
+        : job.status === "human_required" ? "human"
+          : job.status === "review_required" ? "human"
+          : job.status === "failed" || job.status === "cancelled" ? "error"
+            : "active"
+    );
+  }
+  if (job.status === "success" || (job.exports && Object.keys(job.exports).length)) {
+    stageNodes.report.classList.add("complete");
+  }
+
+  if (job.error) {
+    alert.classList.remove("hidden");
+    alert.classList.toggle(
+      "human",
+      job.status === "human_required" || job.status === "review_required",
+    );
+    alert.textContent = jobMessageLabel(job.error);
+  }
+  if (job.status === "human_required" || job.status === "failed" || job.status === "cancelled") {
+    continueButton.textContent = ["failed", "cancelled"].includes(job.status)
+      ? t("actions.retry")
+      : t("trial.continue");
+    continueButton.classList.remove("hidden");
+  }
+
+  const links = trialDownloadLinks(job);
+  if (links) {
+    deliverables.classList.remove("hidden");
+    $("#trialDownloadLinks").innerHTML = links;
+  }
+  if (["success", "failed", "cancelled", "review_required"].includes(job.status)) {
+    feedback.classList.remove("hidden");
+    if (feedback.dataset.jobId !== job.id) {
+      feedback.reset();
+      feedback.dataset.jobId = job.id;
+      $("#trialFeedbackButton").disabled = false;
+      $("#trialFeedbackStatus").textContent = "";
+    }
+  }
+  const hint = $("#trialHint");
+  if (!["queued", "running", "retry_wait"].includes(job.status)) {
+    hint.dataset.queued = "false";
+  }
+  renderTrialReadiness();
+}
+
+async function submitTrialFeedback(event) {
+  event.preventDefault();
+  const job = trialJob();
+  if (!job) return;
+  const form = event.currentTarget;
+  const button = $("#trialFeedbackButton");
+  const status = $("#trialFeedbackStatus");
+  const fields = new FormData(form);
+  button.disabled = true;
+  status.textContent = "";
+  try {
+    await postJson("/api/trial/feedback", {
+      job_id: job.id,
+      job_status: job.status,
+      ease: Number(fields.get("ease")),
+      result_usefulness: Number(fields.get("result_usefulness")),
+      would_use_again: fields.get("would_use_again") === "true",
+      blocked_stage: fields.get("blocked_stage") || "none",
+      comment: String(fields.get("comment") || "").trim(),
+    });
+    status.textContent = t("trial.feedbackSaved");
+    await refreshTrialFeedbackSummary();
+  } catch (error) {
+    status.textContent = error.message;
+    button.disabled = false;
+  }
+}
+
+function renderTrialFeedbackSummary() {
+  const summary = state.trialFeedbackSummary;
+  const badge = $("#trialValidationBadge");
+  const criteria = $("#trialValidationCriteria");
+  const blockers = $("#trialValidationBlockers");
+  const decision = $("#trialValidationDecision");
+  if (!badge || !criteria || !blockers || !decision) return;
+
+  const sampleSize = Number(summary?.sample_size || 0);
+  const minimumSample = Number(summary?.minimum_sample_size || 3);
+  const metrics = summary?.metrics || {};
+  $("#trialValidationSamples").textContent = `${sampleSize} / ${minimumSample}`;
+  $("#trialValidationCoverage").textContent = `${Number(metrics.source_mode_count || 0)} / 2`;
+  $("#trialValidationDelivery").textContent = trialPercent(metrics.delivery_rate);
+  $("#trialValidationEase").textContent = trialRating(metrics.average_ease);
+  $("#trialValidationUsefulness").textContent = trialRating(metrics.average_usefulness);
+  $("#trialValidationAgain").textContent = trialPercent(metrics.would_use_again_rate);
+  $("#trialValidationNoBlocker").textContent = trialPercent(metrics.no_blocker_rate);
+
+  const status = summary?.status || "no_data";
+  const statusView = {
+    no_data: ["muted", "trial.validationNoData"],
+    collecting: ["warn", "trial.validationCollecting"],
+    ready_for_installer: ["ok", "trial.validationReady"],
+    needs_improvement: ["err", "trial.validationImprove"],
+  }[status] || ["muted", "trial.validationNoData"];
+  badge.className = `badge ${statusView[0]}`;
+  badge.textContent = t(statusView[1]);
+
+  const criterionRows = Array.isArray(summary?.criteria) ? summary.criteria : [
+    { key: "sample_size", passed: false },
+    { key: "source_mode_count", passed: false },
+    { key: "delivery_rate", passed: false },
+    { key: "average_ease", passed: false },
+    { key: "average_usefulness", passed: false },
+    { key: "would_use_again_rate", passed: false },
+    { key: "no_blocker_rate", passed: false },
+  ];
+  criteria.innerHTML = criterionRows.map((criterion) => {
+    const pending = status === "no_data" || status === "collecting";
+    const className = criterion.passed ? "pass" : pending ? "pending" : "fail";
+    const icon = criterion.passed ? "✓" : pending ? "…" : "!";
+    return `
+      <div class="${className}">
+        <span>${icon}</span>
+        <strong>${escapeHtml(t(`trial.validationGate.${criterion.key}`))}</strong>
+      </div>
+    `;
+  }).join("");
+
+  const blockerCounts = summary?.blocker_counts || {};
+  const blockerLabels = {
+    none: t("trial.feedbackNone"),
+    preflight: t("trial.feedbackPreflight"),
+    market_research: t("trial.feedbackResearch"),
+    sourcing: t("trial.feedbackSourcing"),
+    report: t("trial.feedbackReport"),
+  };
+  const blockerRows = Object.entries(blockerLabels)
+    .filter(([key]) => Number(blockerCounts[key] || 0) > 0)
+    .map(([key, label]) => `
+      <span class="${key === "none" ? "clear" : ""}">
+        ${escapeHtml(label)} <strong>${Number(blockerCounts[key] || 0)}</strong>
+      </span>
+    `);
+  blockers.innerHTML = blockerRows.length
+    ? blockerRows.join("")
+    : `<small>${escapeHtml(t("trial.validationEmptyBlockers"))}</small>`;
+
+  if (status === "collecting") {
+    decision.textContent = t("trial.validationCollectingHint").replace(
+      "{count}",
+      String(Number(summary?.remaining_trials || 0)),
+    );
+  } else if (status === "ready_for_installer") {
+    decision.textContent = t("trial.validationReadyHint");
+  } else if (status === "needs_improvement") {
+    decision.textContent = t("trial.validationImproveHint");
+  } else {
+    decision.textContent = t("trial.validationNoDataHint");
+  }
+  decision.className = `trial-validation-decision ${status}`;
+}
+
+function trialRating(value) {
+  return value === null || value === undefined ? "— / 5" : `${Number(value).toFixed(1)} / 5`;
+}
+
+function trialPercent(value) {
+  return value === null || value === undefined ? "—" : `${Math.round(Number(value) * 100)}%`;
+}
+
+function trialDownloadLinks(job) {
+  const links = [];
+  const add = (label, path) => {
+    if (!path) return;
+    const filename = String(path).split(/[\\/]/).pop();
+    links.push(`<a class="ghost-button" href="/api/exports/${encodeURIComponent(filename)}">${escapeHtml(label)}</a>`);
+  };
+  add(state.lang === "zh" ? "市场汇总 Excel" : "Market research Excel", job.research?.exports?.xlsx);
+  add(state.lang === "zh" ? "市场数据 JSON" : "Market research JSON", job.research?.exports?.json);
+  add(state.lang === "zh" ? "选品结果 Excel" : "Sourcing results Excel", job.exports?.xlsx);
+  add(state.lang === "zh" ? "选品证据 JSON" : "Sourcing evidence JSON", job.exports?.json);
+  return links.join("");
 }
 
 function renderJobs() {
@@ -1734,7 +2284,7 @@ function jobActionButtons(job) {
   if (job.status === "queued" || job.status === "running" || job.status === "cancel_requested") {
     return `<button class="link-button job-action" data-action="cancel" data-job-id="${escapeAttr(job.id)}">${escapeHtml(t("actions.cancel"))}</button>`;
   }
-  if (job.status === "failed" || job.status === "cancelled") {
+  if (job.status === "failed" || job.status === "cancelled" || (job.status === "human_required" && !job.run_log_id)) {
     return `<button class="link-button job-action" data-action="retry" data-job-id="${escapeAttr(job.id)}">${escapeHtml(t("actions.retry"))}</button>`;
   }
   return "";

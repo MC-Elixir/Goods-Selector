@@ -17,7 +17,11 @@
           </div>
         </div>
         <nav class="nav">
-          <button class="nav-item active" data-section="run">
+          <button class="nav-item active" data-section="trial">
+            <span class="icon">✦</span>
+            <span data-i18n="nav.trial">一键研究</span>
+          </button>
+          <button class="nav-item" data-section="run">
             <span class="icon">▶</span>
             <span data-i18n="nav.run">Run Agent</span>
           </button>
@@ -68,7 +72,194 @@
           </div>
         </header>
 
-        <section class="workspace" id="runSection">
+        <section class="trial-workspace" id="trialSection">
+          <div class="panel trial-launch-panel">
+            <div class="trial-hero">
+              <div>
+                <span class="trial-kicker" data-i18n="trial.kicker">受控试用 · 真实数据</span>
+                <h2 data-i18n="trial.title">一键完成市场研究与 1688 找货</h2>
+                <p data-i18n="trial.subtitle">先在 9222 专用 Chrome 打开目标 Amazon 类目或搜索列表。提交后系统会自动导出卖家精灵数据、汇总评分、筛选 ASIN、匹配 1688 货源并生成两份 Excel。</p>
+              </div>
+              <span class="badge muted" id="trialStatusBadge" data-i18n="trial.idle">等待开始</span>
+            </div>
+
+            <form id="trialForm" class="trial-form">
+              <div class="source-mode-field full-span">
+                <span data-i18n="trial.sourceMode">研究入口</span>
+                <div class="source-mode-options trial-source-options">
+                  <label>
+                    <input name="trial_source_mode" type="radio" value="category" checked>
+                    <span data-i18n="trial.categoryMode">Amazon 类目列表</span>
+                  </label>
+                  <label>
+                    <input name="trial_source_mode" type="radio" value="keyword">
+                    <span data-i18n="trial.keywordMode">Amazon 搜索列表</span>
+                  </label>
+                </div>
+              </div>
+              <label data-trial-source-field="category">
+                <span data-i18n="run.category">类目</span>
+                <select name="category" id="trialCategorySelect">
+                  <option value="Home & Kitchen">家居厨具 / Home & Kitchen</option>
+                  <option value="Kitchen & Dining">厨房餐饮 / Kitchen & Dining</option>
+                  <option value="Sports & Outdoors">运动户外 / Sports & Outdoors</option>
+                  <option value="Pet Supplies">宠物用品 / Pet Supplies</option>
+                  <option value="Toys & Games">玩具游戏 / Toys & Games</option>
+                  <option value="Office Products">办公用品 / Office Products</option>
+                </select>
+              </label>
+              <label data-trial-source-field="keyword" class="hidden">
+                <span data-i18n="run.keyword">关键词</span>
+                <input name="keyword" placeholder="例如 patio umbrella" autocomplete="off">
+                <small class="field-hint" data-i18n="trial.englishHint">Amazon US 请填写英文检索词。</small>
+              </label>
+              <label>
+                <span data-i18n="trial.limit">进入找货的高分候选数</span>
+                <input name="limit" type="number" min="1" max="20" value="10">
+              </label>
+              <label class="switch-row">
+                <span data-i18n="trial.aiReasons">生成 AI 研究理由（可选）</span>
+                <input name="generate_ai_reasons" type="checkbox">
+              </label>
+              <div class="trial-contract full-span">
+                <span>✓</span>
+                <p data-i18n="trial.contract">正式试用只使用真实 Amazon、卖家精灵与 1688 数据；缺少登录、验证码或有效供应商证据时会暂停或明确失败，不会填充 Mock 结果。</p>
+              </div>
+              <button class="primary-button trial-start-button full-span" id="trialStartButton" type="submit" data-i18n="trial.start">开始完整研究</button>
+              <small class="full-span trial-hint" id="trialHint" role="status" aria-live="polite" data-i18n="trial.openListHint">请先确认 9222 Chrome 当前显示目标 Amazon 列表，且卖家精灵表格已加载。</small>
+            </form>
+          </div>
+
+          <aside class="panel trial-progress-panel">
+            <div class="panel-head compact">
+              <div>
+                <h2 data-i18n="trial.progressTitle">任务进度</h2>
+                <p id="trialJobMeta" data-i18n="trial.noJob">尚未创建试用任务</p>
+              </div>
+            </div>
+            <div class="trial-readiness" id="trialReadiness">
+              <span data-readiness="chrome">Chrome 9222</span>
+              <span data-readiness="sellersprite">卖家精灵</span>
+              <span data-readiness="amazon">Amazon</span>
+              <span data-readiness="1688">1688</span>
+            </div>
+            <ol class="trial-stages" id="trialStages">
+              <li data-stage="preflight"><span>1</span><div><strong data-i18n="trial.stagePreflight">运行环境与登录检查</strong><small data-i18n="trial.stagePreflightHint">Chrome、Cookies、下载目录</small></div></li>
+              <li data-stage="research"><span>2</span><div><strong data-i18n="trial.stageResearch">市场数据导出与汇总评分</strong><small data-i18n="trial.stageResearchHint">卖家精灵真实列表 → 研究 Excel</small></div></li>
+              <li data-stage="sourcing"><span>3</span><div><strong data-i18n="trial.stageSourcing">1688 找货与利润评分</strong><small data-i18n="trial.stageSourcingHint">高分 ASIN → 供应商证据</small></div></li>
+              <li data-stage="report"><span>4</span><div><strong data-i18n="trial.stageReport">候选清单与报告交付</strong><small data-i18n="trial.stageReportHint">可下载 Excel / JSON</small></div></li>
+            </ol>
+            <div class="trial-alert hidden" id="trialAlert" role="alert"></div>
+            <button class="ghost-button hidden" id="trialContinueButton" type="button" data-i18n="trial.continue">我已处理，继续任务</button>
+            <div class="trial-deliverables hidden" id="trialDeliverables">
+              <strong data-i18n="trial.deliverables">可交付文件</strong>
+              <div id="trialDownloadLinks"></div>
+            </div>
+            <form class="trial-feedback hidden" id="trialFeedbackForm">
+              <strong data-i18n="trial.feedbackTitle">本次试用体验</strong>
+              <p data-i18n="trial.feedbackHint">任务结束后用 20 秒告诉我们哪里顺畅、哪里需要改进。</p>
+              <div class="trial-feedback-grid">
+                <label>
+                  <span data-i18n="trial.feedbackEase">操作顺畅度（1–5）</span>
+                  <select name="ease" required>
+                    <option value="">—</option>
+                    <option value="1">1</option><option value="2">2</option>
+                    <option value="3">3</option><option value="4">4</option>
+                    <option value="5">5</option>
+                  </select>
+                </label>
+                <label>
+                  <span data-i18n="trial.feedbackUsefulness">报告帮助度（1–5）</span>
+                  <select name="result_usefulness" required>
+                    <option value="">—</option>
+                    <option value="1">1</option><option value="2">2</option>
+                    <option value="3">3</option><option value="4">4</option>
+                    <option value="5">5</option>
+                  </select>
+                </label>
+                <label>
+                  <span data-i18n="trial.feedbackAgain">愿意继续使用</span>
+                  <select name="would_use_again" required>
+                    <option value="">—</option>
+                    <option value="true" data-i18n="trial.feedbackYes">是</option>
+                    <option value="false" data-i18n="trial.feedbackNo">否</option>
+                  </select>
+                </label>
+                <label>
+                  <span data-i18n="trial.feedbackBlocked">主要卡点</span>
+                  <select name="blocked_stage">
+                    <option value="none" data-i18n="trial.feedbackNone">没有卡点</option>
+                    <option value="preflight" data-i18n="trial.feedbackPreflight">登录/环境检查</option>
+                    <option value="market_research" data-i18n="trial.feedbackResearch">市场研究</option>
+                    <option value="sourcing" data-i18n="trial.feedbackSourcing">1688 找货</option>
+                    <option value="report" data-i18n="trial.feedbackReport">报告理解</option>
+                  </select>
+                </label>
+              </div>
+              <label class="trial-feedback-comment">
+                <span data-i18n="trial.feedbackComment">补充意见（可选）</span>
+                <textarea name="comment" maxlength="500" rows="2"></textarea>
+              </label>
+              <button class="ghost-button" id="trialFeedbackButton" type="submit" data-i18n="trial.feedbackSubmit">提交体验反馈</button>
+              <small id="trialFeedbackStatus" role="status" aria-live="polite"></small>
+            </form>
+          </aside>
+
+          <section class="panel trial-validation-panel" id="trialValidationPanel">
+            <div class="panel-head compact">
+              <div>
+                <h2 data-i18n="trial.validationTitle">试用验收</h2>
+                <p data-i18n="trial.validationSubtitle">用真实终态任务反馈判断是否进入本地安装包阶段。</p>
+              </div>
+              <span class="badge muted" id="trialValidationBadge" data-i18n="trial.validationNoData">等待真实反馈</span>
+            </div>
+            <div class="trial-validation-body">
+              <div class="trial-validation-metrics">
+                <div>
+                  <span data-i18n="trial.validationSamples">有效反馈</span>
+                  <strong id="trialValidationSamples">0 / 3</strong>
+                </div>
+                <div>
+                  <span data-i18n="trial.validationCoverage">入口覆盖</span>
+                  <strong id="trialValidationCoverage">0 / 2</strong>
+                </div>
+                <div>
+                  <span data-i18n="trial.validationDelivery">双报告交付率</span>
+                  <strong id="trialValidationDelivery">—</strong>
+                </div>
+                <div>
+                  <span data-i18n="trial.validationEase">平均顺畅度</span>
+                  <strong id="trialValidationEase">— / 5</strong>
+                </div>
+                <div>
+                  <span data-i18n="trial.validationUsefulness">报告帮助度</span>
+                  <strong id="trialValidationUsefulness">— / 5</strong>
+                </div>
+                <div>
+                  <span data-i18n="trial.validationAgain">愿意继续使用</span>
+                  <strong id="trialValidationAgain">—</strong>
+                </div>
+                <div>
+                  <span data-i18n="trial.validationNoBlocker">无主要卡点</span>
+                  <strong id="trialValidationNoBlocker">—</strong>
+                </div>
+              </div>
+              <div class="trial-validation-grid">
+                <div>
+                  <strong class="trial-validation-label" data-i18n="trial.validationGates">进入安装包门槛</strong>
+                  <div class="trial-validation-criteria" id="trialValidationCriteria"></div>
+                </div>
+                <div>
+                  <strong class="trial-validation-label" data-i18n="trial.validationBlockers">卡点分布</strong>
+                  <div class="trial-validation-blockers" id="trialValidationBlockers"></div>
+                </div>
+              </div>
+              <p class="trial-validation-decision" id="trialValidationDecision" role="status" aria-live="polite" data-i18n="trial.validationNoDataHint">尚无甲方真实反馈，暂不进入安装包阶段。</p>
+            </div>
+          </section>
+        </section>
+
+        <section class="workspace" id="runSection" style="display:none">
           <div class="panel run-panel">
             <div class="panel-head">
               <div>
@@ -177,7 +368,7 @@
           </aside>
         </section>
 
-        <section class="results-workspace" id="resultsSection">
+        <section class="results-workspace" id="resultsSection" style="display:none">
           <div class="panel results-panel">
             <div class="panel-head">
               <div>
@@ -265,7 +456,7 @@
               <div class="browser-setup-guide hidden" id="browserSetupGuide">
                 <p data-i18n="browserSetup.profileNote">Chrome 136+ requires a non-default user data directory. Use this dedicated profile only for Amazon, 1688, and SellerSprite automation.</p>
                 <div class="browser-command-tabs" role="group" aria-label="Operating system">
-                  <button class="active" type="button" data-browser-os="windows">Windows</button>
+                  <button class="active" type="button" data-browser-os="windows">Windows PowerShell</button>
                   <button type="button" data-browser-os="macos">macOS</button>
                   <button type="button" data-browser-os="linux">Linux</button>
                 </div>
@@ -290,7 +481,7 @@
                 <input name="host_download_dir" value="Chrome-managed" autocomplete="off" required>
               </label>
               <label class="checkbox-label">
-                <input name="enabled" type="checkbox">
+                <input name="enabled" type="checkbox" checked>
                 <span>Enable SellerSprite browser export</span>
               </label>
               <button class="ghost-button" type="submit">Save browser configuration</button>

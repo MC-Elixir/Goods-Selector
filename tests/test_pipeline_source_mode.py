@@ -138,6 +138,57 @@ def test_category_source_mode_keeps_existing_bsr_crawler(monkeypatch, tmp_path):
         assert run.api_calls["source_query"] == "Home & Kitchen"
 
 
+def test_scored_research_seeds_skip_amazon_crawlers(monkeypatch, tmp_path):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'research-seed.db'}",
+        future=True,
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+
+    @contextmanager
+    def temp_session_scope():
+        with session_local.begin() as session:
+            yield session
+
+    def fail_crawler(*args, **kwargs):
+        raise AssertionError("a scored research seed must not crawl Amazon again")
+
+    monkeypatch.setattr("pipeline.orchestrator.session_scope", temp_session_scope)
+    monkeypatch.setattr(settings, "mjjl_max_products_per_run", 0)
+    monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", fail_crawler)
+    monkeypatch.setattr("crawlers.amazon_search.search_amazon_products", fail_crawler)
+    monkeypatch.setattr("matchers.match_suppliers", lambda product: [])
+    monkeypatch.setattr("pipeline.orchestrator.rank_candidates", lambda records, top_n: [])
+
+    run_id = run_pipeline(
+        category="Home & Kitchen",
+        source_mode="category",
+        limit=1,
+        marketplace="US",
+        export=False,
+        seed_products=[{
+            "asin": "B000000777",
+            "marketplace": "US",
+            "title": "Scored research candidate",
+            "price": 39.99,
+            "raw_data": {"research_fit_score": 91.0},
+        }],
+    )
+
+    with temp_session_scope() as session:
+        run = session.get(RunLog, run_id)
+        assert run.products_crawled == 1
+        assert run.api_calls["source_origin"] == "seller_research"
+        source = session.query(ExecutionNode).filter_by(
+            run_id=run_id, scope_key="run", stage="source_discovery"
+        ).one()
+        product = source.output_snapshot["products"][0]
+        assert product["asin"] == "B000000777"
+        assert product["raw_data"]["source_mode"] == "seller_research"
+
+
 def test_keyword_captcha_becomes_human_required_with_sanitized_diagnostics(monkeypatch, tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'diagnostic.db'}", future=True)
     Base.metadata.create_all(engine)

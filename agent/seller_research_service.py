@@ -137,7 +137,7 @@ def run_competitor_export(
             "keyword": keyword,
             "niche_label": label,
             "message": (
-                "SellerSprite 竞品导出未配置：请先提供 competitor_* 定位符并启用浏览器流程，"
+                "SellerSprite 市场导出未配置：请先提供当前列表或关键词检索所需的 competitor_* 定位符并启用浏览器流程，"
                 "或改用导出文件导入。"
             ),
         }

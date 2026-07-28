@@ -78,6 +78,8 @@ def test_webui_prompts_for_missing_sessions_and_guides_9222_setup():
     js = (PROJECT_ROOT / "webui" / "app.js").read_text(encoding="utf-8")
     styles = (PROJECT_ROOT / "webui" / "styles.css").read_text(encoding="utf-8")
 
+    assert "Windows PowerShell" in html
+    assert '<input name="enabled" type="checkbox" checked>' in html
     assert 'id="sessionSetupPanel"' in html
     assert 'id="browserSetupGuide"' in html
     assert 'id="researchBrowserPrerequisite"' in html
@@ -87,3 +89,4 @@ def test_webui_prompts_for_missing_sessions_and_guides_9222_setup():
     assert "action: \"open_login\"" in js
     assert ".session-setup-panel" in styles
     assert ".browser-readiness-card" in styles
+    assert ".browser-command-row .ghost-button" in styles

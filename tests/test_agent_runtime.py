@@ -1,10 +1,11 @@
 """AgentRuntime job behavior tests."""
 from __future__ import annotations
 
+import json
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import create_engine
@@ -34,6 +35,34 @@ def _wait_until(predicate, timeout: float = 5.0) -> None:
 
 def _runtime(tmp_path) -> AgentRuntime:
     return AgentRuntime(job_store_path=tmp_path / "agent_jobs.json")
+
+
+def _full_research_payload(tmp_path):
+    research_xlsx = tmp_path / "market_research.xlsx"
+    research_json = tmp_path / "market_research.json"
+    research_xlsx.write_bytes(b"xlsx")
+    research_json.write_text("{}", encoding="utf-8")
+    return {
+        "status": "SUCCESS",
+        "run_id": "research-run-1",
+        "keyword": "patio umbrella",
+        "items": [{
+            "seller": "Focused Seller",
+            "representative_asin": "B000000321",
+            "representative_title": "Patio Umbrella",
+            "brand": "Shade Co",
+            "price": 49.99,
+            "rating": 4.4,
+            "review_count": 180,
+            "monthly_sales": 420,
+            "monthly_revenue": 20995.8,
+            "fit_score": 88.0,
+            "fit_category": "focused",
+            "fit_reasons": ["少而精", "月销稳定"],
+        }],
+        "excluded_items": [],
+        "exports": {"xlsx": str(research_xlsx), "json": str(research_json)},
+    }
 
 
 def test_runtime_startup_marks_interrupted_runs_as_failed(monkeypatch, tmp_path):
@@ -224,6 +253,74 @@ def test_runtime_keeps_cancellation_message_during_late_progress(monkeypatch, tm
     assert data["status"] == "cancel_requested"
     assert data["message"] == "Cancellation requested"
     assert data["events"][-1]["event"] == "match"
+
+
+def test_full_research_job_feeds_scored_asins_directly_to_pipeline(monkeypatch, tmp_path):
+    export = tmp_path / "candidates_live.json"
+    export.write_text('[{"asin": "B000000321"}]', encoding="utf-8")
+    captured = {}
+
+    monkeypatch.setattr("agent.runner.run_preflight", lambda: {"ready": True, "checks": []})
+    monkeypatch.setattr("agent.runner.init_db", lambda: None)
+    monkeypatch.setattr("agent.runner._run_market_research", lambda config: _full_research_payload(tmp_path))
+    monkeypatch.setattr("agent.runner.latest_export_after", lambda started: {"json": export})
+    monkeypatch.setattr(
+        "agent.runner.audit_export",
+        lambda path: {"candidate_count": 1, "supplier_evidence_ready": True},
+    )
+    monkeypatch.setattr("agent.runner.manual_queue_summary", lambda: {"open": 0, "total": 0})
+
+    def fake_pipeline(**kwargs):
+        captured.update(kwargs)
+        return 913
+
+    monkeypatch.setattr("pipeline.orchestrator.run_pipeline", fake_pipeline)
+    runtime = _runtime(tmp_path)
+    job = runtime.start_run(AgentRunConfig(
+        category="Home & Kitchen",
+        limit=5,
+        workflow_mode="full_research",
+        research_keyword="patio umbrella",
+        require_supplier_evidence=True,
+    ))
+
+    _wait_until(lambda: runtime.get_job(job.id)["status"] == "success")
+    result = runtime.get_job(job.id)
+
+    assert captured["seed_products"][0]["asin"] == "B000000321"
+    assert captured["seed_products"][0]["raw_data"]["research_fit_score"] == 88.0
+    assert captured["export_review_on_empty"] is True
+    assert result["research"]["run_id"] == "research-run-1"
+    assert result["research"]["exports"]["xlsx"].endswith("market_research.xlsx")
+    assert any(event["event"] == "market_research_complete" for event in result["events"])
+
+
+def test_full_research_browser_gate_is_human_required_and_retryable(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr("agent.runner.run_preflight", lambda: {"ready": True, "checks": []})
+    monkeypatch.setattr("agent.runner.init_db", lambda: None)
+    monkeypatch.setattr(
+        "agent.runner._run_market_research",
+        lambda config: {"status": "CAPTCHA", "keyword": config.research_keyword},
+    )
+    monkeypatch.setattr("pipeline.orchestrator.run_pipeline", lambda **kwargs: calls.append(kwargs))
+    runtime = _runtime(tmp_path)
+    job = runtime.start_run(AgentRunConfig(
+        category="Home & Kitchen",
+        limit=5,
+        workflow_mode="full_research",
+        research_keyword="patio umbrella",
+    ))
+
+    _wait_until(lambda: runtime.get_job(job.id)["status"] == "human_required")
+    blocked = runtime.get_job(job.id)
+    assert blocked["run_log_id"] is None
+    assert "验证码" in blocked["error"]
+    assert calls == []
+
+    retried = runtime.retry_job(job.id)
+    assert retried.retry_of == job.id
+    _wait_until(lambda: runtime.get_job(retried.id)["status"] == "human_required")
 
 
 def test_runtime_records_progress_to_persistent_run_events(monkeypatch, tmp_path):
@@ -584,3 +681,90 @@ def test_runtime_reports_no_candidates_before_supplier_evidence_guard(monkeypatc
     assert data["message"] == "No candidates passed filters"
     assert data["error"] == "No candidates passed hard filters; no export was generated"
     assert data["run_log_id"] == 655
+
+
+def test_runtime_keeps_zero_passed_status_when_review_export_exists(
+    monkeypatch, tmp_path
+):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from db.models import Base, RunLog
+
+    export = tmp_path / "review.json"
+    export.write_text('[{"asin": "B0REVIEW001"}]', encoding="utf-8")
+    engine = create_engine(f"sqlite:///{tmp_path / 'review.db'}", future=True)
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(
+        bind=engine, autoflush=False, autocommit=False, future=True
+    )
+    with session_local() as session:
+        session.add(RunLog(id=656, status="success", candidates_after_filter=0))
+        session.commit()
+
+    @contextmanager
+    def temp_session_scope():
+        session = session_local()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    runtime = _runtime(tmp_path)
+    monkeypatch.setattr("agent.runner.session_scope", temp_session_scope)
+    monkeypatch.setattr("agent.runner.run_preflight", lambda: {"ready": True, "checks": []})
+    monkeypatch.setattr("agent.runner.init_db", lambda: None)
+    monkeypatch.setattr("pipeline.orchestrator.run_pipeline", lambda **kwargs: 656)
+    monkeypatch.setattr(
+        "agent.runner._exports_for_run",
+        lambda run_id, started: {"json": export, "xlsx": tmp_path / "review.xlsx"},
+    )
+    monkeypatch.setattr(
+        "agent.runner.audit_export",
+        lambda path: {
+            "candidate_count": 1,
+            "supplier_evidence_ready": True,
+            "market_data_rich_ready": True,
+        },
+    )
+    monkeypatch.setattr("agent.runner.manual_queue_summary", lambda: {"open": 0, "total": 0})
+
+    job = AgentJob(config=AgentRunConfig(
+        category="Home & Kitchen",
+        limit=1,
+        require_supplier_evidence=True,
+        require_market_data=True,
+    ))
+    runtime._jobs[job.id] = job
+    runtime._run_job(job.id)
+    data = runtime.get_job(job.id)
+
+    assert data["status"] == "review_required"
+    assert data["message"] == "Review report generated"
+    assert data["error"] == "No candidates passed hard filters; a review report was generated"
+    assert data["exports"]["json"] == str(export)
+
+
+def test_runtime_migrates_review_export_failure_to_review_required(
+    monkeypatch, tmp_path
+):
+    store = tmp_path / "agent_jobs.json"
+    store.write_text(json.dumps({
+        "jobs": [{
+            "config": {"category": "Home & Kitchen"},
+            "id": "legacyreview1",
+            "status": "failed",
+            "created_at": datetime.now(UTC).isoformat(),
+            "finished_at": datetime.now(UTC).isoformat(),
+            "message": "No candidates passed filters",
+            "error": "No candidates passed hard filters; a review report was generated",
+            "exports": {"json": "/app/data/exports/review.json"},
+        }],
+        "queue": [],
+    }), encoding="utf-8")
+    monkeypatch.setattr("agent.runner.AgentRuntime._recover_interrupted_runs", lambda self: None)
+
+    restored = AgentRuntime(job_store_path=store).get_job("legacyreview1")
+
+    assert restored["status"] == "review_required"
+    assert restored["message"] == "Review report generated"

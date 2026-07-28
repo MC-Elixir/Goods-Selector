@@ -138,6 +138,10 @@ def test_browser_setup_status_exposes_commands_without_cdp_websocket(monkeypatch
     status = browser_setup.get_browser_setup_status()
 
     assert status["reachable"] is True
-    assert "--remote-debugging-port=9222" in status["launch_commands"]["windows"]
+    windows_command = status["launch_commands"]["windows"]
+    assert "--remote-debugging-port=9222" in windows_command
+    assert "Start-Process -FilePath $chrome" in windows_command
+    assert "$env:LOCALAPPDATA" in windows_command
+    assert 'start ""' not in windows_command
     assert "--user-data-dir=" in status["launch_commands"]["linux"]
     assert "private-id" not in str(status)

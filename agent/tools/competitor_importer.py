@@ -72,7 +72,8 @@ _HEADER_ALIASES = {
     "商品标题": "title", "标题": "title", "产品名称": "title", "商品名称": "title",
     # price
     "price": "price", "avg price": "price", "average price": "price",
-    "价格": "price", "售价": "price", "均价": "price", "平均价格": "price",
+    "价格": "price", "价格($)": "price", "价格（$）": "price",
+    "售价": "price", "均价": "price", "平均价格": "price",
     # rating
     "rating": "rating", "ratings": "rating", "star": "rating", "stars": "rating",
     "review rating": "rating", "评分": "rating", "星级": "rating", "星评": "rating",
@@ -90,7 +91,8 @@ _HEADER_ALIASES = {
     "月销": "monthly_sales", "月销售量": "monthly_sales",
     # monthly revenue
     "monthly revenue": "monthly_revenue", "revenue": "monthly_revenue", "sales revenue": "monthly_revenue",
-    "月销售额": "monthly_revenue", "销售额": "monthly_revenue", "月营收": "monthly_revenue", "月销额": "monthly_revenue",
+    "月销售额": "monthly_revenue", "月销售额($)": "monthly_revenue", "月销售额（$）": "monthly_revenue",
+    "销售额": "monthly_revenue", "月营收": "monthly_revenue", "月销额": "monthly_revenue",
     # seller product count
     "seller products": "seller_product_count", "seller product count": "seller_product_count",
     "product count": "seller_product_count", "products": "seller_product_count",

@@ -109,7 +109,10 @@ class Settings(BaseSettings):
             "SELLERSPRITE_MAX_PRODUCTS_PER_RUN",
         ),
     )
-    sellersprite_browser_enabled: bool = False
+    # The local browser capability is on by default. Actual exports remain
+    # blocked until a reviewed locator profile, writable download directory,
+    # and reachable user-authorized Chrome session are all present.
+    sellersprite_browser_enabled: bool = True
     sellersprite_browser_locator_profile_path: str = ""
     sellersprite_browser_download_dir: str = ""
     sellersprite_browser_host_download_dir: str = ""

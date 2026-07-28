@@ -63,8 +63,39 @@ docker compose up -d --build amazon-selector
 
 `python main.py agent-web` 仅用于本机调试备用，不建议作为日常启动方式，否则很容易和 Docker 同时开出两套服务。
 
+### 甲方受控试用：一键完整研究
+
+WebUI 默认首页为“一键研究”。试用前在 9222 专用 Chrome 中打开目标 Amazon US
+类目页或搜索列表，并等待卖家精灵表格加载；随后选择相同类目/英文关键词并点击
+“开始完整研究”。同一个可恢复 Job 会依次完成：
+
+1. 检查 Chrome、卖家精灵、Amazon 与 1688 登录态；
+2. 自动导出当前列表的真实卖家精灵数据，汇总卖家并计算 0–100 研究评分；
+3. 把排名靠前且带有效 ASIN 的候选直接送入 1688 找货、利润与候选评分，不再二次抓取 Amazon；
+4. 交付“市场汇总 Excel/JSON”和“选品结果 Excel/JSON”；即使 0 个商品通过硬筛选，
+   也会输出包含真实供应商证据与淘汰原因的复核报告，不会把淘汰项冒充候选。
+
+遇到登录、权限、额度或验证码时，任务会保留进度并显示“我已处理，继续任务”；
+任务结束后页面会显示一份约 20 秒可完成的体验反馈表，记录到本机
+`data/trial_feedback.json`。页面下方“试用验收”会自动汇总，并只在以下门槛全部
+通过后显示“可进入安装包”：
+
+- 至少 3 次已经结束的一键研究任务反馈；
+- “Amazon 类目列表”和“Amazon 搜索列表”两种入口都至少完成一次真实试用；
+- 至少 2/3 的任务完成市场报告与选品结果两组文件交付；
+- 平均操作顺畅度不低于 4.0 / 5；
+- 平均报告帮助度不低于 4.0 / 5；
+- 至少 2/3 的反馈愿意继续使用；
+- 至少 2/3 的反馈没有主要卡点。
+
+反馈接口会核对 Job 确实存在且已经结束，运行中或伪造 Job 的反馈不纳入统计。
+无真实供应商证据时不会以 Mock 结果补齐。试用时建议让甲方通过远程桌面操作这台
+已准备好登录态的电脑，或由你共享屏幕并交出鼠标控制。不要直接把 8765 或 9222
+暴露到公网；WebUI 当前没有登录鉴权，9222 还可读取专用浏览器的页面与登录态。
+
 WebUI 能做：
 
+- 一键完整研究：卖家精灵列表导出 → 汇总评分 → 高分 ASIN → 1688 找货 → 双报告交付。
 - 运行前 preflight：检查 PPIO、Amazon cookies、1688 cookies、数据库、导出目录、1688 cooldown。
 - 当 Amazon/1688 cookies 缺失时，主动显示登录态补充卡：先尝试从用户授权的
   9222 专用 Chrome 捕获站点 cookies；如尚未登录，则在该 Chrome 中打开登录页，
@@ -106,17 +137,18 @@ Agent 能访问这个专用 profile 中的页面、cookies 和登录态。
 ### SellerSprite 反查关键词浏览器导出（受控功能）
 
 这项功能与上面的通用 Browser Assistant 相互独立：它只处理一个 Amazon **US**
-ASIN 的 SellerSprite 可见反查关键词导出。默认**关闭**，且仓库不会提供或猜测
-SellerSprite locator profile。当前真实页面调查状态见
+ASIN 的 SellerSprite 可见反查关键词导出。浏览器能力默认**开启**，但导出仍会在
+没有已审查的 SellerSprite locator profile 时被保护性拦截；仓库不会提供或猜测
+该 profile。当前真实页面调查状态见
 [docs/research/sellersprite_dom_investigation.md](docs/research/sellersprite_dom_investigation.md)。
 
 启用前必须由已登录 SellerSprite 的用户在可见 Chrome 中亲自确认，并先完成真实
 DOM、导出表头、扩展版本和 Windows 宿主机到 Docker 下载目录映射的脱敏记录。把
 经过审查的 locator profile 保存在本机受控目录，不要提交 cookies、账号、密钥或
-profile 内容到仓库。常态配置保持：
+profile 内容到仓库。如需显式覆盖默认值：
 
 ```dotenv
-SELLERSPRITE_BROWSER_ENABLED=false
+SELLERSPRITE_BROWSER_ENABLED=true
 ```
 
 在用户明确批准且上述记录完成后，可在正式 WebUI 的 SellerSprite 卡片中保存本机

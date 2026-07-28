@@ -48,6 +48,7 @@ def run_recoverable_pipeline(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     stage_timeouts: dict[str, float] | None = None,
+    seed_products: list[dict[str, Any]] | None = None,
 ) -> int:
     import pipeline.orchestrator as legacy
 
@@ -66,6 +67,7 @@ def run_recoverable_pipeline(
         "export_review_on_empty": bool(export_review_on_empty),
         "allow_mock_suppliers": bool(settings.alibaba_allow_mock_suppliers),
         "stage_timeouts": stage_timeouts or _default_timeouts(),
+        "seed_products": list(seed_products or []),
     }
     api_calls = {
         "source_mode": mode,
@@ -148,16 +150,30 @@ def _execute(
         "source_query": config["source_query"],
         "limit": config["limit"],
         "marketplace": config["marketplace"],
+        "seed_products": config.get("seed_products") or [],
     }
 
     def discover(_context):
-        products = legacy._collect_source_products(
-            config["source_mode"],
-            config["source_query"],
-            config["limit"],
-            config["marketplace"],
-        )
-        legacy._attach_source_metadata(products, config["source_mode"], config["source_query"])
+        seed_payloads = config.get("seed_products") or []
+        if seed_payloads:
+            products = [
+                load_product(payload)
+                for payload in seed_payloads[: int(config["limit"])]
+                if isinstance(payload, dict)
+            ]
+            legacy._attach_source_metadata(
+                products, "seller_research", config["source_query"]
+            )
+        else:
+            products = legacy._collect_source_products(
+                config["source_mode"],
+                config["source_query"],
+                config["limit"],
+                config["marketplace"],
+            )
+            legacy._attach_source_metadata(
+                products, config["source_mode"], config["source_query"]
+            )
         raw_count = len(products)
         products, removed = legacy._dedupe_products_by_asin(products)
         keyword_normalized = None
@@ -204,6 +220,9 @@ def _execute(
         "amazon_source": len(product_payloads),
         "amazon_source_raw": source_output.get("raw_product_count"),
         "amazon_duplicates_removed": source_output.get("duplicates_removed"),
+        "source_origin": (
+            "seller_research" if config.get("seed_products") else config["source_mode"]
+        ),
     })
     if source_output.get("keyword_normalized"):
         api_calls["keyword_normalized"] = source_output["keyword_normalized"]
@@ -1042,6 +1061,8 @@ def _stage_waiting(repository, run_id: int, stage: str) -> bool:
             NodeStatus.PENDING.value,
             NodeStatus.RUNNING.value,
             NodeStatus.RETRY_WAIT.value,
+            NodeStatus.HUMAN_REQUIRED.value,
+            NodeStatus.CANCELLED.value,
         }
         for node in repository.list_nodes(run_id)
     )

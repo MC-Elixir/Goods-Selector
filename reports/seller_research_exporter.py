@@ -37,7 +37,13 @@ _HEADERS = [
 ]
 _EXCLUDED_HEADERS = [
     "卖家名称", "代表产品ASIN", "代表产品标题", "品牌",
+    "市场机会分", "需求得分", "竞争得分", "新鲜度", "差异化空间",
     "价格($)", "评分", "评论数", "月销量", "月销售额($)", "排除原因",
+]
+_SUMMARY_HEADERS = [
+    "排名", "卖家名称", "准入状态", "市场机会分",
+    "需求得分", "竞争得分", "新鲜度", "差异化空间",
+    "月销量", "月销售额($)", "价格($)", "评分", "评论数", "上架时间", "风险/排除原因",
 ]
 
 
@@ -71,22 +77,39 @@ def export_seller_research_excel(payload: dict[str, Any], output_path: Path) -> 
 
     workbook = openpyxl.Workbook()
     sheet = workbook.active
-    sheet.title = "适合卖家清单"
+    sheet.title = "汇总评分"
 
     header_fill = PatternFill("solid", fgColor="1F4E79")
     header_font = Font(color="FFFFFF", bold=True, size=10)
-    for col, header in enumerate(_HEADERS, 1):
+    for col, header in enumerate(_SUMMARY_HEADERS, 1):
         cell = sheet.cell(row=1, column=col, value=header)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
+    ranked = sorted(
+        [*(payload.get("items") or []), *(payload.get("excluded_items") or [])],
+        key=lambda item: (float(item.get("fit_score") or 0), int(item.get("monthly_sales") or 0)),
+        reverse=True,
+    )
+    for row_idx, item in enumerate(ranked, 2):
+        for col, value in enumerate(_summary_row(row_idx - 1, item), 1):
+            cell = sheet.cell(row=row_idx, column=col, value=value)
+            cell.alignment = Alignment(vertical="top", wrap_text=col in (2, len(_SUMMARY_HEADERS)))
+
+    _autofit(sheet, get_column_letter, _SUMMARY_HEADERS)
+
+    shortlisted_sheet = workbook.create_sheet("适合卖家清单")
+    for col, header in enumerate(_HEADERS, 1):
+        cell = shortlisted_sheet.cell(row=1, column=col, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     for row_idx, item in enumerate(payload.get("items") or [], 2):
         for col, value in enumerate(_eligible_row(row_idx - 1, item), 1):
-            cell = sheet.cell(row=row_idx, column=col, value=value)
+            cell = shortlisted_sheet.cell(row=row_idx, column=col, value=value)
             cell.alignment = Alignment(vertical="top", wrap_text=col in (6, len(_HEADERS)))
-
-    _autofit(sheet, get_column_letter, _HEADERS)
+    _autofit(shortlisted_sheet, get_column_letter, _HEADERS)
 
     excluded = payload.get("excluded_items") or []
     if excluded:
@@ -152,6 +175,11 @@ def _excluded_row(item: dict[str, Any]) -> list[Any]:
         item.get("representative_asin") or "-",
         item.get("representative_title") or "-",
         item.get("brand") or "-",
+        _num(item.get("fit_score")),
+        _factor(item, "demand_proven"),
+        _factor(item, "low_competition"),
+        _factor(item, "freshness"),
+        _factor(item, "differentiation_room"),
         _num(item.get("price")),
         _num(item.get("rating")),
         item.get("review_count"),
@@ -159,6 +187,31 @@ def _excluded_row(item: dict[str, Any]) -> list[Any]:
         _num(item.get("monthly_revenue")),
         "；".join(item.get("exclusion_reasons") or []) or "-",
     ]
+
+
+def _summary_row(rank: int, item: dict[str, Any]) -> list[Any]:
+    return [
+        rank,
+        item.get("seller") or "-",
+        "可研究" if not item.get("excluded") else "观察（未准入）",
+        _num(item.get("fit_score")),
+        _factor(item, "demand_proven"),
+        _factor(item, "low_competition"),
+        _factor(item, "freshness"),
+        _factor(item, "differentiation_room"),
+        item.get("monthly_sales"),
+        _num(item.get("monthly_revenue")),
+        _num(item.get("price")),
+        _num(item.get("rating")),
+        item.get("review_count"),
+        item.get("launch_date") or "-",
+        "；".join(item.get("exclusion_reasons") or []) or "-",
+    ]
+
+
+def _factor(item: dict[str, Any], name: str) -> float | str:
+    value = (item.get("fit_factors") or {}).get(name)
+    return "" if value is None else round(float(value) * 100, 1)
 
 
 def _reason_text(item: dict[str, Any]) -> str:
