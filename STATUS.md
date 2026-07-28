@@ -17,8 +17,7 @@ strict keep precision、hard reject recall 和 rejection reason accuracy 均为 
 **Recoverable execution**: 7 阶段业务入口保持兼容，但调用层现已具备 run/ASIN 节点、
 attempt、输入指纹、租约与 fencing、自动退避恢复、人工继续、幂等业务结果和原子
 artifact set。SQLite 是恢复事实来源；CLI 使用 `resume-run --run-id`，WebUI 可查看并
-操作节点。设计与验收矩阵见
-`docs/superpowers/specs/2026-07-15-asin-recoverable-execution-design.md`。
+操作节点。
 
 **Current verification**: 2026-07-17 的 run #58 generation 2 完成 3 个 Amazon 商品，
 SellerSprite 浏览器导出 3/3、1688 实时搜索 3/3、mock=0。TERRO 结果全部为灭蚁/诱饵

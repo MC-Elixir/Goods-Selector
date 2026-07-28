@@ -198,5 +198,5 @@ Most of the pipeline is real and runnable end-to-end. The genuinely-stubbed surf
 - `docs/PRD.md` — full product requirements including module specs, data-model rationale, and the development plan
 - `docs/scoring_spec.md` — per-dimension scoring formulas with worked examples
 - `docs/database_schema.md` — schema design rationale and common query patterns
-- `docs/选品参考/` — real sourcing reference Excel files used to calibrate scoring and profit parameters
-- `DESIGN.md` — UI mockup notes (the standalone `dashboard.html` in the project root is the visualization draft)
+- `docs/DEPLOYMENT.md` — Docker deployment guide
+- `DESIGN.md` — UI design tokens (Linear-style dark theme)

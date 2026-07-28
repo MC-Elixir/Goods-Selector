@@ -3,8 +3,7 @@
 Amazon Best Seller 选品自动化系统。给定一个 Amazon 类目 → 爬取 BSR 榜单产品 → 视觉识别 + 1688 爬虫匹配货源 → 利润预测 → 6 维度评分 → 硬性筛选 → 排名 → 导出候选选品池（Excel / Markdown / JSON）。
 
 当前兼容入口仍是 7 阶段 deterministic pipeline；Phase 3 的 `--mode agent`
-有限状态循环尚未实现。最新的 Phase 1–2 验证结果及外部数据阻塞见
-[审计报告](docs/audits/2026-07-10-phase1-phase2-results.md)。
+有限状态循环尚未实现。
 
 ## 四类户外产品精准寻源
 
@@ -139,8 +138,7 @@ Agent 能访问这个专用 profile 中的页面、cookies 和登录态。
 这项功能与上面的通用 Browser Assistant 相互独立：它只处理一个 Amazon **US**
 ASIN 的 SellerSprite 可见反查关键词导出。浏览器能力默认**开启**，但导出仍会在
 没有已审查的 SellerSprite locator profile 时被保护性拦截；仓库不会提供或猜测
-该 profile。当前真实页面调查状态见
-[docs/research/sellersprite_dom_investigation.md](docs/research/sellersprite_dom_investigation.md)。
+该 profile。
 
 启用前必须由已登录 SellerSprite 的用户在可见 Chrome 中亲自确认，并先完成真实
 DOM、导出表头、扩展版本和 Windows 宿主机到 Docker 下载目录映射的脱敏记录。把
@@ -286,8 +284,7 @@ python main.py resume-run --run-id <run_id>
 `/api/runs/{run_id}/nodes/{node_id}/attempts`；节点操作必须携带当前
 `resume_token`，过期页面不能覆盖较新的恢复操作。
 
-详细状态机、故障模型和验收矩阵见
-[ASIN 级可恢复执行基础设施设计](docs/superpowers/specs/2026-07-15-asin-recoverable-execution-design.md)。
+详细状态机、故障模型和验收矩阵见 `execution/` 模块实现。
 
 ## 目录结构
 
@@ -306,8 +303,7 @@ amazon_selector/
 ├── data/                   # 缓存、cookies、导出文件、SQLite（.gitignore，不入库）
 ├── docs/                   # PRD / database_schema / scoring_spec / 选品参考
 ├── STATUS.md               # 当前状态 + 已知问题 + 下一轮计划
-├── CHANGELOG.md            # 变更日志（Keep a Changelog）
-└── SHOWCASE.md             # 展示文档（架构图 + 测试结果 + 成果指引）
+└── CHANGELOG.md            # 变更日志（Keep a Changelog）
 ```
 
 ## 关键设计
@@ -323,9 +319,9 @@ amazon_selector/
 
 ## 文档
 
-- [SHOWCASE.md](SHOWCASE.md) — 展示文档：系统介绍、架构图、测试结果、成果文件指引
 - [STATUS.md](STATUS.md) — 当前状态、已知问题、下一轮计划
 - [CHANGELOG.md](CHANGELOG.md) — 版本变更日志
 - [docs/PRD.md](docs/PRD.md) — 产品需求文档
 - [docs/scoring_spec.md](docs/scoring_spec.md) — 评分维度公式与示例
 - [docs/database_schema.md](docs/database_schema.md) — 数据库表设计
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — 部署指南
