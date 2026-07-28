@@ -26,5 +26,5 @@ data/
 # 文档
 docs
 
-.env.example
 .env
+.qoder/better-harness/2026-07-28/231841-goods-selector/canvas.json
