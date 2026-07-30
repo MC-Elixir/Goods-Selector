@@ -43,6 +43,10 @@ from agent.sellersprite_models import SellerSpriteResult
 from agent.sellersprite_policy import validate_sellersprite_asin
 from agent.sellersprite_service import run_reverse_keyword_export
 from agent.state import AgentRunConfig
+from agent.target_contract_review import (
+    list_target_contract_reviews,
+    save_target_contract_review,
+)
 from agent.trial_feedback import (
     list_trial_feedback,
     save_trial_feedback,
@@ -149,6 +153,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             status = (qs.get("status") or [None])[0]
             return self._json(list_manual_queue(status=status))
+        if parsed.path == "/api/target-contract/reviews":
+            return self._json(list_target_contract_reviews())
         if parsed.path == "/api/imported-suppliers":
             qs = parse_qs(parsed.query)
             limit = int((qs.get("limit") or [200])[0] or 200)
@@ -306,6 +312,14 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                     note=body.get("note"),
                 )
                 return self._json(result)
+            if parsed.path == "/api/target-contract/reviews":
+                case = save_target_contract_review(
+                    str(body.get("case_id") or ""),
+                    str(body.get("action") or ""),
+                    offer_id=body.get("offer_id"),
+                    note=body.get("note"),
+                )
+                return self._json({"case": case})
         except KeyError:
             return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except LeaseLost as exc:

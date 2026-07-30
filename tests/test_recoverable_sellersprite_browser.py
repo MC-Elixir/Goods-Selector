@@ -158,3 +158,76 @@ def test_sellersprite_human_required_is_a_barrier_before_supplier_matching(monke
             run_id=run_id,
             stage="match",
         ).count() == 0
+
+
+def test_seeded_seller_research_market_evidence_skips_browser_export(monkeypatch):
+    Session, session_scope = _memory_session_scope()
+    product = ProductDTO(
+        asin="B00Q7OAN50",
+        marketplace="US",
+        title="Patio Umbrella",
+        brand="Example",
+        price=79.99,
+        rating=4.2,
+        review_count=25,
+        raw_data={
+            "source_mode": "seller_research",
+            "source_query": "patio umbrella",
+            "research_fit_score": 92.5,
+            "research_monthly_sales": 527,
+            "research_monthly_revenue": 42155,
+            "research_seller": "Example Seller",
+        },
+    )
+    matched_market_keywords = []
+    scored_markets = []
+
+    monkeypatch.setattr("pipeline.orchestrator.session_scope", session_scope)
+    monkeypatch.setattr(
+        "agent.sellersprite_service.SellerSpriteDependencies", _BrowserDependencies
+    )
+    monkeypatch.setattr(
+        "agent.sellersprite_service.run_reverse_keyword_export",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("existing SellerSprite research evidence must be reused")
+        ),
+    )
+
+    def match_with_market_keywords(*_args, **kwargs):
+        matched_market_keywords.extend(kwargs.get("market_keywords") or [])
+        return [SupplierDTO(
+            alibaba_offer_id="1001",
+            supplier_name="Factory",
+            base_price_cny=20.0,
+            moq=20,
+            raw_data={"source": "unit-test"},
+        )]
+
+    def score(**kwargs):
+        scored_markets.append(kwargs["market_analysis"])
+        return _score(**kwargs)
+
+    monkeypatch.setattr("matchers.match_suppliers", match_with_market_keywords)
+    monkeypatch.setattr("pipeline.orchestrator.predict_profit", _profit)
+    monkeypatch.setattr("pipeline.orchestrator.score_product", score)
+    monkeypatch.setattr(
+        "pipeline.orchestrator.rank_candidates",
+        lambda records, top_n=None: [record for record in records if record.score is not None],
+    )
+    monkeypatch.setattr(settings, "alibaba_allow_mock_suppliers", False)
+
+    run_id = run_pipeline(
+        "",
+        source_mode="keyword",
+        keyword="patio umbrella",
+        limit=1,
+        export=False,
+        seed_products=[product.__dict__],
+    )
+
+    assert matched_market_keywords == ["patio umbrella"]
+    assert scored_markets[0].est_monthly_sales == 527
+    assert scored_markets[0].opportunity_score == 92.5
+    assert scored_markets[0].raw_data["source_type"] == "seller_research_export"
+    with Session() as session:
+        assert session.get(RunLog, run_id).status == "success"

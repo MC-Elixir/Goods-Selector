@@ -140,6 +140,23 @@ def test_blocked_pages_raise_typed_error_before_parsing(html, code):
     assert raised.value.error_code == code
 
 
+def test_antibot_script_marker_does_not_fake_a_visible_captcha():
+    html = """
+    <script>
+      {"offerId":"123","beginAmount":10,"antibot":{"captcha":"available"}}
+    </script>
+    <body><div>起订量 10件</div></body>
+    """
+
+    detail = parse_1688_offer_detail_html(
+        html,
+        expected_offer_id="123",
+        page_url="https://detail.1688.com/offer/123.html",
+    )
+
+    assert detail["moq"] == 10
+
+
 def test_detail_preserves_real_tiers_and_moq_with_provenance():
     html = '''<script>{"offerId":"123","priceRangeList":[
       {"startQuantity":20,"price":12.8},{"startQuantity":100,"price":10.5}],

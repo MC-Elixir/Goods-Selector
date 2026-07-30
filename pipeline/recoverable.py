@@ -364,6 +364,16 @@ def _execute(
                 records_by_asin[asin].product = restored_product
                 records_by_asin[asin].suppliers = suppliers
                 matched += len(suppliers)
+            elif result.status in {
+                NodeStatus.HUMAN_REQUIRED.value,
+                NodeStatus.RETRY_WAIT.value,
+                NodeStatus.CANCELLED.value,
+                NodeStatus.TIMED_OUT.value,
+            }:
+                # These outcomes require external state, backoff, cancellation,
+                # or explicit retry. Stop the ASIN loop at the first barrier so
+                # one 1688 block cannot be repeated across the whole batch.
+                break
             elif isinstance(result.exception, TimeoutError) and len(products) == 1:
                 _update_run(
                     legacy,
@@ -672,12 +682,14 @@ def _run_sellersprite_market_stage(
     except Exception as exc:
         logger.info(f"SellerSprite browser dependency unavailable: {exc}")
 
-    market_source = "sellersprite_browser_extension" if browser_dependencies else "unavailable"
-    api_calls["market_source"] = market_source
+    browser_market_source = "sellersprite_browser_extension" if browser_dependencies else "unavailable"
+    api_calls["market_source"] = browser_market_source
     api_calls["market_skipped_cap"] = skipped_cap
     browser_sourcing_run_id = str(uuid5(NAMESPACE_URL, f"amazon-selector:sourcing-run:{run_id}"))
 
     for index, product in enumerate(products, 1):
+        existing_market = _market_from_seller_research(product, config)
+        market_source = "seller_research_export" if existing_market else browser_market_source
         market_input = {
             "schema_version": SCHEMA_VERSION,
             "product": dump_product(product),
@@ -685,6 +697,34 @@ def _run_sellersprite_market_stage(
             "source_query": config["source_query"],
             "market_source": market_source,
         }
+        if existing_market is not None:
+            result = coordinator.run_node(
+                scope_type="asin", scope_key=product.asin, stage="market",
+                input_snapshot=market_input,
+                handler=lambda _context, item=product, market=existing_market: {
+                    "schema_version": SCHEMA_VERSION,
+                    "product": dump_product(item),
+                    "market": dump_market(market),
+                },
+                timeout_seconds=_timeout(timeouts, "market"),
+                result_writer_factory=lambda output: _market_writer(legacy, output),
+                success_validator=lambda node: _snapshot_result_valid(
+                    legacy, node, MarketAnalysis, "market"
+                ),
+                progress_payload={
+                    "index": index,
+                    "total": len(products),
+                    "message": f"Reusing SellerSprite research evidence for {product.asin} ({index}/{len(products)})",
+                },
+            )
+            if result.status == NodeStatus.SUCCEEDED.value:
+                records_by_asin[product.asin].market = load_market(
+                    result.output_snapshot.get("market")
+                )
+                api_calls["seller_research_market_reused"] = (
+                    api_calls.get("seller_research_market_reused", 0) + 1
+                )
+            continue
         if index > market_cap:
             coordinator.skip_node(
                 scope_type="asin", scope_key=product.asin, stage="market",
@@ -759,6 +799,45 @@ def _run_sellersprite_market_stage(
             # or CAPTCHA require the user/browser to change state. Do not
             # consume more ASINs while that prerequisite is unresolved.
             break
+
+
+def _market_from_seller_research(product, config: dict[str, Any]):
+    """Reuse real market metrics already carried by a SellerSprite shortlist."""
+    raw = product.raw_data if isinstance(getattr(product, "raw_data", None), dict) else {}
+    monthly_sales = raw.get("research_monthly_sales")
+    monthly_revenue = raw.get("research_monthly_revenue")
+    fit_score = raw.get("research_fit_score")
+    if monthly_sales is None and monthly_revenue is None and fit_score is None:
+        return None
+
+    from analyzers.maijiajingling import MarketAnalysisDTO
+
+    source_query = str(raw.get("source_query") or config.get("source_query") or "").strip()
+    return MarketAnalysisDTO(
+        asin=product.asin,
+        marketplace=config["marketplace"],
+        brand=product.brand,
+        seller_name=raw.get("research_seller"),
+        title=product.title,
+        est_monthly_sales=int(monthly_sales) if monthly_sales is not None else None,
+        price=product.price,
+        currency="USD" if product.price is not None else None,
+        rating=product.rating,
+        review_count=product.review_count,
+        main_keyword=source_query or None,
+        opportunity_score=float(fit_score) if fit_score is not None else None,
+        raw_data={
+            "source_provider": "sellersprite",
+            "source_type": "seller_research_export",
+            "source_query": source_query or None,
+            "research_run_id": raw.get("research_run_id"),
+            "monthly_sales": monthly_sales,
+            "monthly_revenue": monthly_revenue,
+            "fit_score": fit_score,
+            "fit_category": raw.get("research_fit_category"),
+            "fit_reasons": list(raw.get("research_fit_reasons") or []),
+        },
+    )
 
 
 def _market_search_keywords(market) -> list[str]:

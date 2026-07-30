@@ -486,6 +486,64 @@ h3 {
   margin: 0 20px 16px;
 }
 
+.notification-button {
+  flex: 0 0 auto;
+  max-width: 150px;
+}
+
+.notification-button.enabled {
+  color: #087443;
+}
+
+.background-alert {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  width: min(440px, calc(100vw - 32px));
+  padding: 16px 18px;
+  border: 1px solid #e8b35d;
+  border-radius: 10px;
+  box-shadow: 0 16px 46px rgb(75 49 10 / 22%);
+  color: #6f3f00;
+  background: #fff9e9;
+}
+
+.background-alert > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.background-alert strong,
+.background-alert span {
+  display: block;
+}
+
+.background-alert span {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.background-alert-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.background-alert-actions button:last-child {
+  min-width: 28px;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.background-alert.hidden {
+  display: none;
+}
+
 .trial-deliverables {
   margin: 0 20px 20px;
   padding: 15px;
@@ -2921,4 +2979,406 @@ pre {
 .muted {
   color: var(--ink-subtle, #8a8f98);
   font-size: 13px;
+}
+
+/* Pinned target-contract human review */
+.contract-review-panel {
+  overflow: hidden;
+}
+
+.contract-review-head {
+  align-items: center;
+  background: linear-gradient(135deg, #fff, #f2faf6);
+}
+
+.contract-review-head h2 {
+  margin-top: 6px;
+}
+
+.contract-review-progress {
+  min-width: 132px;
+  padding: 12px 16px;
+  border: 1px solid #cfe9da;
+  border-radius: var(--radius);
+  color: #35604a;
+  background: #fff;
+  text-align: center;
+}
+
+.contract-review-progress strong,
+.contract-review-progress span {
+  display: block;
+}
+
+.contract-review-progress strong {
+  font-size: 20px;
+}
+
+.contract-review-progress span {
+  margin-top: 3px;
+  font-size: 11px;
+}
+
+.contract-review-notice {
+  min-height: 42px;
+  padding: 12px 20px;
+  color: #475569;
+  background: #f8fafc;
+  border-block: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+
+.contract-review-notice:empty {
+  display: none;
+}
+
+.contract-review-notice.saved {
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.contract-review-notice.error {
+  color: #991b1b;
+  background: #fef2f2;
+}
+
+.contract-review-list {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.contract-review-case {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.04);
+}
+
+.contract-review-case.reviewed {
+  border-color: #9ed4b8;
+}
+
+.contract-case-header,
+.contract-case-footer,
+.contract-candidate-main,
+.contract-decision-controls {
+  display: flex;
+  align-items: center;
+}
+
+.contract-case-header {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  background: #fbfcfd;
+}
+
+.contract-case-header > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.contract-case-header small,
+.contract-case-number,
+.contract-source-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.contract-case-number,
+.contract-source-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.contract-case-status {
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.contract-case-status.pending {
+  color: #92400e;
+  background: var(--amber-soft);
+}
+
+.contract-case-status.reviewed {
+  color: #166534;
+  background: var(--green-soft);
+}
+
+.contract-amazon-card {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 16px;
+  padding: 18px;
+}
+
+.contract-amazon-card img,
+.contract-candidate-main img,
+.contract-image-placeholder {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.contract-image-placeholder {
+  display: grid;
+  place-items: center;
+  color: #94a3b8;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.contract-amazon-card h3,
+.contract-candidate-main h3 {
+  margin: 6px 0 8px;
+  line-height: 1.45;
+}
+
+.contract-amazon-card a,
+.contract-candidate-main a {
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.contract-artifact {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 9px 18px;
+  border-block: 1px solid var(--line-soft);
+  font-size: 11px;
+}
+
+.contract-artifact.verified {
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.contract-artifact.unavailable {
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.contract-artifact span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contract-artifact code {
+  color: inherit;
+}
+
+.contract-candidate-list {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  background: #f8fafc;
+}
+
+.contract-candidate-card {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.contract-candidate-card.accepted {
+  border-left-color: var(--green);
+}
+
+.contract-candidate-card.rejected {
+  border-left-color: var(--red);
+}
+
+.contract-candidate-main {
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.contract-candidate-main img,
+.contract-candidate-main .contract-image-placeholder {
+  width: 78px;
+  height: 78px;
+  flex: 0 0 78px;
+}
+
+.contract-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.contract-evidence-grid > div {
+  padding: 9px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: #fafcfd;
+}
+
+.contract-evidence-grid span,
+.contract-evidence-grid strong {
+  display: block;
+}
+
+.contract-evidence-grid span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.contract-evidence-grid strong {
+  margin-top: 3px;
+  font-size: 12px;
+}
+
+.contract-raw-evidence {
+  margin-top: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+}
+
+.contract-raw-evidence summary {
+  padding: 9px 11px;
+  cursor: pointer;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.contract-raw-evidence pre {
+  max-height: 360px;
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0;
+  font-size: 11px;
+}
+
+.contract-decision-controls {
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.contract-decision-controls button,
+.contract-no-match {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.contract-decision-controls .accept.selected {
+  color: #166534;
+  border-color: #86c9a6;
+  background: var(--green-soft);
+}
+
+.contract-decision-controls .reject.selected,
+.contract-no-match.selected {
+  color: #991b1b;
+  border-color: #f0aaa6;
+  background: var(--red-soft);
+}
+
+.contract-decision-controls span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.contract-case-footer {
+  align-items: flex-end;
+  gap: 18px;
+  padding: 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.contract-case-footer label {
+  flex: 1;
+}
+
+.contract-case-footer label span,
+.contract-case-footer small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.contract-case-footer textarea {
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.contract-case-footer > div {
+  max-width: 260px;
+}
+
+.contract-case-footer small {
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+@media (max-width: 760px) {
+  .background-alert {
+    right: 16px;
+    bottom: 16px;
+  }
+
+  .contract-case-header,
+  .contract-case-footer,
+  .contract-decision-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .contract-case-header > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .contract-amazon-card {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .contract-amazon-card img,
+  .contract-amazon-card .contract-image-placeholder {
+    width: 72px;
+    height: 72px;
+  }
+
+  .contract-artifact {
+    grid-template-columns: 1fr;
+  }
+
+  .contract-artifact span {
+    white-space: normal;
+  }
+
+  .contract-decision-controls span {
+    margin-left: 0;
+  }
+
+  .contract-case-footer > div {
+    max-width: none;
+  }
 }

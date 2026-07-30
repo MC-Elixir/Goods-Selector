@@ -565,10 +565,25 @@ def _default_playwright_factory() -> Any:
 
 
 def _first_attached_page(browser: Any) -> Any:
+    """Select an Amazon page, never an arbitrary first Chrome tab.
+
+    Playwright's CDP page order is not the visible tab-strip order. Chrome
+    internal pages (notably ``chrome://settings/downloads``) can therefore be
+    returned first and make a healthy SellerSprite extension look unavailable.
+    The extension workflow is Amazon-only, so fail closed when no Amazon US
+    page is open instead of attaching to an unrelated tab.
+    """
     for context in getattr(browser, "contexts", []):
-        pages = getattr(context, "pages", [])
-        if pages:
-            return pages[0]
+        for page in getattr(context, "pages", []):
+            try:
+                parsed = urlparse(str(page.url))
+            except Exception:
+                continue
+            if (
+                parsed.scheme in {"http", "https"}
+                and (parsed.hostname or "").lower() in _AMAZON_US_HOSTS
+            ):
+                return page
     raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
 
 

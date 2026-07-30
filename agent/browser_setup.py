@@ -177,6 +177,12 @@ def capture_browser_cookies(
                 "message": validation_error,
             }
         _atomic_write_cookies(config["path"], cookies)
+        if site == "1688":
+            # A successful human login/verification changes the external state
+            # that opened the supplier-search circuit. Let a resumed node probe
+            # the fresh session immediately instead of waiting out the cooldown.
+            from matchers.alibaba_result_cache import reset_circuit
+            reset_circuit()
         return {
             "ok": True,
             "status": "saved",
