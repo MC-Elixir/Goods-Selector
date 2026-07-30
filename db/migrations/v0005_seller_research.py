@@ -2,7 +2,6 @@
 
 from sqlalchemy.engine import Connection
 
-
 VERSION = "0005_seller_research"
 
 
@@ -71,3 +70,13 @@ def upgrade(connection: Connection) -> None:
         "CREATE INDEX IF NOT EXISTS ix_seller_research_items_category "
         "ON seller_research_items(fit_category, fit_score)"
     )
+
+
+def down(connection: Connection) -> None:
+    """Drop seller-research tables and indexes."""
+
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_seller_research_items_category")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_seller_research_items_run")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_seller_research_runs_niche")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS seller_research_items")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS seller_research_runs")

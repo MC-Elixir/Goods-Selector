@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
-
 JobStatus = Literal[
     "queued", "running", "success", "failed", "retry_wait",
     "human_required", "review_required", "cancel_requested", "cancelled",

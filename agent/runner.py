@@ -1,20 +1,16 @@
 """Agent runtime: environment + tools + prompt policy + execution loop."""
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
-import os
-import json
 from collections import deque
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from config.settings import settings
-from db.init_db import init_db
-from db.models import ArtifactManifest, ExecutionNode, RunLog
-from db.session import session_scope
 from agent.history import audit_export, latest_export_after
 from agent.manual_queue import manual_queue_summary
 from agent.preflight import run_preflight
@@ -22,8 +18,11 @@ from agent.result_summarizer import summarize_run_result
 from agent.run_events import record_run_event
 from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
 from agent.state import AgentJob, AgentRunConfig
+from config.settings import settings
+from db.init_db import init_db
+from db.models import ArtifactManifest, ExecutionNode, RunLog
+from db.session import session_scope
 from execution.repository import ExecutionRepository
-
 
 AGENT_SYSTEM_PROMPT = """\
 You are Amazon Selector Agent.

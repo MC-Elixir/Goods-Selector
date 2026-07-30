@@ -1,0 +1,29 @@
+# Ruff 基础配置 — 最小化质量门禁
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+]
+ignore = [
+    "E501",  # line-too-long (由 formatter 处理)
+    "E701",  # multiple-statements-on-one-line-colon
+    "E702",  # multiple-statements-on-one-line-semicolon
+    "E722",  # bare-except
+    "E731",  # lambda-assignment
+    "E741",  # ambiguous-variable-name
+    "E402",  # module-import-not-at-top-of-file
+    "F841",  # unused-variable
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["E501"]
+"scripts/**" = ["E501"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

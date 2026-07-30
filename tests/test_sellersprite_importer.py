@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from xml.etree.ElementTree import ParseError
 from unittest.mock import patch
+from xml.etree.ElementTree import ParseError
 from zipfile import ZipFile
 
 import openpyxl

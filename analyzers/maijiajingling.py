@@ -26,10 +26,10 @@ analyze_market() 编排：ASIN 详情 → BSR 预测 → 竞品分析 → 关键
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import hashlib
 import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -38,7 +38,6 @@ from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import settings
-
 
 # ============================================================
 # DTOs

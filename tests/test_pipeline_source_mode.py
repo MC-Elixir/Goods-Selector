@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from types import SimpleNamespace
 
-import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
 from crawlers.amazon_search import AmazonSearchFailure, SearchPageDiagnostic
-from config.settings import settings
 from db.models import Base, ExecutionNode, RunLog
 from pipeline.orchestrator import run_pipeline
 

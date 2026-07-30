@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -148,7 +147,7 @@ def _extract_supplier(text: str) -> Optional[str]:
 
 
 def _offer_id_from_href(href: str) -> str:
-    from urllib.parse import urlparse, parse_qs
+    from urllib.parse import parse_qs, urlparse
     try:
         qs = parse_qs(urlparse(href).query)
         ids = qs.get("offerId", [])

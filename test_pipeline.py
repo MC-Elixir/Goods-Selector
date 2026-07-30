@@ -38,7 +38,6 @@ def test_1688_matcher(products):
     logger.info("Stage 2: 测试 1688 供应商匹配")
     logger.info("=" * 60)
 
-    from matchers.alibaba_playwright import Alibaba1688PlaywrightMatcher
     from matchers import match_suppliers
 
     all_records = []
@@ -79,7 +78,7 @@ def test_profit_model(records):
 
         try:
             profit = predict_profit(product, best_supplier)
-            logger.info(f"  ──────────────────────────────────")
+            logger.info("  ──────────────────────────────────")
             logger.info(f"  采购成本: ${profit.purchase_cost:.2f}")
             logger.info(f"  头程物流: ${profit.shipping_cost:.2f}")
             logger.info(f"  FBA费用: ${profit.fba_fee:.2f}")
@@ -87,7 +86,7 @@ def test_profit_model(records):
             logger.info(f"  广告费: ${profit.ad_cost:.2f}")
             logger.info(f"  退货损耗: ${profit.return_loss:.2f}")
             logger.info(f"  汇率损耗: ${profit.exchange_loss:.2f}")
-            logger.info(f"  ──────────────────────────────────")
+            logger.info("  ──────────────────────────────────")
             logger.info(f"  净利润: ${profit.net_profit:.2f} | 净利率: {profit.profit_margin:.1%}")
             rec["profit"] = profit
         except Exception as e:
@@ -123,14 +122,14 @@ def test_scorer(records):
                 market_analysis=None,  # 跳过卖家精灵
                 suppliers=suppliers,
             )
-            logger.info(f"  ──────────────────────────────────")
+            logger.info("  ──────────────────────────────────")
             logger.info(f"  利润得分: {score.profit_score:.2f}")
             logger.info(f"  需求得分: {score.demand_score:.2f}")
             logger.info(f"  竞争得分: {score.competition_score:.2f}")
             logger.info(f"  供应得分: {score.supply_score:.2f}")
             logger.info(f"  物流得分: {score.logistics_score:.2f}")
             logger.info(f"  风险得分: {score.risk_score:.2f}")
-            logger.info(f"  ──────────────────────────────────")
+            logger.info("  ──────────────────────────────────")
             logger.info(f"  综合得分: {score.total_score:.1f}/100")
             logger.info(f"  通过硬性筛选: {'✓' if score.passed_hard_filter else '✗'}")
             if score.rejection_reasons:
@@ -150,7 +149,7 @@ def test_export(records):
     logger.info("=" * 60)
 
     from pipeline.orchestrator import PipelineRecord
-    from reports.exporter import export_excel, export_markdown, export_json
+    from reports.exporter import export_excel, export_json, export_markdown
 
     # 转换为 PipelineRecord 格式
     pipeline_records = []

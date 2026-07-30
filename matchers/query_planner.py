@@ -7,7 +7,6 @@ import re
 from matchers.brand_safety import brand_tokens, remove_brand_terms
 from schemas.sourcing import AmazonProductUnderstanding, QueryPlan
 
-
 QUERY_TYPES = (
     "generic_name",
     "supply_chain_name",

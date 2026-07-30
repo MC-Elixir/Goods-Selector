@@ -1,6 +1,10 @@
 services:
   amazon-selector:
-    build: .
+    build:
+      context: .
+      args:
+        HTTP_PROXY: http://host.docker.internal:7897
+        HTTPS_PROXY: http://host.docker.internal:7897
     image: amazon-selector:dev
     env_file: .env
     environment:

@@ -22,7 +22,6 @@ from urllib.parse import urlparse
 from agent.browser_agent import _resolve_cdp_ws
 from config.settings import DATA_DIR, settings
 
-
 _SITE_CONFIG = {
     "amazon": {
         "label": "Amazon",

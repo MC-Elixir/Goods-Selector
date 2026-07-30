@@ -8,7 +8,8 @@ from sqlalchemy import create_engine, text
 from db.migrate import run_migrations
 from matchers.alibaba_detail import BlockedOfferPage
 from matchers.alibaba_pailitao import SupplierDTO
-from matchers.sourcing_slice import SourcingSliceDependencies as _SourcingSliceDependencies, _default_relevance, run_sourcing_slice
+from matchers.sourcing_slice import SourcingSliceDependencies as _SourcingSliceDependencies
+from matchers.sourcing_slice import _default_relevance, run_sourcing_slice
 from matchers.verifier import VisionVerificationError
 from schemas.sourcing import AmazonProductUnderstanding, VisionMatchResult
 

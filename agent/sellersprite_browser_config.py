@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 _CONFIG_NAME = "sellersprite_browser_config.json"
 _CONTAINER_DATA_PREFIX = "/app/data/"
 

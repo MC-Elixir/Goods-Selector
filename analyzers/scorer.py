@@ -24,7 +24,6 @@ import yaml
 from loguru import logger
 
 from analyzers.profit_model import normalize_positive_number, normalize_price_tier
-
 from config.settings import CONFIG_DIR
 
 _BRAND_BLACKLIST = {

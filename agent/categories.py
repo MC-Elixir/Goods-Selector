@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 AMAZON_US_CATEGORIES: tuple[dict[str, str], ...] = (
     {"canonical": "Home & Kitchen", "label_zh": "家居厨具", "label_en": "Home & Kitchen"},
     {"canonical": "Kitchen & Dining", "label_zh": "厨房餐饮", "label_en": "Kitchen & Dining"},

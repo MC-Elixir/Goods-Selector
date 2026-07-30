@@ -25,33 +25,33 @@ from typing import Optional
 from loguru import logger
 
 from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
-from crawlers.amazon_bsr import ProductDTO
 from agent.manual_queue import enqueue_sourcing_block
+from crawlers.amazon_bsr import ProductDTO
 from domain.target_categories import (
-    understanding_from_target_profile,
     profile_from_product,
+    understanding_from_target_profile,
 )
+from matchers.alibaba_detail import apply_1688_detail_to_supplier
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.alibaba_pifatuan import AlibabaPifatuanSearch
 from matchers.alibaba_playwright import Alibaba1688PlaywrightMatcher
-from matchers.alibaba_text_search import Alibaba1688TextSearch
-from matchers.alibaba_detail import apply_1688_detail_to_supplier
-from matchers.imported_suppliers import find_imported_suppliers
-from matchers.vision_analyzer import VisionAnalyzer
-from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier, llm_eligible_suppliers
-from matchers.query_planner import generate_query_plan
-from matchers.sourcing_slice import evaluate_prefetched_suppliers, serialize_sourcing_result
 from matchers.alibaba_result_cache import (
     circuit_is_open,
+    is_real_supplier,
     load_cached_offer_detail,
     load_cached_suppliers,
     make_cache_key,
-    is_real_supplier,
     open_circuit,
     reset_circuit,
     save_cached_offer_detail,
     save_cached_suppliers,
 )
+from matchers.alibaba_text_search import Alibaba1688TextSearch
+from matchers.imported_suppliers import find_imported_suppliers
+from matchers.query_planner import generate_query_plan
+from matchers.sourcing_slice import evaluate_prefetched_suppliers, serialize_sourcing_result
+from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier, llm_eligible_suppliers
+from matchers.vision_analyzer import VisionAnalyzer
 
 # Scrapling 优先（patchright 修补的 chromium + curl_cffi TLS 指纹伪装，更快更抗检测）
 try:

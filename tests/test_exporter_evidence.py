@@ -5,7 +5,6 @@ import openpyxl
 
 from reports.exporter import export_excel, export_json, export_markdown
 
-
 LEGACY_JSON_KEYS = [
     "review_status", "rejection_reasons", "product", "source_mode", "source_query",
     "source_keyword", "keyword_normalized", "source_rank", "source_warning", "profit",

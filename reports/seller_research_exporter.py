@@ -25,7 +25,6 @@ from loguru import logger
 
 from config.settings import settings
 
-
 # 用户明确要求的清单字段：卖家名称 / 代表产品 / 标题 / 品牌 / 价格 / 评分 /
 # 评论数 / 上架时间 / 月销量 / 月销售额，以及适合类型与适合理由。
 _HEADERS = [

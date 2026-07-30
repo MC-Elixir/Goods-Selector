@@ -5,7 +5,6 @@ from __future__ import annotations
 from sqlalchemy import inspect
 from sqlalchemy.engine import Connection
 
-
 VERSION = "0004_recoverable_execution"
 
 
@@ -167,3 +166,33 @@ def upgrade(connection: Connection) -> None:
 
     for table in ("profit_snapshots", "scores", "market_analyses"):
         _add_result_key(connection, table)
+
+
+def down(connection: Connection) -> None:
+    """Drop execution tables and remove result_key columns."""
+
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_artifact_manifests_set")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_artifact_manifests_run")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS artifact_manifests")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_execution_operations_node")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_execution_operations_run")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS execution_operations")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_execution_attempts_lease")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_execution_attempts_node")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS execution_attempts")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_execution_nodes_lease")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_execution_node_runnable")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_execution_nodes_status")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_execution_nodes_stage")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_execution_nodes_run")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS execution_nodes")
+    for table in ("profit_snapshots", "scores", "market_analyses"):
+        if table not in inspect(connection).get_table_names():
+            continue
+        connection.exec_driver_sql(
+            f"DROP INDEX IF EXISTS ux_{table}_result_key"
+        )
+        if "result_key" in _columns(connection, table):
+            connection.exec_driver_sql(
+                f"ALTER TABLE {table} DROP COLUMN result_key"
+            )

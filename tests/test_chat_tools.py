@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import agent.chat_tools as chat_tools
 from config.settings import settings

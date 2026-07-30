@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from config.settings import DATA_DIR, settings
 from agent.review_decisions import load_supplier_reviews, supplier_review_key
+from config.settings import DATA_DIR, settings
 from matchers.product_spec import spec_from_product, spec_from_supplier
 
 _SAVED_FILE = DATA_DIR / "agent_saved_items.json"

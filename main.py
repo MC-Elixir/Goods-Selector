@@ -113,9 +113,10 @@ def seller_research_cmd(
 ):
     """从卖家精灵竞品导出生成中小卖家卖家清单（落库 + 导出 Excel/JSON）。"""
     from pathlib import Path
+
+    from agent.seller_research_service import run_seller_research_from_file
     from db.migrate import run_migrations
     from db.session import engine
-    from agent.seller_research_service import run_seller_research_from_file
 
     path = Path(file_)
     if not path.is_file():

@@ -4,8 +4,8 @@ import time
 from dataclasses import asdict
 
 from crawlers.amazon_bsr import ProductDTO
-from matchers.alibaba_pailitao import SupplierDTO
 from matchers import alibaba_result_cache as cache
+from matchers.alibaba_pailitao import SupplierDTO
 
 
 def _product() -> ProductDTO:

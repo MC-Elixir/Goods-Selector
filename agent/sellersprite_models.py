@@ -14,7 +14,6 @@ from agent.sellersprite_policy import (
     validate_sellersprite_result_status,
 )
 
-
 _REQUIRED_LOCATOR_NAMES = (
     "panel_open",
     "ready",

@@ -6,11 +6,11 @@ from types import SimpleNamespace
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
 from db.models import Base, RunLog
 from matchers.alibaba_pailitao import SupplierDTO
 from pipeline.orchestrator import run_pipeline
-from config.settings import settings
 
 
 def test_run_pipeline_caps_seller_sprite_browser_market_calls(monkeypatch, tmp_path):

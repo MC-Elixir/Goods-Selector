@@ -24,12 +24,12 @@ from dataclasses import asdict
 from typing import Optional
 
 from loguru import logger
+from pydantic import ValidationError
 
 from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
 from domain.target_categories import compare_target_profiles, profile_from_product, profile_from_supplier
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.product_spec import compare_specs, spec_from_product, spec_from_supplier
-from pydantic import ValidationError
 from schemas.sourcing import VisionMatchResult
 
 VISION_MATCH_PROMPT_VERSION = "supplier-visual-match-v1"

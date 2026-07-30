@@ -25,12 +25,12 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
-import json
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote, urlparse, parse_qs
+from urllib.parse import parse_qs, quote, urlparse
 
 from loguru import logger
 

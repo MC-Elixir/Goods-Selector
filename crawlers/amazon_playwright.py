@@ -24,14 +24,6 @@ from loguru import logger
 
 from crawlers._amazon_extractors import (
     extract_amazon_detail,
-    extract_brand,
-    extract_bsr,
-    extract_dimensions,
-    extract_image,
-    extract_price,
-    extract_rating,
-    extract_reviews,
-    extract_title,
     is_captcha,
     parse_bsr_page,
 )

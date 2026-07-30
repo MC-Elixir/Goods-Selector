@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from agent.sellersprite_models import SellerSpriteContext, SellerSpriteResult
 from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO

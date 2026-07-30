@@ -1,26 +1,25 @@
 """评分引擎单测。"""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import pytest
 
-from analyzers import scorer
+from analyzers.profit_model import ProfitBreakdown
 from analyzers.scorer import (
-    ScoringEvidenceError,
     ScoreBreakdown,
+    ScoringEvidenceError,
     apply_hard_filters,
     load_weights_config,
     score_competition,
     score_demand,
     score_logistics,
-    score_profit,
     score_product,
+    score_profit,
     score_risk,
     score_supply,
 )
-from analyzers.profit_model import ProfitBreakdown
 
 
 # ============================================================

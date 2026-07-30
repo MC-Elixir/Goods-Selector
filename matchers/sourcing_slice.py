@@ -10,11 +10,9 @@ from typing import Any, Callable
 from sqlalchemy import text
 
 from agent.provenance import trusted_evidence_value
-from matchers.alibaba_detail import BlockedOfferPage
 from matchers.match_evidence import build_match_evidence
 from matchers.query_planner import generate_query_plan, rewrite_low_relevance_queries
-from schemas.sourcing import MatchEvidence, RecommendationEvidence, RecommendationStatus
-
+from schemas.sourcing import AmazonProductUnderstanding, MatchEvidence, RecommendationEvidence, RecommendationStatus
 
 TERMINAL_BLOCK_CODES = {"AUTH_REQUIRED", "CAPTCHA"}
 STABLE_SEARCH_ERROR_CODES = {

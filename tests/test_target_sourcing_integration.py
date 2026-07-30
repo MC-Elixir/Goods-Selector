@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine, text
@@ -11,9 +11,9 @@ from crawlers.amazon_bsr import ProductDTO
 from db.migrate import run_migrations
 from db.models import Base
 from domain.target_categories import (
-    understanding_from_target_profile,
     profile_from_product,
     profile_from_text,
+    understanding_from_target_profile,
 )
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.query_planner import generate_query_plan

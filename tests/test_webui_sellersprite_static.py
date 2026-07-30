@@ -1,7 +1,6 @@
 """Static contract tests for the bounded SellerSprite export panel."""
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

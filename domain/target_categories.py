@@ -13,7 +13,6 @@ from typing import Any
 
 from schemas.sourcing import AmazonProductUnderstanding
 
-
 TARGET_CATEGORY_IDS = {
     "outdoor_storage",
     "patio_heater",

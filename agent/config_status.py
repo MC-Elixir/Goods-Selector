@@ -18,6 +18,8 @@ from agent.seller_sprite_diagnostics import (
 )
 from agent.sellersprite_browser_config import (
     configure_sellersprite_browser as _persist_sellersprite_browser_config,
+)
+from agent.sellersprite_browser_config import (
     load_sellersprite_browser_config,
 )
 from config.settings import PROJECT_ROOT, settings

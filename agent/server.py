@@ -8,19 +8,19 @@ import os
 import re
 import uuid
 from datetime import date, datetime
-from io import StringIO
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from io import StringIO
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from agent.categories import canonical_category, list_categories
 from agent.browser_agent import run_browser_task
 from agent.browser_setup import (
     capture_browser_cookies,
     get_browser_setup_status,
     open_login_page,
 )
+from agent.categories import canonical_category, list_categories
 from agent.chat_tools import answer_chat
 from agent.config_status import (
     check_alibaba_pifatuan,
@@ -34,25 +34,25 @@ from agent.config_status import (
 from agent.history import hide_result, list_accepted_supplier_shortlist, list_export_runs, list_results, set_saved
 from agent.manual_queue import list_manual_queue, update_manual_item
 from agent.review_decisions import set_supplier_review
-from agent.runner import AGENT_SYSTEM_PROMPT, AgentRuntime
 from agent.run_events import list_run_events
+from agent.runner import AGENT_SYSTEM_PROMPT, AgentRuntime
 from agent.seller_research_service import run_competitor_export, run_seller_research_from_file
+from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
+from agent.sellersprite_batch import run_reverse_keyword_batch
+from agent.sellersprite_models import SellerSpriteResult
+from agent.sellersprite_policy import validate_sellersprite_asin
+from agent.sellersprite_service import run_reverse_keyword_export
 from agent.state import AgentRunConfig
 from agent.trial_feedback import (
     list_trial_feedback,
     save_trial_feedback,
     summarize_trial_feedback,
 )
-from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
-from agent.sellersprite_models import SellerSpriteResult
-from agent.sellersprite_policy import validate_sellersprite_asin
-from agent.sellersprite_service import run_reverse_keyword_export
-from agent.sellersprite_batch import run_reverse_keyword_batch
-from db.sellersprite_repository import list_sellersprite_imports
-from db.seller_research_repository import get_seller_research_run, list_seller_research_runs
-from db.session import engine as db_engine
 from config.settings import settings
 from crawlers.amazon_search import keyword_preview, normalize_keyword
+from db.seller_research_repository import get_seller_research_run, list_seller_research_runs
+from db.sellersprite_repository import list_sellersprite_imports
+from db.session import engine as db_engine
 from execution.models import LeaseLost
 from matchers.imported_suppliers import import_alibaba_supplier_payload, list_imported_suppliers
 

@@ -16,9 +16,9 @@ from agent.browser_agent import _resolve_cdp_ws
 from agent.sellersprite_models import SellerSpriteContext, SellerSpriteLocatorProfile
 from agent.sellersprite_policy import normalize_sellersprite_error_code, validate_sellersprite_asin
 from agent.tools.browser_downloads import (
+    DownloadedArtifact,
     DownloadError,
     DownloadSnapshot,
-    DownloadedArtifact,
     snapshot_download_dir,
     wait_for_new_download,
 )
@@ -27,7 +27,6 @@ from agent.tools.sellersprite_importer import (
     SellerSpriteImportError,
     import_sellersprite_export,
 )
-
 
 _AMAZON_US_HOSTS = frozenset({"amazon.com", "www.amazon.com"})
 _ASIN_PATH_RE = re.compile(r"^/dp/(?P<asin>[A-Z0-9]{10})(?:/|$)", re.IGNORECASE)

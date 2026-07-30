@@ -10,7 +10,6 @@ from sqlalchemy import Engine, inspect, text
 
 from agent.tools.sellersprite_importer import ImportedSellerSpriteExport
 
-
 _IMPORT_COLUMNS = (
     "id, sourcing_run_id, call_id, legacy_run_log_id, asin, artifact_type, "
     "source_provider, source_type, measurement_kind, source_file, file_sha256, "

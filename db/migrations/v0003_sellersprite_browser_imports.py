@@ -2,7 +2,6 @@
 
 from sqlalchemy.engine import Connection
 
-
 VERSION = "0003_sellersprite_browser_imports"
 
 
@@ -42,3 +41,11 @@ def upgrade(connection: Connection) -> None:
         "CREATE INDEX IF NOT EXISTS ix_sellersprite_imports_file_sha256 "
         "ON sellersprite_imports(file_sha256)"
     )
+
+
+def down(connection: Connection) -> None:
+    """Drop the SellerSprite imports table and indexes."""
+
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_sellersprite_imports_file_sha256")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_sellersprite_imports_run_asin")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS sellersprite_imports")

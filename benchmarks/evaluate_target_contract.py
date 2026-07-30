@@ -10,13 +10,12 @@ from typing import Any
 
 from crawlers.amazon_bsr import ProductDTO
 from domain.target_categories import (
-    understanding_from_target_profile,
     profile_from_product,
     profile_from_text,
+    understanding_from_target_profile,
 )
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.match_evidence import build_match_evidence
-
 
 DEFAULT_FIXTURE = Path(__file__).parent / "fixtures" / "target_category_contract_gold.json"
 

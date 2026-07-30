@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import json
 
-import agent.config_status as config_status_module
 import pytest
+
+import agent.config_status as config_status_module
 from agent.config_status import (
     check_alibaba_pifatuan,
     check_seller_sprite_asin,

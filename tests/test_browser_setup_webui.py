@@ -11,7 +11,6 @@ import pytest
 from agent import server
 from agent.server import AgentRequestHandler
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

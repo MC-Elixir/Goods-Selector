@@ -88,3 +88,13 @@ def upgrade(connection: Connection) -> None:
             UNIQUE(run_ref, asin, offer_id)
         )"""
     )
+
+
+def down(connection: Connection) -> None:
+    """Drop all evidence foundation tables."""
+
+    connection.exec_driver_sql("DROP TABLE IF EXISTS sourcing_recommendations")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS match_evidence")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS query_attempts")
+    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_field_evidence_entity")
+    connection.exec_driver_sql("DROP TABLE IF EXISTS field_evidence")

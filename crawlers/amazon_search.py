@@ -16,7 +16,6 @@ from crawlers.amazon_bsr import ProductDTO
 from domain.target_categories import profile_from_product, profile_from_text, target_query_matches_product
 from schemas.sourcing import EvidenceStatus, FieldEvidence
 
-
 _ASIN_RE = re.compile(r"/dp/([A-Z0-9]{10})")
 _CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 _QUERY_STOPWORDS = {"and", "for", "the", "with", "of", "in", "a", "an"}
@@ -276,6 +275,7 @@ def search_amazon_products(keyword: str, marketplace: str = "US", limit: int = 1
     target_query_profile = profile_from_text(normalized.normalized)
 
     from scrapling.fetchers import StealthySession
+
     from crawlers.amazon_scrapling import AmazonScraplingScraper
 
     cookies = load_cookies(None) or list(_DEFAULT_COOKIES)

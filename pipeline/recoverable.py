@@ -12,8 +12,8 @@ from analyzers.profit_model import InsufficientCostEvidence, ProfitBreakdown
 from analyzers.scorer import ScoreBreakdown, ScoringEvidenceError
 from config.settings import settings
 from db.models import MarketAnalysis, Product, ProfitSnapshot, RunLog, Score, Supplier
-from execution.coordinator import NodeResult, RecoverableRunCoordinator
 from execution.artifacts import ArtifactFile, ArtifactSetManager
+from execution.coordinator import NodeResult, RecoverableRunCoordinator
 from execution.handlers import (
     dump_market,
     dump_product,
@@ -28,7 +28,6 @@ from execution.handlers import (
 )
 from execution.models import HumanActionRequired, NodeStatus
 from execution.repository import ExecutionRepository
-
 
 RUN_SCOPE_KEY = "run"
 SCHEMA_VERSION = "1.0"
@@ -1082,8 +1081,8 @@ def _node_dependency(repository, run_id, scope_key, stage, scope_type="asin"):
 
 
 def _file_fingerprint_payload(relative_path: str) -> dict[str, Any]:
-    from pathlib import Path
     from hashlib import sha256
+    from pathlib import Path
 
     path = Path(__file__).resolve().parent.parent / relative_path
     if not path.exists():

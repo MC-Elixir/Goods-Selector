@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from dataclasses import dataclass, field
 from typing import Optional
-from urllib.parse import urlencode
 
 import requests
 from loguru import logger

@@ -5,7 +5,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-
 MATERIAL_ALIASES = {
     "不锈钢": ("不锈钢", "304", "316", "stainless steel"),
     "硅胶": ("硅胶", "silicone"),

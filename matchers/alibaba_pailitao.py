@@ -22,7 +22,6 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Optional
 
-import requests
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 

@@ -25,7 +25,6 @@ from typing import Optional
 
 from loguru import logger
 
-
 _DEFAULT_COOKIE_PATH = Path("data") / "amazon_cookies.json"
 
 

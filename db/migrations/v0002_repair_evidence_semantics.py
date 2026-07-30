@@ -294,3 +294,12 @@ def upgrade(connection: Connection) -> None:
     _repair_field_evidence(connection)
     _repair_query_attempts(connection)
     _repair_match_evidence(connection)
+
+
+def down(connection: Connection) -> None:
+    """Drop the legacy audit table created by this migration.
+
+    Note: data transformations (confidence/status repairs) cannot be reversed.
+    """
+
+    connection.exec_driver_sql("DROP TABLE IF EXISTS legacy_evidence_audit")

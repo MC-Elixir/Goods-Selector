@@ -1,11 +1,10 @@
-import json
 import hashlib
+import json
 from pathlib import Path
 
 from benchmarks.evaluate import evaluate
 from benchmarks.evaluate_target_contract import evaluate_contract
 from domain.target_categories import compare_target_profiles, profile_from_text
-
 
 FIXTURES = Path(__file__).parents[1] / "benchmarks" / "fixtures"
 

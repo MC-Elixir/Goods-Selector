@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -115,8 +115,8 @@ def run_competitor_export(
     Returns a human-actionable status when the browser flow or its competitor
     locators are unavailable; it never fabricates seller data.
     """
-    from agent.sellersprite_service import SellerSpriteDependencies
     from agent.sellersprite_policy import normalize_sellersprite_error_code
+    from agent.sellersprite_service import SellerSpriteDependencies
     from agent.tools.sellersprite_browser import SellerSpriteWorkflowError
 
     keyword = (keyword or "").strip()

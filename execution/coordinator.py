@@ -12,7 +12,6 @@ from execution.models import Claim, LeaseLost, NodeStatus, StageContext
 from execution.policies import RetryPolicy, classify_error
 from execution.repository import ExecutionRepository
 
-
 StageHandler = Callable[[StageContext], Any]
 ResultWriterFactory = Callable[[Any], Callable]
 ProgressCallback = Callable[[dict[str, Any]], None]

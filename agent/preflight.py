@@ -12,8 +12,8 @@ from urllib.parse import urlparse
 from agent.alibaba_diagnostics import load_alibaba_open_diagnostic
 from agent.browser_agent import _resolve_cdp_ws
 from agent.seller_sprite_diagnostics import load_seller_sprite_diagnostic
-from agent.sellersprite_models import SellerSpriteLocatorProfile
 from agent.sellersprite_browser_config import load_sellersprite_browser_config, project_local_path
+from agent.sellersprite_models import SellerSpriteLocatorProfile
 from config.settings import DATA_DIR, PROJECT_ROOT, settings
 
 

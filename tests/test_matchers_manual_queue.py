@@ -1,6 +1,6 @@
+import matchers
 from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
-import matchers
 from matchers.alibaba_pailitao import SupplierDTO
 
 

@@ -27,7 +27,6 @@ from execution.models import (
     validate_transition,
 )
 
-
 ResultWriter = Callable[[Session, ExecutionNode], None]
 
 

@@ -1,17 +1,16 @@
 """1688 offer detail parsing and supplier enrichment."""
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
-from typing import Any, TypedDict
 from html import unescape
+from typing import Any, TypedDict
 
 from domain.target_categories import profile_from_text
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.product_spec import spec_from_text
-
 
 _PRICE_TIER_RE = re.compile(r"(\d{1,6})\s*(?:件|个|只|pcs?|起)\s*(?:[¥￥]\s*)?(\d+(?:\.\d+)?)", re.I)
 _MOQ_RE = re.compile(r"(?:起订量|起批量|最小起订|MOQ|min(?:imum)?\s*order)\D{0,12}(\d{1,6})", re.I)

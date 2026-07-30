@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import csv
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Iterable
@@ -19,9 +19,8 @@ from typing import Any, Iterable
 import openpyxl
 from openpyxl.utils.exceptions import InvalidFileException
 
+from agent.tools.browser_downloads import ALLOWED_EXPORT_SUFFIXES, DownloadedArtifact, DownloadError
 from analyzers.seller_research import CompetitorRow
-from agent.tools.browser_downloads import ALLOWED_EXPORT_SUFFIXES, DownloadError, DownloadedArtifact
-
 
 _SCHEMA_VERSION = "1.0"
 _SOURCE_PROVIDER = "sellersprite"

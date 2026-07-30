@@ -11,15 +11,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from matchers import vision_analyzer as vision_analyzer_module
+from matchers.alibaba_pailitao import SupplierDTO
+from matchers.alibaba_text_search import _parse_search_response
+from matchers.verifier import LLMVisualVerifier
 from matchers.vision_analyzer import (
     ProductAnalysis,
     VisionAnalyzer,
-    _parse_json_response,
     _detect_media_type,
+    _parse_json_response,
 )
-from matchers.alibaba_text_search import _parse_search_response, _item_to_dto
-from matchers.alibaba_pailitao import SupplierDTO
-from matchers.verifier import LLMVisualVerifier
 
 
 @pytest.fixture(autouse=True)

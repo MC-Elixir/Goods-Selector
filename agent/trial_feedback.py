@@ -12,7 +12,6 @@ from typing import Any
 
 from config.settings import settings
 
-
 _LOCK = threading.RLock()
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
 _BLOCKED_STAGES = {

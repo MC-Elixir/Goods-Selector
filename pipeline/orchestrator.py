@@ -17,25 +17,24 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
 import inspect
 import time
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable, Optional
 
 from loguru import logger
 
 from agent.cancellation import CancellationRequested
 from analyzers.profit_model import InsufficientCostEvidence, ProfitBreakdown, predict_profit
-from analyzers.scorer import ScoringEvidenceError, ScoreBreakdown, score_product
+from analyzers.scorer import ScoreBreakdown, ScoringEvidenceError, score_product
+from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
 from db.models import MarketAnalysis, Product, ProfitSnapshot, RunLog, Score, Supplier
 from db.session import session_scope
 from matchers.alibaba_pailitao import SupplierDTO
 from pipeline.filters import rank_candidates
 from reports.exporter import export_excel, export_json, export_markdown
-from config.settings import settings
-
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 CancelCheck = Callable[[], bool]

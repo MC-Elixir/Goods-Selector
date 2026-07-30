@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import sys
 from collections.abc import Callable
 
 from sqlalchemy import Engine, event, text
@@ -107,6 +109,30 @@ def _apply_sqlite_migration(engine: Engine, migration: object) -> bool:
         return applied
 
 
+def _rollback_sqlite_migration(engine: Engine, migration: object) -> bool:
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        rolled_back = False
+
+        def downgrade() -> None:
+            nonlocal rolled_back
+            exists = connection.execute(
+                text("SELECT 1 FROM schema_migrations WHERE version=:version"),
+                {"version": migration.VERSION},
+            ).scalar_one_or_none()
+            if exists is None:
+                return
+            migration.down(connection)
+            connection.execute(
+                text("DELETE FROM schema_migrations WHERE version=:version"),
+                {"version": migration.VERSION},
+            )
+            rolled_back = True
+
+        _run_sqlite_transaction(connection, downgrade)
+        return rolled_back
+
+
 def run_migrations(engine: Engine) -> list[str]:
     migrations = _validated_migrations()
     install_sqlite_foreign_keys(engine)
@@ -131,3 +157,86 @@ def run_migrations(engine: Engine) -> list[str]:
             )
             applied_now.append(migration.VERSION)
     return applied_now
+
+
+def rollback_migrations(engine: Engine, target_version: str) -> list[str]:
+    """Roll back all migrations applied after *target_version*.
+
+    Pass target_version="base" to roll back every migration.
+    Returns the list of versions that were rolled back (descending order).
+    """
+    migrations = _validated_migrations()
+    install_sqlite_foreign_keys(engine)
+    _prepare_database(engine)
+
+    if target_version != "base":
+        known = {m.VERSION for m in migrations}
+        if target_version not in known:
+            raise ValueError(
+                f"unknown target version: {target_version!r}. "
+                f"Available: {', '.join(sorted(known))}"
+            )
+
+    # Determine which migrations to roll back (those after target, in reverse order)
+    to_rollback: list[object] = []
+    for migration in reversed(migrations):
+        if target_version != "base" and migration.VERSION == target_version:
+            break
+        to_rollback.append(migration)
+
+    rolled_back: list[str] = []
+    for migration in to_rollback:
+        if engine.dialect.name == "sqlite":
+            if _rollback_sqlite_migration(engine, migration):
+                rolled_back.append(migration.VERSION)
+            continue
+        with engine.begin() as connection:
+            exists = connection.execute(
+                text("SELECT 1 FROM schema_migrations WHERE version=:version"),
+                {"version": migration.VERSION},
+            ).scalar_one_or_none()
+            if exists is None:
+                continue
+            migration.down(connection)
+            connection.execute(
+                text("DELETE FROM schema_migrations WHERE version=:version"),
+                {"version": migration.VERSION},
+            )
+            rolled_back.append(migration.VERSION)
+    return rolled_back
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="python -m db.migrate",
+        description="Run or roll back database schema migrations.",
+    )
+    parser.add_argument(
+        "--rollback",
+        metavar="VERSION",
+        default=None,
+        help=(
+            "Roll back all migrations applied after VERSION. "
+            "Use 'base' to roll back everything."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    from db.session import engine
+
+    if args.rollback is not None:
+        rolled = rollback_migrations(engine, args.rollback)
+        if rolled:
+            print(f"Rolled back: {', '.join(rolled)}")
+        else:
+            print("Nothing to roll back.")
+    else:
+        applied = run_migrations(engine)
+        if applied:
+            print(f"Applied: {', '.join(applied)}")
+        else:
+            print("Database is up to date.")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

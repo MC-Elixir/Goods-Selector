@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Iterable
+
 import openpyxl
 from openpyxl.utils.exceptions import InvalidFileException
 
 from agent.sellersprite_models import SellerSpriteContext
 from agent.sellersprite_policy import normalize_sellersprite_error_code
-from agent.tools.browser_downloads import ALLOWED_EXPORT_SUFFIXES, DownloadError, DownloadedArtifact
-
+from agent.tools.browser_downloads import ALLOWED_EXPORT_SUFFIXES, DownloadedArtifact, DownloadError
 
 _SCHEMA_VERSION = "1.0"
 _SOURCE_PROVIDER = "sellersprite"

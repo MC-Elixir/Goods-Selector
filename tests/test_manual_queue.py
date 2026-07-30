@@ -1,5 +1,5 @@
-from crawlers.amazon_bsr import ProductDTO
 from agent import manual_queue
+from crawlers.amazon_bsr import ProductDTO
 
 
 def _product() -> ProductDTO:

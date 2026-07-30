@@ -1,6 +1,6 @@
 import pytest
 
-from matchers._alibaba_playwright_search import enrich_offer_details, _parse_offer
+from matchers._alibaba_playwright_search import _parse_offer, enrich_offer_details
 from matchers.alibaba_detail import BlockedOfferPage
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.alibaba_playwright import _enrich_supplier_from_detail_html
