@@ -311,7 +311,10 @@ def _factory_flag(value: Any) -> bool | None:
 
 
 def _raise_if_blocked(html: str) -> None:
-    lowered = (html or "").lower()
+    # Normal offer pages can bundle anti-bot JavaScript containing words such
+    # as "captcha" even when no verification UI is shown. Only visible page
+    # text is authoritative for a human-action handoff.
+    lowered = _html_text(html or "").lower()
     for error_code, markers in _BLOCK_MARKERS:
         matches = [marker for marker in markers if marker.lower() in lowered]
         if matches:

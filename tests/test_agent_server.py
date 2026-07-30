@@ -492,6 +492,48 @@ def test_reviewed_supplier_csv_fields_include_candidate_scores():
     assert fields.index("candidate_score") > fields.index("visual_similarity")
 
 
+def test_target_contract_review_endpoints_route_to_review_store(
+    monkeypatch, server_client
+):
+    monkeypatch.setattr(
+        server,
+        "list_target_contract_reviews",
+        lambda: {"case_count": 3, "reviewed_case_count": 0, "cases": []},
+    )
+    calls = []
+    monkeypatch.setattr(
+        server,
+        "save_target_contract_review",
+        lambda case_id, action, **kwargs: calls.append(
+            (case_id, action, kwargs)
+        )
+        or {"case_id": case_id, "reviewed": False},
+    )
+
+    status, payload = server_client.get_json("/api/target-contract/reviews")
+    assert status == HTTPStatus.OK
+    assert payload["case_count"] == 3
+
+    status, payload = server_client.post_json(
+        "/api/target-contract/reviews",
+        {
+            "case_id": "case-1",
+            "action": "reject",
+            "offer_id": "101",
+            "note": "wrong size",
+        },
+    )
+    assert status == HTTPStatus.OK
+    assert payload["case"]["case_id"] == "case-1"
+    assert calls == [
+        (
+            "case-1",
+            "reject",
+            {"offer_id": "101", "note": "wrong size"},
+        )
+    ]
+
+
 def test_handle_job_action_cancel_routes_to_runtime():
     calls = []
 

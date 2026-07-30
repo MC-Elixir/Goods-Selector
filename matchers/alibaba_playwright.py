@@ -34,7 +34,12 @@ from urllib.parse import quote, urlparse, parse_qs
 
 from loguru import logger
 
-from matchers.alibaba_detail import apply_1688_detail_to_supplier, parse_1688_offer_detail_html
+from matchers.alibaba_detail import (
+    BlockedOfferPage,
+    apply_1688_detail_to_supplier,
+    parse_1688_offer_detail_html,
+)
+from execution.models import HumanActionRequired
 from matchers.alibaba_pailitao import SupplierDTO
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +81,48 @@ def _playwright_context(headless: bool, proxy_url: Optional[str]):
     from playwright.sync_api import sync_playwright
 
     pw = sync_playwright().start()
+    configured_cdp = bool(
+        (os.environ.get("BU_CDP_HTTP") or "").strip()
+        or (os.environ.get("BU_CDP_WS") or "").strip()
+    )
+    try:
+        from agent.browser_agent import _resolve_cdp_ws
+
+        endpoint = _resolve_cdp_ws(timeout_seconds=2)
+    except Exception:
+        endpoint = ""
+    if endpoint:
+        try:
+            browser = pw.chromium.connect_over_cdp(endpoint)
+            contexts = list(browser.contexts)
+            if contexts:
+                logger.info("[1688] 使用 9222 专用 Chrome 会话")
+                proxy = _CdpContextProxy(contexts[0])
+                return _ContextManager(
+                    proxy,
+                    pw,
+                    close_context=False,
+                )
+        except Exception as exc:
+            logger.warning(f"[1688] 连接 9222 Chrome 失败: {exc}")
+            if configured_cdp:
+                pw.stop()
+                raise HumanActionRequired(
+                    "BROWSER_UNAVAILABLE",
+                    "1688 专用 Chrome 9222 当前不可连接",
+                    instructions=(
+                        "请保持 9222 专用 Chrome 打开，然后在 WebUI 继续任务。"
+                    ),
+                ) from exc
+    elif_configured = configured_cdp and not endpoint
+    if elif_configured:
+        pw.stop()
+        raise HumanActionRequired(
+            "BROWSER_UNAVAILABLE",
+            "1688 专用 Chrome 9222 当前不可连接",
+            instructions="请保持 9222 专用 Chrome 打开，然后在 WebUI 继续任务。",
+        )
+
     kwargs = {
         "user_data_dir": str(_PROFILE_DIR),
         "headless": headless,
@@ -97,25 +144,77 @@ def _playwright_context(headless: bool, proxy_url: Optional[str]):
     if proxy:
         kwargs["proxy"] = proxy
     ctx = pw.chromium.launch_persistent_context(**kwargs)
-    return _ContextManager(ctx, pw)
+    return _ContextManager(ctx, pw, close_context=True)
 
 
 class _ContextManager:
-    def __init__(self, ctx, playwright):
+    def __init__(self, ctx, playwright, *, close_context: bool):
         self.ctx = ctx
         self.playwright = playwright
+        self.close_context = close_context
 
     def __enter__(self):
         return self.ctx
 
     def __exit__(self, exc_type, exc, tb):
         try:
-            self.ctx.close()
+            if self.close_context:
+                self.ctx.close()
         finally:
             self.playwright.stop()
 
 
+class _CdpContextProxy:
+    """Reuse and preserve a 1688 tab in the user's 9222 Chrome context."""
+
+    is_cdp = True
+
+    def __init__(self, context):
+        self._context = context
+        self._created_pages = []
+
+    @property
+    def pages(self):
+        pages = [
+            page for page in self._context.pages
+            if not getattr(page, "is_closed", lambda: False)()
+        ]
+        candidates = [page for page in pages if _is_1688_url(page.url or "")]
+        if not candidates:
+            return []
+
+        def priority(page):
+            url = (page.url or "").lower()
+            if _is_tmd_block(url):
+                return 0
+            if "detail.1688.com" in url:
+                return 1
+            if "s.1688.com" in url:
+                return 2
+            return 3
+
+        return [sorted(candidates, key=priority)[0]]
+
+    def new_page(self):
+        page = self._context.new_page()
+        self._created_pages.append(page)
+        return page
+
+    def __getattr__(self, name):
+        return getattr(self._context, name)
+
+
 def _load_cookies_into(ctx) -> int:
+    if getattr(ctx, "is_cdp", False):
+        try:
+            return len(ctx.cookies([
+                "https://login.1688.com/",
+                "https://login.taobao.com/",
+                "https://work.1688.com/",
+                "https://www.1688.com/",
+            ]))
+        except Exception:
+            return 0
     if not _COOKIES_FILE.exists():
         logger.warning(f"[1688] cookies 文件不存在：{_COOKIES_FILE}")
         return 0
@@ -209,6 +308,8 @@ class Alibaba1688PlaywrightMatcher:
                 logger.info(f"[1688-img] 图搜返回 {len(results)} 条")
                 return results
             logger.info("[1688-img] 图搜无结果，降级关键词搜索")
+        except HumanActionRequired:
+            raise
         except Exception as e:
             logger.warning(f"[1688-img] 图搜失败: {e}，降级关键词搜索")
 
@@ -246,18 +347,7 @@ class Alibaba1688PlaywrightMatcher:
                         logger.info(f"[1688] 已关闭 {dismissed} 个弹窗/遮罩")
                         page.wait_for_timeout(1500)
                     page_url = page.url or ""
-                    if _is_tmd_block(page_url, page.title()):
-                        raise RuntimeError("1688 TMD 验证码拦截，请刷新 1688 登录态并手动解验证码")
-                    if "login" in page_url.lower() or "passport" in page_url.lower():
-                        logger.warning("[1688-kw] 跳转登录页，Session 过期")
-                        self.last_query_attempts.append({
-                            "query": kw,
-                            "status": "failed",
-                            "result_count": None,
-                            "error": "1688 login required",
-                            "backend": "alibaba_playwright_keyword",
-                        })
-                        continue
+                    _raise_if_visible_human_block(page)
                     remaining = per_query_limit if exhaustive else limit - len(results)
                     batch = self._parse_playwright_page(page, remaining)
                     for dto in batch:
@@ -292,6 +382,16 @@ class Alibaba1688PlaywrightMatcher:
                         "error": None,
                         "backend": "alibaba_playwright_keyword",
                     })
+            except HumanActionRequired as e:
+                self.last_query_attempts.append({
+                    "query": kw,
+                    "status": "failed",
+                    "result_count": None,
+                    "error": str(e)[:200],
+                    "backend": "alibaba_playwright_keyword",
+                })
+                logger.warning(f"[1688-kw] '{kw}' 失败: {e}")
+                raise
             except Exception as e:
                 self.last_query_attempts.append({
                     "query": kw,
@@ -322,11 +422,7 @@ class Alibaba1688PlaywrightMatcher:
                 logger.info(f"[1688] 已关闭 {dismissed} 个弹窗/遮罩")
                 page.wait_for_timeout(1500)
             page_url = page.url or ""
-            if _is_tmd_block(page_url, page.title()):
-                raise RuntimeError("1688 TMD 验证码拦截，请刷新 1688 登录态并手动解验证码")
-            if "login" in page_url.lower() or "passport" in page_url.lower():
-                logger.warning("[1688-img] 跳转登录页，Session 过期")
-                return []
+            _raise_if_visible_human_block(page)
             results = self._parse_playwright_page(page, limit)
         for rank, dto in enumerate(results, 1):
             raw = dto.raw_data if isinstance(dto.raw_data, dict) else {}
@@ -397,11 +493,30 @@ class Alibaba1688PlaywrightMatcher:
                     logger.info(f"[1688-detail] 已加载 {loaded} 个 cookies")
                 page.goto(supplier.offer_url, wait_until="domcontentloaded", timeout=60_000)
                 page.wait_for_timeout(int(min(self.page_wait, 5) * 1000))
-                if _is_tmd_block(page.url or "", page.title()):
-                    raise RuntimeError("1688 TMD 验证码拦截，请刷新 1688 登录态并手动解验证码")
+                _raise_if_visible_human_block(page)
                 html = page.content()
                 final_url = page.url or ""
-            return _enrich_supplier_from_detail_html(supplier, html, page_url=final_url)
+                # Parse while the browser context is still attached. A visible
+                # verification page must remain open and must never yield a
+                # supplier price merely because embedded JSON was present.
+                return _enrich_supplier_from_detail_html(
+                    supplier, html, page_url=final_url
+                )
+        except HumanActionRequired:
+            raise
+        except BlockedOfferPage as exc:
+            if exc.error_code in {"AUTH_REQUIRED", "CAPTCHA"}:
+                raise HumanActionRequired(
+                    exc.error_code,
+                    exc.diagnostic,
+                    instructions=(
+                        "请在专用 Chrome 中打开 1688，完成登录或滑块验证，"
+                        "然后在 WebUI 保存 1688 cookies 并继续任务。"
+                    ),
+                ) from exc
+            logger.warning(f"[1688-detail] 详情页补采失败 offer={supplier.alibaba_offer_id}: {exc}")
+            supplier.raw_data.setdefault("detail_error", str(exc))
+            return supplier
         except Exception as exc:
             logger.warning(f"[1688-detail] 详情页补采失败 offer={supplier.alibaba_offer_id}: {exc}")
             supplier.raw_data.setdefault("detail_error", str(exc))
@@ -726,3 +841,72 @@ def _dismiss_popups(page) -> int:
 def _is_tmd_block(url: str, title: str = "") -> bool:
     text = f"{url} {title}".lower()
     return "_____tmd_____" in text or "punish" in text or "验证码拦截" in title
+
+
+def _is_1688_url(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return host == "1688.com" or host.endswith(".1688.com")
+
+
+def _visible_human_block(page) -> tuple[str, str] | None:
+    """Classify verification/login UI using only visible browser state."""
+    url = page.url or ""
+    try:
+        title = page.title() or ""
+    except Exception:
+        title = ""
+    if _is_tmd_block(url, title):
+        return "CAPTCHA", "1688 TMD 验证码拦截"
+
+    frame_urls: list[str] = []
+    try:
+        frame_urls = [frame.url or "" for frame in page.frames]
+    except Exception:
+        pass
+    frame_text = " ".join(frame_urls).lower()
+    if any(marker in frame_text for marker in ("captcha", "punish", "verify")):
+        return "CAPTCHA", "1688 页面显示验证码或人机验证"
+
+    try:
+        body_text = page.locator("body").inner_text(timeout=2_000)
+    except Exception:
+        body_text = ""
+    visible_text = f"{title}\n{body_text}".lower()
+    captcha_markers = (
+        "验证码",
+        "滑动滑块",
+        "拖动滑块",
+        "人机验证",
+        "访问过于频繁",
+        "安全验证",
+    )
+    if any(marker in visible_text for marker in captcha_markers):
+        return "CAPTCHA", "1688 页面显示验证码或人机验证"
+
+    lowered_url = url.lower()
+    if (
+        "login" in lowered_url
+        or "passport" in lowered_url
+        or "请登录后继续访问" in visible_text
+    ):
+        return "AUTH_REQUIRED", "1688 登录态已过期"
+    return None
+
+
+def _raise_if_visible_human_block(page) -> None:
+    blocked = _visible_human_block(page)
+    if not blocked:
+        return
+    error_code, diagnostic = blocked
+    action = "重新登录" if error_code == "AUTH_REQUIRED" else "完成登录或滑块验证"
+    raise HumanActionRequired(
+        error_code,
+        diagnostic,
+        instructions=(
+            f"请在专用 Chrome 中打开 1688，{action}，"
+            "然后在 WebUI 保存 1688 cookies 并继续任务。"
+        ),
+    )

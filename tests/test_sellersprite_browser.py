@@ -110,8 +110,9 @@ class FakeObserver:
 
 
 class FakeBrowser:
-    def __init__(self, page: FakePage) -> None:
-        self.contexts = [type("Context", (), {"pages": [page]})()]
+    def __init__(self, page: FakePage | list[FakePage]) -> None:
+        pages = page if isinstance(page, list) else [page]
+        self.contexts = [type("Context", (), {"pages": pages})()]
         self.closed = False
 
     def close(self) -> None:
@@ -192,6 +193,45 @@ def test_adapter_attaches_only_through_injected_cdp_resolver(tmp_path):
 
     assert playwright.connected_to == "ws://host.docker.internal:9222/devtools/browser/1"
     assert browser.closed is False
+    assert playwright.stopped
+
+
+def test_adapter_prefers_amazon_page_over_first_chrome_internal_tab(tmp_path):
+    settings_page = FakePage(asin="B00Q7OAN50", visible_markers=set())
+    settings_page.url = "chrome://settings/downloads"
+    amazon_page = FakePage(asin="B00Q7OAN50", visible_markers={"ready"})
+    alibaba_page = FakePage(asin="B00Q7OAN50", visible_markers=set())
+    alibaba_page.url = "https://work.1688.com/"
+    browser = FakeBrowser([settings_page, amazon_page, alibaba_page])
+    playwright = FakePlaywright(browser)
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        playwright_factory=lambda: playwright,
+        cdp_resolver=lambda: "ws://host.docker.internal:9222/devtools/browser/1",
+    )
+
+    with session as attached:
+        assert attached.page is amazon_page
+
+
+def test_adapter_rejects_attached_chrome_without_amazon_page(tmp_path):
+    settings_page = FakePage(asin="B00Q7OAN50", visible_markers=set())
+    settings_page.url = "chrome://settings/downloads"
+    alibaba_page = FakePage(asin="B00Q7OAN50", visible_markers=set())
+    alibaba_page.url = "https://work.1688.com/"
+    browser = FakeBrowser([settings_page, alibaba_page])
+    playwright = FakePlaywright(browser)
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        playwright_factory=lambda: playwright,
+        cdp_resolver=lambda: "ws://host.docker.internal:9222/devtools/browser/1",
+    )
+
+    with pytest.raises(SellerSpriteWorkflowError, match="EXTENSION_UNAVAILABLE"):
+        session.__enter__()
+
     assert playwright.stopped
 
 

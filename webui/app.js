@@ -7,6 +7,7 @@ const state = {
   results: [],
   manualQueue: [],
   importedSuppliers: [],
+  targetContractReviews: [],
   configStatus: null,
   browserSetup: null,
   trialFeedbackSummary: null,
@@ -20,8 +21,11 @@ const state = {
   sellerSpriteKeywordRows: [],
   sellerSpriteImportHistory: [],
   lang: localStorage.getItem("agentLang") || "en",
+  notificationEnabled: localStorage.getItem("backgroundNotifications") === "enabled",
+  activeHumanAlert: null,
 };
 
+const DEFAULT_DOCUMENT_TITLE = document.title;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -87,6 +91,12 @@ const I18N = {
     "hero.title": "Amazon Selector Agent",
     "jobs.noActive": "No active jobs",
     "jobs.noActiveHint": "Start an agent run to see progress here.",
+    "notifications.enable": "Enable background alerts",
+    "notifications.enabled": "Background alerts on",
+    "notifications.denied": "Allow notifications in browser settings",
+    "notifications.unsupported": "System alerts unavailable",
+    "notifications.title": "Sourcing task needs attention",
+    "notifications.view": "View",
     "manual.empty": "No blocked sourcing items",
     "manual.ignore": "Ignore",
     "manual.keywords": "Keywords",
@@ -98,6 +108,7 @@ const I18N = {
     "metrics.agent": "Agent",
     "metrics.cookieHealth": "Cookie Health",
     "nav.results": "Results Library",
+    "nav.contractReview": "Contract Review",
     "nav.run": "Run Agent",
     "nav.trial": "One-click Research",
     "nav.research": "Market Research",
@@ -223,6 +234,10 @@ const I18N = {
     "results.deleteConfirm": "Hide this result from the library? The source export and database history stay intact.",
     "results.subtitle": "Read previous crawl and sourcing outputs from local JSON and Excel exports.",
     "results.title": "Saved Product Selection Results",
+    "contractReview.kicker": "PINNED HUMAN REVIEW QUEUE",
+    "contractReview.title": "Target-contract evidence review",
+    "contractReview.subtitle": "Review the three historical Amazon/1688 cases. Partial decisions are saved, but only completed cases enter evaluation.",
+    "contractReview.complete": "cases reviewed",
     "results.reviewFilter.accepted": "Has accepted supplier",
     "results.reviewFilter.all": "All review states",
     "results.reviewFilter.pending": "Needs supplier review",
@@ -492,6 +507,12 @@ const I18N = {
     "hero.title": "Amazon 选品 Agent",
     "jobs.noActive": "暂无运行任务",
     "jobs.noActiveHint": "启动一次 Agent 任务后，可在这里查看进度。",
+    "notifications.enable": "开启后台提醒",
+    "notifications.enabled": "后台提醒已开启",
+    "notifications.denied": "请在浏览器设置中允许通知",
+    "notifications.unsupported": "当前浏览器不支持系统提醒",
+    "notifications.title": "选品任务等待人工处理",
+    "notifications.view": "查看",
     "manual.empty": "暂无阻塞货源任务",
     "manual.ignore": "忽略",
     "manual.keywords": "关键词",
@@ -503,6 +524,7 @@ const I18N = {
     "metrics.agent": "Agent",
     "metrics.cookieHealth": "Cookie 状态",
     "nav.results": "结果库",
+    "nav.contractReview": "合同复核",
     "nav.run": "运行 Agent",
     "nav.trial": "一键研究",
     "nav.research": "市场研究",
@@ -628,6 +650,10 @@ const I18N = {
     "results.deleteConfirm": "从结果库隐藏这条记录？原始导出和数据库审计记录不会删除。",
     "results.subtitle": "读取本地 JSON 和 Excel 导出的历史爬取与选品结果。",
     "results.title": "已保存的选品结果",
+    "contractReview.kicker": "固定证据人工复核队列",
+    "contractReview.title": "目标合同证据复核",
+    "contractReview.subtitle": "复核三组历史 Amazon / 1688 案例。部分操作会安全保存，但只有完成复核的案例才进入评估。",
+    "contractReview.complete": "案例已复核",
     "results.reviewFilter.accepted": "有通过供应商",
     "results.reviewFilter.all": "全部审核状态",
     "results.reviewFilter.pending": "待审核供应商",
@@ -868,6 +894,7 @@ const JOB_MESSAGE_LABELS = {
     "Real supplier match evidence required but missing from export": "导出中缺少真实 1688 货源匹配证据",
     "Market data missing": "缺少市场数据",
     "SellerSprite rich market data required but missing from export": "导出中缺少卖家精灵富市场数据",
+    "1688 supplier search is paused after a recent verification block": "上一次 1688 验证触发了安全冷却；当前页面可能没有验证码",
   },
   en: {},
 };
@@ -876,6 +903,7 @@ document.addEventListener("DOMContentLoaded", () => {
   applyLanguage();
   bindNavigation();
   bindActions();
+  bindBackgroundNotifications();
   updateSourceModeFields();
   refreshAll();
   setInterval(refreshJobs, 4000);
@@ -892,12 +920,14 @@ function bindNavigation() {
       $("#trialSection").style.display = section === "trial" ? "grid" : "none";
       $("#runSection").style.display = section === "run" ? "grid" : "none";
       $("#resultsSection").style.display = section === "run" || section === "results" ? "grid" : "none";
+      $("#contractReviewSection").style.display = section === "contract-review" ? "block" : "none";
       $("#settingsSection").style.display = section === "settings" ? "block" : "none";
       const researchSection = $("#researchSection");
       if (researchSection) {
         researchSection.style.display = section === "research" ? "block" : "none";
         if (section === "research") refreshResearchHistory();
       }
+      if (section === "contract-review") refreshTargetContractReviews();
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     });
   });
@@ -973,6 +1003,7 @@ async function refreshAll() {
     refreshImportedSuppliers(),
     refreshSellerSpriteImportHistory(),
     refreshTrialFeedbackSummary(),
+    refreshTargetContractReviews(),
   ]);
   await refreshResults();
 }
@@ -1011,8 +1042,133 @@ async function refreshJobs() {
     }
   }));
   state.executionNodes = Object.fromEntries(nodeResults);
+  syncHumanActionAlerts();
   renderJobs();
   renderTrialWorkflow();
+}
+
+function bindBackgroundNotifications() {
+  const button = $("#notificationButton");
+  const dismiss = $("#backgroundAlertDismiss");
+  const view = $("#backgroundAlertView");
+  button?.addEventListener("click", enableBackgroundNotifications);
+  dismiss?.addEventListener("click", () => $("#backgroundAlert")?.classList.add("hidden"));
+  view?.addEventListener("click", focusHumanAction);
+  renderNotificationButton();
+}
+
+function renderNotificationButton() {
+  const button = $("#notificationButton");
+  if (!button) return;
+  if (!("Notification" in window)) {
+    button.textContent = t("notifications.unsupported");
+    button.disabled = true;
+    return;
+  }
+  const enabled = state.notificationEnabled && Notification.permission === "granted";
+  button.classList.toggle("enabled", enabled);
+  button.textContent = Notification.permission === "denied"
+    ? t("notifications.denied")
+    : enabled ? t("notifications.enabled") : t("notifications.enable");
+}
+
+async function enableBackgroundNotifications() {
+  if (!("Notification" in window)) return;
+  const permission = Notification.permission === "default"
+    ? await Notification.requestPermission()
+    : Notification.permission;
+  state.notificationEnabled = permission === "granted";
+  if (state.notificationEnabled) {
+    localStorage.setItem("backgroundNotifications", "enabled");
+    const pending = currentHumanAction();
+    if (pending) showHumanActionAlert(pending.job, pending.node, { forceSystem: true });
+  } else {
+    localStorage.removeItem("backgroundNotifications");
+  }
+  renderNotificationButton();
+}
+
+function currentHumanAction() {
+  for (const job of state.jobs) {
+    if (job.status !== "human_required") continue;
+    const nodes = state.executionNodes[String(job.run_log_id)] || [];
+    return { job, node: nodes.find((item) => item.status === "human_required") || null };
+  }
+  return null;
+}
+
+function syncHumanActionAlerts() {
+  const pending = currentHumanAction();
+  document.title = pending ? `⚠ ${DEFAULT_DOCUMENT_TITLE}` : DEFAULT_DOCUMENT_TITLE;
+  if (!pending) {
+    state.activeHumanAlert = null;
+    return;
+  }
+  const node = pending.node;
+  const key = `${pending.job.id}:${node?.id || "job"}:${node?.updated_at || pending.job.finished_at || ""}`;
+  if (state.activeHumanAlert === key) return;
+  state.activeHumanAlert = key;
+  showHumanActionAlert(pending.job, node);
+}
+
+function humanActionDescription(job, node) {
+  const scope = node?.scope_key || job.config?.keyword || job.config?.category || job.id;
+  const stage = node?.stage || "browser";
+  const code = node?.error_code || "";
+  const detail = node?.human_action_required?.instructions
+    || node?.error_detail
+    || jobMessageLabel(job.error)
+    || jobMessageLabel(job.message);
+  return `${scope} · ${stage}${code ? ` · ${code}` : ""} — ${detail}`;
+}
+
+function showHumanActionAlert(job, node, { forceSystem = false } = {}) {
+  const alert = $("#backgroundAlert");
+  const title = $("#backgroundAlertTitle");
+  const body = $("#backgroundAlertBody");
+  const view = $("#backgroundAlertView");
+  if (alert && title && body) {
+    title.textContent = t("notifications.title");
+    body.textContent = humanActionDescription(job, node);
+    if (view) view.textContent = t("notifications.view");
+    alert.classList.remove("hidden");
+  }
+  if (
+    state.notificationEnabled
+    && "Notification" in window
+    && Notification.permission === "granted"
+    && (document.hidden || forceSystem)
+  ) {
+    const notification = new Notification(t("notifications.title"), {
+      body: humanActionDescription(job, node),
+      tag: `human-required-${job.id}-${node?.id || "job"}`,
+      requireInteraction: true,
+    });
+    notification.onclick = () => {
+      window.focus();
+      focusHumanAction();
+      notification.close();
+    };
+  }
+}
+
+function focusHumanAction() {
+  window.focus();
+  $(".nav-item[data-section='trial']")?.click();
+  $(".trial-progress-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function refresh1688SessionBeforeResume(node) {
+  const errorCode = node?.error_code || node?.human_action_required?.error_code || "";
+  if (!["CAPTCHA", "CAPTCHA_COOLDOWN", "AUTH_REQUIRED"].includes(errorCode)) return;
+  const captured = await postJson("/api/browser-setup", {
+    action: "save_cookies",
+    site: "1688",
+  });
+  if (!captured.ok) {
+    throw new Error(captured.message || "1688 session could not be saved.");
+  }
+  await Promise.all([refreshPreflight(), refreshBrowserSetup()]);
 }
 
 async function refreshRuns() {
@@ -1033,6 +1189,18 @@ async function refreshManualQueue() {
   const data = await getJson("/api/manual-queue?status=open");
   state.manualQueue = data.items || [];
   renderManualQueue();
+}
+
+async function refreshTargetContractReviews() {
+  const list = $("#contractReviewList");
+  if (!list) return;
+  try {
+    const data = await getJson("/api/target-contract/reviews");
+    state.targetContractReviews = data.cases || [];
+    renderTargetContractReviews(data);
+  } catch (error) {
+    list.innerHTML = `<p class="muted-text">${escapeHtml(error.message)}</p>`;
+  }
 }
 
 async function refreshImportedSuppliers() {
@@ -1525,6 +1693,158 @@ function renderImportedSuppliers() {
   `).join("");
 }
 
+function renderTargetContractReviews(payload = {}) {
+  const list = $("#contractReviewList");
+  if (!list) return;
+  const cases = state.targetContractReviews || [];
+  const reviewedCount = cases.filter((item) => item.reviewed).length;
+  $("#contractReviewCount").textContent = `${reviewedCount} / ${payload.case_count ?? cases.length}`;
+  if (!cases.length) {
+    list.innerHTML = `<p class="muted-text">No pinned review cases are available.</p>`;
+    return;
+  }
+  list.innerHTML = cases.map((item, index) => targetContractCase(item, index)).join("");
+  list.querySelectorAll("[data-contract-action]").forEach((button) => {
+    button.addEventListener("click", () => submitTargetContractReview(button));
+  });
+}
+
+function targetContractCase(item, index) {
+  const amazon = item.amazon_evidence || {};
+  const artifact = item.artifact || {};
+  const noteId = `contract-note-${index}`;
+  const artifactClass = artifact.sha256_verified ? "verified" : "unavailable";
+  const artifactLabel = artifact.sha256_verified
+    ? "SHA-256 verified"
+    : (artifact.error || "Evidence unavailable");
+  return `
+    <article class="contract-review-case ${item.reviewed ? "reviewed" : ""}" data-case-id="${escapeAttr(item.case_id)}">
+      <header class="contract-case-header">
+        <div>
+          <span class="contract-case-number">Case ${index + 1}</span>
+          <strong>${escapeHtml(item.asin || "-")}</strong>
+          <small>${escapeHtml(item.category_id || "")}</small>
+        </div>
+        <span class="contract-case-status ${item.reviewed ? "reviewed" : "pending"}">
+          ${item.reviewed ? "Reviewed · included in evaluation" : "Pending · excluded from evaluation"}
+        </span>
+      </header>
+      <section class="contract-amazon-card">
+        ${amazon.main_image_url ? `<img src="${escapeAttr(amazon.main_image_url)}" alt="" loading="lazy">` : `<div class="contract-image-placeholder">Amazon</div>`}
+        <div>
+          <span class="contract-source-label">Amazon target</span>
+          <h3>${escapeHtml(amazon.title || item.amazon_title || "-")}</h3>
+          <a href="${escapeAttr(amazon.listing_url || `https://www.amazon.com/dp/${item.asin}`)}" target="_blank" rel="noreferrer">${escapeHtml(item.asin || "Open listing")}</a>
+        </div>
+      </section>
+      <div class="contract-artifact ${artifactClass}">
+        <strong>${escapeHtml(artifactLabel)}</strong>
+        <span>${escapeHtml(artifact.path || item.artifact_path || "")}</span>
+        <code>${escapeHtml((artifact.actual_sha256 || artifact.expected_sha256 || "").slice(0, 16))}${artifact.expected_sha256 ? "…" : ""}</code>
+      </div>
+      <div class="contract-candidate-list">
+        ${(item.candidates || []).map((candidate) => targetContractCandidate(item, candidate, noteId)).join("")}
+      </div>
+      <footer class="contract-case-footer">
+        <label>
+          <span>Review note</span>
+          <textarea id="${escapeAttr(noteId)}" rows="2" maxlength="1000" placeholder="Why does this evidence match or not match?">${escapeHtml(item.review_notes || "")}</textarea>
+        </label>
+        <div>
+          <button class="contract-no-match ${item.no_match === true ? "selected" : ""}" type="button"
+            data-contract-action="no_match" data-case-id="${escapeAttr(item.case_id)}" data-note-id="${escapeAttr(noteId)}">
+            No matching 1688 candidate
+          </button>
+          <small>Use no-match explicitly when every shown candidate is unsuitable.</small>
+        </div>
+      </footer>
+    </article>
+  `;
+}
+
+function targetContractCandidate(item, candidate, noteId) {
+  const evidence = candidate.stored_evidence;
+  const evidencePairs = targetContractEvidencePairs(evidence);
+  return `
+    <section class="contract-candidate-card ${escapeAttr(candidate.decision || "pending")}">
+      <div class="contract-candidate-main">
+        ${candidate.image_url ? `<img src="${escapeAttr(candidate.image_url)}" alt="" loading="lazy">` : `<div class="contract-image-placeholder">1688</div>`}
+        <div>
+          <span class="contract-source-label">1688 candidate · ${escapeHtml(candidate.offer_id)}</span>
+          <h3>${escapeHtml(candidate.title || "-")}</h3>
+          <a href="${escapeAttr(candidate.offer_url)}" target="_blank" rel="noreferrer">Open stored offer</a>
+        </div>
+      </div>
+      <div class="contract-evidence-grid">
+        ${evidencePairs.length
+          ? evidencePairs.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")
+          : `<p class="muted-text">The pinned artifact is unavailable; fixture title and offer ID are shown, but no unverified evidence is substituted.</p>`}
+      </div>
+      ${evidence ? `
+        <details class="contract-raw-evidence">
+          <summary>Stored evidence JSON</summary>
+          <pre>${escapeHtml(JSON.stringify(evidence, null, 2))}</pre>
+        </details>` : ""}
+      <div class="contract-decision-controls" role="group" aria-label="Decision for offer ${escapeAttr(candidate.offer_id)}">
+        <button class="accept ${candidate.decision === "accepted" ? "selected" : ""}" type="button"
+          data-contract-action="accept" data-case-id="${escapeAttr(item.case_id)}"
+          data-offer-id="${escapeAttr(candidate.offer_id)}" data-note-id="${escapeAttr(noteId)}">Accept match</button>
+        <button class="reject ${candidate.decision === "rejected" ? "selected" : ""}" type="button"
+          data-contract-action="reject" data-case-id="${escapeAttr(item.case_id)}"
+          data-offer-id="${escapeAttr(candidate.offer_id)}" data-note-id="${escapeAttr(noteId)}">Reject match</button>
+        <span>${escapeHtml(candidate.decision === "pending" ? "No decision" : candidate.decision)}</span>
+      </div>
+    </section>
+  `;
+}
+
+function targetContractEvidencePairs(evidence) {
+  if (!evidence || typeof evidence !== "object") return [];
+  const raw = evidence.raw_data && typeof evidence.raw_data === "object" ? evidence.raw_data : {};
+  const spec = raw.spec_match && typeof raw.spec_match === "object" ? raw.spec_match : {};
+  const pairs = [
+    ["Supplier", evidence.supplier_name],
+    ["Price", evidence.base_price_cny === null || evidence.base_price_cny === undefined ? null : `¥${evidence.base_price_cny}`],
+    ["MOQ", evidence.moq],
+    ["Monthly sales", evidence.monthly_sales],
+    ["Repeat buyer rate", evidence.repeat_buyer_rate === null || evidence.repeat_buyer_rate === undefined ? null : `${number(evidence.repeat_buyer_rate * 100, 1)}%`],
+    ["Factory", evidence.is_factory === true ? "Yes" : evidence.is_factory === false ? "No" : null],
+    ["Match score", evidence.match_quality_score === null || evidence.match_quality_score === undefined ? null : percent(evidence.match_quality_score)],
+    ["Candidate score", evidence.candidate_score ?? raw.supplier_candidate_score],
+    ["Spec conflicts", Array.isArray(spec.conflicts) ? spec.conflicts.join(", ") : null],
+    ["Spec missing", Array.isArray(spec.missing) ? spec.missing.join(", ") : null],
+  ];
+  return pairs.filter(([, value]) => value !== null && value !== undefined && value !== "");
+}
+
+async function submitTargetContractReview(button) {
+  const notice = $("#contractReviewNotice");
+  const note = document.getElementById(button.dataset.noteId)?.value || "";
+  const buttons = button.closest(".contract-review-case")?.querySelectorAll("button") || [];
+  buttons.forEach((node) => { node.disabled = true; });
+  notice.className = "contract-review-notice";
+  notice.textContent = "Saving review decision…";
+  try {
+    const response = await postJson("/api/target-contract/reviews", {
+      case_id: button.dataset.caseId,
+      action: button.dataset.contractAction,
+      offer_id: button.dataset.offerId || null,
+      note,
+    });
+    const index = state.targetContractReviews.findIndex((item) => item.case_id === response.case.case_id);
+    if (index >= 0) state.targetContractReviews[index] = response.case;
+    notice.className = "contract-review-notice saved";
+    notice.textContent = response.case.reviewed
+      ? "Saved. This completed case is now eligible for target-contract evaluation."
+      : "Saved. This case remains excluded until every candidate is decided with at least one acceptance, or no-match is explicit.";
+    renderTargetContractReviews({ case_count: state.targetContractReviews.length });
+  } catch (error) {
+    buttons.forEach((node) => { node.disabled = false; });
+    notice.className = "contract-review-notice error";
+    notice.textContent = error.message;
+  }
+}
+
 function fillAlibabaSearchApiForm(status) {
   const ns = $("#alibabaNamespaceInput");
   const method = $("#alibabaMethodInput");
@@ -1567,10 +1887,12 @@ function applyLanguage() {
   renderManualQueue();
   renderConfigStatus();
   renderBrowserSetup();
+  renderNotificationButton();
   renderSellerSpriteBrowserCapability(state.configStatus?.seller_sprite_browser || {});
   updateTrialSourceModeFields();
   renderTrialReadiness();
   renderTrialWorkflow();
+  renderTargetContractReviews({ case_count: state.targetContractReviews.length });
   renderChatContext();
   renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
 }
@@ -1904,6 +2226,7 @@ async function continueTrialJob() {
       const nodes = state.executionNodes[String(job.run_log_id)] || [];
       const node = nodes.find((item) => item.status === "human_required");
       if (!node) throw new Error("No resumable browser action was found.");
+      await refresh1688SessionBeforeResume(node);
       await postJson(
         `/api/jobs/${encodeURIComponent(job.id)}/nodes/${encodeURIComponent(node.id)}/resume`,
         {
@@ -2216,6 +2539,12 @@ function renderJobs() {
       if (!reason || !reason.trim()) return;
       button.disabled = true;
       try {
+        if (button.dataset.action === "resume") {
+          const job = state.jobs.find((item) => item.id === button.dataset.jobId);
+          const node = (state.executionNodes[String(job?.run_log_id)] || [])
+            .find((item) => String(item.id) === button.dataset.nodeId);
+          await refresh1688SessionBeforeResume(node);
+        }
         await postJson(
           `/api/jobs/${encodeURIComponent(button.dataset.jobId)}/nodes/${encodeURIComponent(button.dataset.nodeId)}/${button.dataset.action}`,
           { reason: reason.trim(), resume_token: button.dataset.resumeToken },
@@ -2244,7 +2573,7 @@ function nodeActionButton(job, node) {
   if (["queued", "running", "cancel_requested"].includes(job.status)) return "";
   const token = escapeAttr(node.resume_token || "");
   if (node.status === "human_required") {
-    return `<button class="link-button node-action" data-job-id="${escapeAttr(job.id)}" data-node-id="${Number(node.id)}" data-resume-token="${token}" data-action="resume">${escapeHtml(t("actions.resume"))}</button>`;
+    return `<button class="link-button node-action" data-job-id="${escapeAttr(job.id)}" data-node-id="${Number(node.id)}" data-resume-token="${token}" data-error-code="${escapeAttr(node.error_code || "")}" data-action="resume">${escapeHtml(t("actions.resume"))}</button>`;
   }
   if (["failed", "timed_out"].includes(node.status)) {
     return `<button class="link-button node-action" data-job-id="${escapeAttr(job.id)}" data-node-id="${Number(node.id)}" data-resume-token="${token}" data-action="retry">${escapeHtml(t("actions.retry"))}</button>`;

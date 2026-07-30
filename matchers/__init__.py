@@ -25,6 +25,7 @@ from typing import Optional
 from loguru import logger
 
 from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
+from execution.models import HumanActionRequired
 from crawlers.amazon_bsr import ProductDTO
 from agent.manual_queue import enqueue_sourcing_block
 from domain.target_categories import (
@@ -256,8 +257,16 @@ def match_suppliers(
     # ── Step 2d: Playwright 兜底 ───────────────────────────
     circuit_open = circuit_is_open()
     if not suppliers and circuit_open:
-        real_search_blocked = True
         _enqueue_manual_block(product, enriched_keywords, "1688 search cooldown active")
+        raise HumanActionRequired(
+            "CAPTCHA_COOLDOWN",
+            "1688 supplier search is paused after a recent verification block",
+            instructions=(
+                "这是上一次验证码触发的安全冷却，当前 9222 页面可能没有验证码。"
+                "请确认专用 Chrome 中的 1688 页面可正常访问，然后点击 WebUI 的继续任务；"
+                "系统会先保存当前 1688 会话、清除冷却，再重新尝试。"
+            ),
+        )
 
     if not suppliers and not circuit_open:
         _check_cancel(cancel_check, "1688 playwright search")
@@ -288,11 +297,26 @@ def match_suppliers(
             _check_cancel(cancel_check, "1688 playwright search")
         except CancellationRequested:
             raise
+        except HumanActionRequired as e:
+            open_circuit(
+                _cfg.alibaba_block_cooldown_seconds,
+                reason=str(e)[:200],
+            )
+            _enqueue_manual_block(product, enriched_keywords, str(e)[:200])
+            raise
         except Exception as e:
             if "TMD" in str(e) or "验证码" in str(e):
                 real_search_blocked = True
                 open_circuit(_cfg.alibaba_block_cooldown_seconds, reason=str(e)[:200])
                 _enqueue_manual_block(product, enriched_keywords, str(e)[:200])
+                raise HumanActionRequired(
+                    "CAPTCHA",
+                    str(e),
+                    instructions=(
+                        "请在专用 Chrome 中打开 1688，完成登录或滑块验证，"
+                        "然后在 WebUI 保存 1688 cookies 并继续任务。"
+                    ),
+                ) from e
             logger.warning(f"[match] Playwright 搜索失败 ({product.asin}): {e}")
 
     # ── Step 3: mock 兜底 ──────────────────────────────────
@@ -318,12 +342,20 @@ def match_suppliers(
         int(getattr(_cfg, "target_category_detail_enrich_limit", 10) or 0)
         if target_profile is not None else None
     )
-    suppliers = _enrich_supplier_details(
-        suppliers,
-        _cfg,
-        cancel_check=cancel_check,
-        limit_override=detail_limit,
-    )
+    try:
+        suppliers = _enrich_supplier_details(
+            suppliers,
+            _cfg,
+            cancel_check=cancel_check,
+            limit_override=detail_limit,
+        )
+    except HumanActionRequired as e:
+        open_circuit(
+            _cfg.alibaba_block_cooldown_seconds,
+            reason=str(e)[:200],
+        )
+        _enqueue_manual_block(product, enriched_keywords, str(e)[:200])
+        raise
     _check_cancel(cancel_check, "1688 detail enrichment")
 
     # ── Step 5: 启发式匹配验证 ──────────────────────────────
@@ -362,7 +394,7 @@ def match_suppliers(
                 top_k=int(getattr(_cfg, "target_category_llm_top_k", 5)),
                 cancel_check=cancel_check,
             )
-        except CancellationRequested:
+        except (CancellationRequested, HumanActionRequired):
             raise
         except Exception as exc:
             logger.warning(f"[match] target LLM 验证不可用 ({product.asin}): {exc}")
@@ -536,7 +568,7 @@ def _verify_target_supplier_images(
             if not visual.is_match:
                 supplier.match_quality_score = 0.0
                 supplier.match_verification_method = "llm_rejected"
-        except CancellationRequested:
+        except (CancellationRequested, HumanActionRequired):
             raise
         except Exception as exc:
             code = str(getattr(exc, "code", "provider_failure") or "provider_failure")
@@ -625,7 +657,7 @@ def _enrich_supplier_details(
                 if offer_id:
                     save_cached_offer_detail(offer_id, detail)
             enriched += 1
-        except CancellationRequested:
+        except (CancellationRequested, HumanActionRequired):
             raise
         except Exception as exc:
             supplier.raw_data["detail_enrichment"] = {

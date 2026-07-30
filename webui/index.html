@@ -29,6 +29,10 @@
             <span class="icon">▦</span>
             <span data-i18n="nav.results">Results Library</span>
           </button>
+          <button class="nav-item" data-section="contract-review">
+            <span class="icon">✓</span>
+            <span data-i18n="nav.contractReview">Contract Review</span>
+          </button>
           <button class="nav-item" data-section="research">
             <span class="icon">◎</span>
             <span data-i18n="nav.research">Market Research</span>
@@ -136,6 +140,7 @@
                 <h2 data-i18n="trial.progressTitle">任务进度</h2>
                 <p id="trialJobMeta" data-i18n="trial.noJob">尚未创建试用任务</p>
               </div>
+              <button class="link-button notification-button" id="notificationButton" type="button">开启后台提醒</button>
             </div>
             <div class="trial-readiness" id="trialReadiness">
               <span data-readiness="chrome">Chrome 9222</span>
@@ -423,6 +428,24 @@
               <button class="primary-button" type="submit" data-i18n="chat.send">Send</button>
             </form>
           </aside>
+        </section>
+
+        <section class="contract-review-workspace" id="contractReviewSection" style="display:none">
+          <div class="panel contract-review-panel">
+            <div class="panel-head contract-review-head">
+              <div>
+                <span class="trial-kicker" data-i18n="contractReview.kicker">PINNED HUMAN REVIEW QUEUE</span>
+                <h2 data-i18n="contractReview.title">Target-contract evidence review</h2>
+                <p data-i18n="contractReview.subtitle">Review the three historical Amazon/1688 cases. Partial decisions are saved, but only completed cases enter evaluation.</p>
+              </div>
+              <div class="contract-review-progress">
+                <strong id="contractReviewCount">0 / 3</strong>
+                <span data-i18n="contractReview.complete">cases reviewed</span>
+              </div>
+            </div>
+            <div class="contract-review-notice" id="contractReviewNotice" role="status" aria-live="polite"></div>
+            <div class="contract-review-list" id="contractReviewList" aria-live="polite"></div>
+          </div>
         </section>
 
         <section class="panel settings-panel" id="settingsSection">
@@ -724,6 +747,16 @@
         </section>
       </main>
     </div>
+    <aside class="background-alert hidden" id="backgroundAlert" role="alert" aria-live="assertive">
+      <div>
+        <strong id="backgroundAlertTitle">任务等待人工处理</strong>
+        <span id="backgroundAlertBody"></span>
+      </div>
+      <div class="background-alert-actions">
+        <button class="link-button" id="backgroundAlertView" type="button">查看</button>
+        <button class="link-button" id="backgroundAlertDismiss" type="button" aria-label="关闭">×</button>
+      </div>
+    </aside>
     <script src="/app.js"></script>
   </body>
 </html>
