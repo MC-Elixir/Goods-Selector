@@ -1,0 +1,20 @@
+name: amazon-selector-client
+version: 1.0.0
+description: 单客户、最小权限的 Amazon US 选品助手配置
+author: Amazon Selector
+# Hermes 0.20.x accepts one comparator in a distribution manifest.  The
+# companion launcher verifies the <0.21.0 upper bound before installing.
+hermes_requires: ">=0.20.0"
+env_requires:
+  - name: SELECTOR_MCP_TOKEN
+    description: Selector MCP 本机鉴权密钥
+    required: true
+  - name: SELECTOR_HERMES_MODEL
+    description: Hermes 使用的文本模型 ID
+    required: true
+  - name: SELECTOR_HERMES_MODEL_BASE_URL
+    description: OpenAI 兼容模型接口地址
+    required: true
+  - name: SELECTOR_HERMES_MODEL_API_KEY
+    description: Hermes 文本模型 API 密钥
+    required: true

@@ -57,6 +57,9 @@ def test_compose_uses_single_persistent_data_volume_and_local_only_port():
     assert "./data:/app/data" in compose
     assert "127.0.0.1:8765:8765" in compose
     assert 'ALIBABA_ALLOW_MOCK_SUPPLIERS: "false"' in compose
+    assert 'profiles: ["assistant"]' in compose
+    assert "127.0.0.1:8766:8766" in compose
+    assert "SELECTOR_API_BASE_URL: http://amazon-selector:8765" in compose
 
 
 def test_docs_present_docker_as_the_default_webui_runtime():
@@ -124,6 +127,24 @@ def test_entrypoint_routes_main_commands_through_cli(tmp_path):
     assert log.read_text(encoding="utf-8").splitlines() == [
         "python main.py init-db",
         "python main.py run --category Home & Kitchen",
+    ]
+
+
+def test_entrypoint_routes_selector_mcp_through_cli(tmp_path):
+    log = tmp_path / "calls.log"
+    _write_executable(
+        tmp_path / "python",
+        '#!/bin/sh\nprintf "python %s\\n" "$*" >> "$CALL_LOG"\n',
+    )
+    env = _entrypoint_env(tmp_path, log)
+    subprocess.run(
+        ["sh", "docker-entrypoint.sh", "selector-mcp", "--port", "8766"],
+        check=True,
+        env=env,
+    )
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "python main.py init-db",
+        "python main.py selector-mcp --port 8766",
     ]
 
 

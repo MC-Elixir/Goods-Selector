@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人工复核 · 类目匹配队列</title>
+<style>
+  :root{
+    /* 与 webui/styles.css 主控制台保持一致 */
+    --bg:#f7f9fb;
+    --surface:#ffffff;
+    --surface-soft:#f3f7f5;
+    --text:#111827;
+    --muted:#64748b;
+    --faint:#94a3b8;
+    --line:#dfe5ec;
+    --line-soft:#edf1f5;
+    --green:#07884a;
+    --green-dark:#0f5132;
+    --green-soft:#e7f6ee;
+    --green-border:#b8ddca;
+    --amber:#d97706;
+    --amber-soft:#fff4df;
+    --red:#c2413a;
+    --red-soft:#fdecea;
+    --red-border:#f2c6c2;
+    --shadow:0 12px 28px rgba(15,23,42,.06);
+    --shadow-sm:0 2px 8px rgba(15,23,42,.05);
+    --radius:8px;
+    font-family:Inter,"PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-size:14px;overflow-x:clip;}
+  button,input,textarea{font:inherit;}
+  button{cursor:pointer;}
+
+  .app{display:grid;grid-template-columns:236px 1fr;min-height:100vh;}
+
+  /* ---------- sidebar(与主控制台同款) ---------- */
+  .sidebar{
+    position:sticky;top:0;height:100vh;
+    display:flex;flex-direction:column;gap:20px;
+    padding:22px 14px;background:var(--surface);border-right:1px solid var(--line);
+  }
+  .brand{display:flex;align-items:center;gap:12px;padding:0 8px 12px;}
+  .brand-mark{
+    display:grid;place-items:center;width:38px;height:38px;
+    border:1px solid var(--green-border);border-radius:8px;
+    color:var(--green);background:var(--green-soft);font-weight:800;font-size:13px;
+  }
+  .brand strong,.brand span{display:block;}
+  .brand span{margin-top:2px;color:var(--muted);font-size:12px;}
+  .nav{display:grid;gap:6px;}
+  .nav-item{
+    display:flex;align-items:center;gap:12px;width:100%;min-height:44px;padding:0 12px;
+    border:0;border-radius:6px;color:#334155;background:transparent;
+    text-align:left;font-weight:600;font-size:13.5px;transition:background .15s;
+  }
+  .nav-item:hover{background:var(--surface-soft);}
+  .nav-item.active{
+    color:var(--green-dark);
+    background:linear-gradient(90deg,#e8f7ef,#f5fbf8);
+    border-left:3px solid var(--green);
+  }
+  .nav-item .icon{width:18px;color:currentColor;}
+  .sidebar footer{margin-top:auto;color:var(--muted);font-size:12px;padding:0 8px;}
+
+  /* ---------- main ---------- */
+  .main{padding:28px 34px;max-width:1280px;width:100%;}
+  .page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:20px;flex-wrap:wrap;}
+  .page-head h1{font-size:21px;margin:0 0 6px;letter-spacing:-.01em;}
+  .page-head p{margin:0;color:var(--muted);font-size:13px;line-height:1.6;max-width:640px;}
+
+  /* 进度概览 */
+  .progress-panel{
+    min-width:250px;background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow-sm);
+  }
+  .progress-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;}
+  .progress-row strong{font-size:16px;}
+  .progress-row span{font-size:12px;color:var(--muted);}
+  .progress-track{height:6px;border-radius:999px;background:var(--line-soft);overflow:hidden;display:flex;}
+  .progress-seg{height:100%;transition:width .35s ease;}
+  .progress-seg.accepted{background:var(--green);}
+  .progress-seg.rejected{background:var(--red);}
+  .progress-seg.nomatch{background:var(--faint);}
+
+  /* case tabs */
+  .case-tabs{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+  .case-tab{
+    display:flex;align-items:center;gap:9px;padding:9px 14px;
+    border:1px solid var(--line);border-radius:var(--radius);
+    background:var(--surface);cursor:pointer;font-size:13px;color:var(--muted);
+    transition:border-color .15s, box-shadow .15s, background .15s;font-weight:600;
+  }
+  .case-tab:hover{border-color:var(--green-border);}
+  .case-tab.active{
+    border-color:var(--green);color:var(--green-dark);
+    background:var(--green-soft);box-shadow:0 0 0 3px rgba(7,136,74,.08);
+  }
+  .case-tab .idx{font-size:11px;color:var(--faint);font-weight:500;}
+  .case-tab.active .idx{color:var(--green);}
+  .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+  .dot.pending{background:var(--amber);}
+  .dot.accepted{background:var(--green);}
+  .dot.rejected{background:var(--red);}
+  .dot.nomatch{background:var(--faint);}
+  .status-pill{font-size:11px;padding:2px 9px;border-radius:999px;font-weight:700;white-space:nowrap;}
+  .status-pill.pending{background:var(--amber-soft);color:#92400e;}
+  .status-pill.accepted{background:var(--green-soft);color:var(--green-dark);}
+  .status-pill.rejected{background:var(--red-soft);color:var(--red);}
+  .status-pill.nomatch{background:var(--line-soft);color:var(--muted);}
+
+  /* layout columns */
+  .columns{display:grid;grid-template-columns:280px 1fr 280px;gap:16px;align-items:start;}
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px;box-shadow:var(--shadow-sm);
+  }
+  .card h3{
+    margin:0 0 14px;font-size:11.5px;color:var(--muted);font-weight:700;
+    letter-spacing:.08em;text-transform:uppercase;display:flex;align-items:center;gap:8px;
+  }
+  .card h3 .count{
+    background:var(--green-soft);color:var(--green-dark);border-radius:999px;
+    padding:1px 8px;font-size:11px;letter-spacing:0;
+  }
+
+  .thumb{
+    width:100%;aspect-ratio:1/1;border-radius:6px;
+    background:linear-gradient(135deg,var(--line-soft),var(--surface-soft));
+    border:1px dashed var(--line);
+    display:flex;align-items:center;justify-content:center;
+    color:var(--faint);font-size:11px;margin-bottom:12px;
+  }
+  .amz-title{font-size:13.5px;font-weight:650;line-height:1.5;margin-bottom:10px;}
+  .meta-row{
+    display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:var(--muted);
+    padding:7px 0;border-top:1px solid var(--line-soft);
+  }
+  .meta-row:first-of-type{border-top:none;}
+  .meta-row > span:last-child{text-align:right;color:var(--text);font-weight:500;word-break:break-word;}
+  .price{color:var(--green-dark)!important;font-weight:700!important;}
+
+  /* candidates */
+  .candidate{
+    border:1px solid var(--line);border-radius:var(--radius);padding:13px;margin-bottom:10px;
+    display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;
+    transition:border-color .15s, background .15s, box-shadow .15s;
+  }
+  .candidate:hover{border-color:var(--green-border);box-shadow:var(--shadow-sm);}
+  .candidate.selected{
+    border-color:var(--green);background:var(--green-soft);
+    box-shadow:0 0 0 1px var(--green);
+  }
+  .candidate .thumb{width:52px;height:52px;margin:0;aspect-ratio:auto;font-size:9px;}
+  .cand-title{font-size:12.5px;font-weight:650;margin-bottom:3px;line-height:1.4;}
+  .cand-sub{font-size:11.5px;color:var(--muted);}
+  .cand-sub b{color:var(--text);font-weight:600;}
+  .score{text-align:right;min-width:52px;}
+  .score b{font-size:15px;letter-spacing:-.01em;}
+  .score.high b{color:var(--green);}
+  .score.mid b{color:var(--amber);}
+  .score.low b{color:var(--red);}
+  .score span{display:block;font-size:10.5px;color:var(--faint);margin-bottom:4px;}
+  .score-bar{width:52px;height:4px;border-radius:999px;background:var(--line-soft);overflow:hidden;margin:5px 0 0 auto;}
+  .score-bar i{display:block;height:100%;border-radius:999px;}
+  .score.high .score-bar i{background:var(--green);}
+  .score.mid .score-bar i{background:var(--amber);}
+  .score.low .score-bar i{background:var(--red);}
+  .pick-btn{
+    grid-column:1/-1;margin-top:2px;width:100%;padding:7px;border-radius:6px;
+    border:1px solid var(--line);background:var(--surface);font-size:12px;
+    color:var(--muted);font-weight:600;transition:all .15s;
+  }
+  .pick-btn:hover{border-color:var(--green);color:var(--green);}
+  .candidate.selected .pick-btn{
+    background:var(--green);border-color:var(--green);color:#fff;
+  }
+
+  /* evidence */
+  .evidence-item{margin-bottom:14px;}
+  .evidence-item:last-child{margin-bottom:0;}
+  .evidence-item .lbl{font-size:11px;color:var(--faint);margin-bottom:5px;font-weight:600;}
+  .evidence-item .val{font-size:12.5px;line-height:1.6;color:var(--text);}
+  .evidence-pair{display:flex;gap:8px;margin-bottom:14px;}
+  .evidence-pair .thumb{width:50%;aspect-ratio:1/1;margin:0;font-size:10px;}
+  .sim-bar{height:6px;border-radius:999px;background:var(--line-soft);overflow:hidden;margin-top:6px;}
+  .sim-bar i{display:block;height:100%;border-radius:999px;}
+  .sim-bar.high i{background:var(--green);}
+  .sim-bar.mid i{background:var(--amber);}
+  .sim-bar.low i{background:var(--red);}
+  .evidence-note{
+    background:var(--surface-soft);border:1px solid var(--line-soft);border-radius:6px;
+    padding:10px 12px;font-size:12px;line-height:1.6;color:#334155;
+  }
+
+  /* 已决策提示条 */
+  .decided-banner{
+    display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:6px;
+    font-size:12.5px;font-weight:600;margin-bottom:14px;
+  }
+  .decided-banner.accepted{background:var(--green-soft);color:var(--green-dark);}
+  .decided-banner.rejected{background:var(--red-soft);color:var(--red);}
+  .decided-banner.nomatch{background:var(--line-soft);color:var(--muted);}
+
+  /* decision bar */
+  .decision-bar{
+    margin-top:18px;background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--radius);padding:18px;box-shadow:var(--shadow-sm);
+    display:flex;align-items:flex-end;gap:20px;flex-wrap:wrap;
+  }
+  .decision-controls{display:flex;gap:8px;flex-wrap:wrap;}
+  .btn{
+    padding:10px 18px;border-radius:6px;font-size:13px;font-weight:650;
+    border:1px solid transparent;transition:all .15s;display:inline-flex;align-items:center;gap:6px;
+  }
+  .btn kbd{
+    font-family:inherit;font-size:10px;padding:1px 5px;border-radius:4px;
+    border:1px solid rgba(0,0,0,.12);opacity:.7;font-weight:600;
+  }
+  .btn:hover:not(:disabled){filter:brightness(.96);transform:translateY(-1px);}
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+  .btn-accept{background:var(--green);color:#fff;box-shadow:0 2px 8px rgba(7,136,74,.28);}
+  .btn-reject{background:var(--surface);color:var(--red);border-color:var(--red-border);}
+  .btn-reject:hover:not(:disabled){background:var(--red-soft);}
+  .btn-nomatch{background:var(--surface);color:var(--muted);border-color:var(--line);}
+  .btn-nomatch:hover:not(:disabled){background:var(--line-soft);}
+  .note-field{flex:1;min-width:260px;}
+  .note-field textarea{
+    width:100%;resize:vertical;min-height:42px;border:1px solid var(--line);border-radius:6px;
+    padding:9px 12px;font-size:12.5px;background:var(--bg);transition:border-color .15s, box-shadow .15s;
+  }
+  .note-field textarea:focus{
+    outline:none;border-color:var(--green);background:var(--surface);
+    box-shadow:0 0 0 3px rgba(7,136,74,.1);
+  }
+  .note-field label{font-size:11px;color:var(--faint);display:block;margin-bottom:6px;font-weight:600;}
+
+  .save-state{
+    margin-top:10px;font-size:12px;color:var(--muted);min-height:18px;
+    display:flex;align-items:center;gap:6px;
+  }
+  .save-state.saved{color:var(--green);font-weight:600;}
+  .save-state.warn{color:var(--amber);font-weight:600;}
+
+  .footer-summary{
+    margin-top:14px;font-size:12.5px;color:var(--muted);
+    display:flex;gap:20px;align-items:center;flex-wrap:wrap;
+  }
+  .footer-summary b{color:var(--text);margin-left:4px;}
+  .footer-summary .kbd-hint{margin-left:auto;color:var(--faint);font-size:11.5px;}
+  .footer-summary kbd{
+    font-family:inherit;font-size:10.5px;padding:2px 6px;border-radius:4px;
+    border:1px solid var(--line);background:var(--surface);margin:0 2px;
+  }
+
+  /* 响应式 */
+  @media (max-width:1120px){
+    .columns{grid-template-columns:1fr 1fr;}
+    .columns .card:last-child{grid-column:1/-1;}
+  }
+  @media (max-width:860px){
+    .app{grid-template-columns:1fr;}
+    .sidebar{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px;}
+    .nav{display:flex;flex-wrap:wrap;}
+    .nav-item{min-height:38px;}
+    .sidebar footer,.brand{display:none;}
+    .columns{grid-template-columns:1fr;}
+    .main{padding:20px 16px;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">AS</div>
+      <div>
+        <strong>Amazon Selector</strong>
+        <span>Agent 控制台</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item"><span class="icon">✦</span><span>一键研究</span></button>
+      <button class="nav-item"><span class="icon">▶</span><span>运行 Agent</span></button>
+      <button class="nav-item"><span class="icon">▦</span><span>结果库</span></button>
+      <button class="nav-item active"><span class="icon">✓</span><span>人工复核</span></button>
+      <button class="nav-item"><span class="icon">◎</span><span>市场研究</span></button>
+      <button class="nav-item"><span class="icon">⚙</span><span>设置</span></button>
+    </nav>
+    <footer>v0.3 Agent Preview</footer>
+  </aside>
+
+  <main class="main">
+    <div class="page-head">
+      <div>
+        <h1>人工复核 · 类目匹配队列</h1>
+        <p>逐条确认 Amazon 商品与 1688 候选货源的匹配关系。每条 case 需明确选择「确认匹配 / 拒绝 / 无匹配」之一,并选定匹配候选后才计入合同评估。</p>
+      </div>
+      <div class="progress-panel">
+        <div class="progress-row">
+          <strong id="progressText">0 / 0</strong>
+          <span>已完成复核</span>
+        </div>
+        <div class="progress-track" id="progressTrack"></div>
+      </div>
+    </div>
+
+    <div class="case-tabs" id="caseTabs"></div>
+    <div class="columns" id="caseBody"></div>
+
+    <div class="decision-bar">
+      <div class="decision-controls">
+        <button class="btn btn-accept" id="btnAccept" onclick="decide('accepted')">✓ 确认匹配 <kbd>A</kbd></button>
+        <button class="btn btn-reject" onclick="decide('rejected')">✕ 拒绝匹配 <kbd>R</kbd></button>
+        <button class="btn btn-nomatch" onclick="decide('nomatch')">— 标记无匹配 <kbd>N</kbd></button>
+      </div>
+      <div class="note-field">
+        <label>复核备注(可选,拒绝 / 无匹配建议填写原因)</label>
+        <textarea id="noteInput" placeholder="例如:候选材质与描述不符 / 类目相近但功能不同..."></textarea>
+      </div>
+    </div>
+    <div class="save-state" id="saveState"></div>
+
+    <div class="footer-summary">
+      <div>待复核<b id="cntPending">0</b></div>
+      <div>已确认<b id="cntAccepted">0</b></div>
+      <div>已拒绝<b id="cntRejected">0</b></div>
+      <div>无匹配<b id="cntNomatch">0</b></div>
+      <span class="kbd-hint">快捷键:<kbd>←</kbd><kbd>→</kbd> 切换 case · <kbd>A</kbd><kbd>R</kbd><kbd>N</kbd> 决策</span>
+    </div>
+  </main>
+</div>
+
+<script>
+// ---- mock data shaped like benchmarks/fixtures/target_category_human_review_queue.json ----
+// Replace this block with a fetch() against the real fixture/API once wired to a backend.
+const cases = [
+  {
+    id: "case_1",
+    status: "pending",
+    selectedCandidate: null,
+    note: "",
+    amazon_item: {
+      asin: "B0CQ7X9K2M",
+      title: "Bali Outdoor Tabletop Propane Heater, Portable Patio Warmer",
+      category: "Patio, Lawn & Garden / Heaters",
+      price: "$89.99",
+      bsr: "#412 in Patio Heaters"
+    },
+    candidates_1688: [
+      { title: "户外桌面丙烷取暖炉 便携式庭院加热器", supplier: "台州星辉五金厂", price: "¥138", score: 0.91 },
+      { title: "户外燃气取暖器 桌面式庭院暖炉", supplier: "永康炉具制造", price: "¥122", score: 0.74 },
+      { title: "家用室内燃气壁炉加热片", supplier: "宁波恒热电器", price: "¥96", score: 0.38 }
+    ],
+    evidence: {
+      image_similarity: 0.88,
+      image_source: "Pailitao 图搜",
+      text_similarity: 0.79,
+      text_source: "标题分词匹配",
+      note: "候选 1 外观与功能高度一致,材质均为覆铜钢板"
+    }
+  },
+  {
+    id: "case_2",
+    status: "pending",
+    selectedCandidate: null,
+    note: "",
+    amazon_item: {
+      asin: "B0D3K7YQWZ",
+      title: "Owala FreeSip 24oz Insulated Stainless Steel Water Bottle",
+      category: "Kitchen & Dining / Water Bottles",
+      price: "$27.99",
+      bsr: "#18 in Water Bottles"
+    },
+    candidates_1688: [
+      { title: "24oz双饮口保温不锈钢水杯 户外运动杯", supplier: "永康凯博保温杯厂", price: "¥34", score: 0.83 },
+      { title: "儿童卡通不锈钢保温杯 双盖设计", supplier: "义乌童趣杯业", price: "¥19", score: 0.41 }
+    ],
+    evidence: {
+      image_similarity: 0.81,
+      image_source: "Pailitao 图搜",
+      text_similarity: 0.66,
+      text_source: "标题分词匹配",
+      note: "候选 1 双饮口结构一致,但杯身按压开关细节需人工确认"
+    }
+  },
+  {
+    id: "case_3",
+    status: "pending",
+    selectedCandidate: null,
+    note: "",
+    amazon_item: {
+      asin: "B0CX88P1LQ",
+      title: "Foldable Camping Lantern Stand, Adjustable Tripod Hook",
+      category: "Sports & Outdoors / Camping Lighting",
+      price: "$15.49",
+      bsr: "#203 in Camping Lanterns"
+    },
+    candidates_1688: [
+      { title: "户外露营帐篷灯挂钩支架 可折叠三脚架", supplier: "东莞户外用品厂", price: "¥12", score: 0.58 },
+      { title: "摄影可折叠三脚架 手机直播支架", supplier: "深圳影拓数码", price: "¥9", score: 0.29 }
+    ],
+    evidence: {
+      image_similarity: 0.52,
+      image_source: "Pailitao 图搜",
+      text_similarity: 0.47,
+      text_source: "标题分词匹配",
+      note: "结构相似但候选主打摄影场景,承重与挂钩设计存疑,建议人工判定"
+    }
+  }
+];
+
+let activeCase = 0;
+
+function scoreClass(s){ return s >= 0.7 ? 'high' : s >= 0.45 ? 'mid' : 'low'; }
+function statusLabel(s){ return {pending:'待复核',accepted:'已确认',rejected:'已拒绝',nomatch:'无匹配'}[s]; }
+function esc(str){ return String(str).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+
+function renderTabs(){
+  const el = document.getElementById('caseTabs');
+  el.innerHTML = cases.map((c,i)=>`
+    <div class="case-tab ${i===activeCase?'active':''}" onclick="selectCase(${i})" title="${esc(c.amazon_item.title)}">
+      <span class="idx">#${i+1}</span>
+      <span class="dot ${c.status}"></span>
+      ${esc(c.amazon_item.asin)}
+      <span class="status-pill ${c.status}">${statusLabel(c.status)}</span>
+    </div>
+  `).join('');
+}
+
+function decidedBanner(c){
+  if(c.status === 'pending') return '';
+  const labels = {accepted:'✓ 已确认匹配',rejected:'✕ 已拒绝匹配',nomatch:'— 已标记无匹配'};
+  return `<div class="decided-banner ${c.status}">${labels[c.status]} · 可重新决策以覆盖</div>`;
+}
+
+function renderBody(){
+  const c = cases[activeCase];
+  const el = document.getElementById('caseBody');
+  const ev = c.evidence;
+  el.innerHTML = `
+    <div class="card">
+      <h3>Amazon 商品</h3>
+      <div class="thumb">Amazon 图片</div>
+      <div class="amz-title">${esc(c.amazon_item.title)}</div>
+      <div class="meta-row"><span>ASIN</span><span>${esc(c.amazon_item.asin)}</span></div>
+      <div class="meta-row"><span>类目</span><span>${esc(c.amazon_item.category)}</span></div>
+      <div class="meta-row"><span>售价</span><span class="price">${esc(c.amazon_item.price)}</span></div>
+      <div class="meta-row"><span>BSR</span><span>${esc(c.amazon_item.bsr)}</span></div>
+    </div>
+
+    <div class="card">
+      <h3>1688 候选货源 <span class="count">${c.candidates_1688.length}</span></h3>
+      ${decidedBanner(c)}
+      ${c.candidates_1688.map((cd,i)=>`
+        <div class="candidate ${c.selectedCandidate===i?'selected':''}">
+          <div class="thumb">1688 图</div>
+          <div>
+            <div class="cand-title">${esc(cd.title)}</div>
+            <div class="cand-sub">${esc(cd.supplier)} · <b>${esc(cd.price)}</b></div>
+          </div>
+          <div class="score ${scoreClass(cd.score)}">
+            <span>相似度</span>
+            <b>${cd.score.toFixed(2)}</b>
+            <div class="score-bar"><i style="width:${Math.round(cd.score*100)}%"></i></div>
+          </div>
+          <button class="pick-btn" onclick="pickCandidate(${i})">${c.selectedCandidate===i?'✓ 已选为匹配项':'选为匹配项'}</button>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="card">
+      <h3>存证 Evidence</h3>
+      <div class="evidence-pair">
+        <div class="thumb">Amazon</div>
+        <div class="thumb">1688</div>
+      </div>
+      <div class="evidence-item">
+        <div class="lbl">图像相似度 · ${esc(ev.image_source)}</div>
+        <div class="val">${ev.image_similarity.toFixed(2)}</div>
+        <div class="sim-bar ${scoreClass(ev.image_similarity)}"><i style="width:${Math.round(ev.image_similarity*100)}%"></i></div>
+      </div>
+      <div class="evidence-item">
+        <div class="lbl">文本相似度 · ${esc(ev.text_source)}</div>
+        <div class="val">${ev.text_similarity.toFixed(2)}</div>
+        <div class="sim-bar ${scoreClass(ev.text_similarity)}"><i style="width:${Math.round(ev.text_similarity*100)}%"></i></div>
+      </div>
+      <div class="evidence-item">
+        <div class="lbl">系统提示</div>
+        <div class="evidence-note">${esc(ev.note)}</div>
+      </div>
+    </div>
+  `;
+  document.getElementById('noteInput').value = c.note;
+  setSaveState('', '');
+  updateAcceptButton();
+}
+
+function setSaveState(text, cls){
+  const el = document.getElementById('saveState');
+  el.textContent = text;
+  el.className = 'save-state' + (cls ? ' ' + cls : '');
+}
+
+function updateAcceptButton(){
+  const c = cases[activeCase];
+  document.getElementById('btnAccept').disabled = c.selectedCandidate === null;
+  document.getElementById('btnAccept').title =
+    c.selectedCandidate === null ? '请先在候选列表中选择匹配项' : '';
+}
+
+function pickCandidate(i){
+  cases[activeCase].selectedCandidate = i;
+  renderBody();
+}
+
+function selectCase(i){
+  activeCase = i;
+  renderTabs();
+  renderBody();
+}
+
+function decide(status){
+  const c = cases[activeCase];
+  if(status === 'accepted' && c.selectedCandidate === null){
+    setSaveState('⚠ 请先在候选列表中选择匹配项,再确认匹配。', 'warn');
+    return;
+  }
+  c.status = status;
+  c.note = document.getElementById('noteInput').value;
+  // --- persistence hook ---
+  // Real integration: POST /api/review/decisions  { case_id, status, selected_candidate, note, reviewer, ts }
+  // and the endpoint should append-only / upsert-by-case_id into a durable store (sqlite/json with file lock),
+  // never silently overwrite prior reviewer decisions without an audit trail.
+  console.log('persist decision', {case_id:c.id, status, selected_candidate:c.selectedCandidate, note:c.note, ts:new Date().toISOString()});
+
+  renderTabs();
+  renderBody();
+  updateSummary();
+  setSaveState('✓ 决策已保存(本地演示态,接入后端后将写入持久化存储)', 'saved');
+
+  const next = cases.findIndex(x=>x.status==='pending');
+  if(next !== -1 && next !== activeCase){ setTimeout(()=>selectCase(next), 500); }
+}
+
+function updateSummary(){
+  const count = s => cases.filter(c=>c.status===s).length;
+  const total = cases.length;
+  const done = total - count('pending');
+  document.getElementById('cntPending').textContent = count('pending');
+  document.getElementById('cntAccepted').textContent = count('accepted');
+  document.getElementById('cntRejected').textContent = count('rejected');
+  document.getElementById('cntNomatch').textContent = count('nomatch');
+  document.getElementById('progressText').textContent = `${done} / ${total}`;
+  const pct = s => `${count(s)/total*100}%`;
+  document.getElementById('progressTrack').innerHTML =
+    `<div class="progress-seg accepted" style="width:${pct('accepted')}"></div>` +
+    `<div class="progress-seg rejected" style="width:${pct('rejected')}"></div>` +
+    `<div class="progress-seg nomatch" style="width:${pct('nomatch')}"></div>`;
+}
+
+// 键盘快捷键:←/→ 切换 case,A/R/N 决策(输入备注时不触发)
+document.addEventListener('keydown', e => {
+  if(e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if(e.key === 'ArrowLeft') selectCase(Math.max(0, activeCase - 1));
+  else if(e.key === 'ArrowRight') selectCase(Math.min(cases.length - 1, activeCase + 1));
+  else if(e.key === 'a' || e.key === 'A') decide('accepted');
+  else if(e.key === 'r' || e.key === 'R') decide('rejected');
+  else if(e.key === 'n' || e.key === 'N') decide('nomatch');
+});
+
+renderTabs();
+renderBody();
+updateSummary();
+</script>
+</body>
+</html>

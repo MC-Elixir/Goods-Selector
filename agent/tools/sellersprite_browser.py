@@ -53,6 +53,44 @@ _LOCATOR_PREFIXES = frozenset(
     {"css", "text", "role", "id", "name", "iframe", "shadow"}
 )
 
+# JavaScript executed inside each 1688 supplier card element to extract
+# structured data.  Uses defensive accessors so missing sub-elements yield
+# null rather than throwing.
+_CARD_EXTRACT_JS = """
+(el) => {
+    const text = (sel) => {
+        const node = el.querySelector(sel);
+        return node ? node.textContent.trim() : '';
+    };
+    const attr = (sel, name) => {
+        const node = el.querySelector(sel);
+        return node ? (node.getAttribute(name) || '') : '';
+    };
+    const link = el.querySelector('a[href*="1688.com/offer/"], a[href*="detail.1688.com"]');
+    const img = el.querySelector('img');
+    const body = (el.textContent || '').trim();
+    const factory = Boolean(
+        el.querySelector('[class*="factory"], [class*="shili"], .icon-factory')
+        || body.includes('实力商家')
+        || body.includes('源头工厂')
+        || body.includes('生产厂家')
+    );
+    const trader = body.includes('贸易公司') || body.includes('经销批发');
+    return {
+        title: text('.title, .offer-title, [class*="title"]')
+            || (link ? (link.textContent || '').trim() : '')
+            || body.slice(0, 120),
+        price: text('.price, .offer-price, [class*="price"]'),
+        moq: text('.moq, .min-order, [class*="moq"], [class*="min-order"]'),
+        monthly_sales: text('.sales, .monthly-sales, [class*="sales"], [class*="deal"]'),
+        supplier_name: text('.company, .supplier-name, [class*="company"], [class*="supplier"]'),
+        offer_url: link ? link.href : '',
+        image_url: img ? (img.src || img.getAttribute('data-src') || '') : '',
+        is_factory: factory ? true : (trader ? false : null),
+    };
+}
+"""
+
 
 class SellerSpriteWorkflowError(RuntimeError):
     """A browser-layer result that is safe to expose to the workflow."""
@@ -203,6 +241,20 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._raise_if_human_terminal()
         if not self._is_visible("ready"):
+            # Some extension builds inject the panel shell first and render a
+            # login/permission state several seconds later without exposing
+            # the compact panel button.  Wait for the reviewed ready marker,
+            # then re-check terminal locators before declaring the extension
+            # unavailable.  No selector discovery or sourcing action occurs.
+            if not self._is_visible("panel_open"):
+                if self._wait_until_visible(
+                    "ready",
+                    timeout_seconds=min(int(self.page_timeout_seconds), 10),
+                ):
+                    self._ensure_not_cancelled()
+                    return
+                self._raise_if_human_terminal()
+                raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
             self._click_required("panel_open")
             # The extension expands asynchronously after navigation.  Keep a
             # bounded settling interval before evaluating the explicit ready
@@ -371,6 +423,68 @@ class PlaywrightSellerSpriteSession:
         self._click_required("competitor_export")
         self._ensure_not_cancelled()
         return self.wait_for_browser_download(snapshot)
+
+    def source_1688_suppliers(self, asin: str) -> list[dict[str, Any]]:
+        """Click the extension's 1688 sourcing tab and extract supplier cards from DOM.
+
+        Returns a list of raw dicts, one per visible 1688 supplier card.  The
+        caller is responsible for converting these into SupplierDTO objects.
+        Raises SellerSpriteWorkflowError on any browser-layer failure.
+        """
+        asin = validate_sellersprite_asin(asin)
+        if not self.profile.has_sourcing_1688_locators():
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+
+        self._ensure_not_cancelled()
+        self._raise_if_human_terminal()
+
+        # Check for 1688 login wall if the locator is configured.
+        if getattr(self.profile, "sourcing_1688_login", "") and self._is_visible("sourcing_1688_login"):
+            raise SellerSpriteWorkflowError("SELLERSPRITE_LOGIN_REQUIRED")
+
+        # Click the 1688 sourcing navigation tab.
+        self._click_required("sourcing_1688_nav")
+        self._raise_if_human_terminal()
+        self._ensure_not_cancelled()
+
+        # Wait for the results container to become visible.
+        results_timeout = max(int(self.page_timeout_seconds), int(self.export_timeout_seconds))
+        if not self._wait_until_visible("sourcing_1688_results", timeout_seconds=results_timeout):
+            self._raise_if_human_terminal()
+            if getattr(self.profile, "sourcing_1688_login", "") and self._is_visible("sourcing_1688_login"):
+                raise SellerSpriteWorkflowError("SELLERSPRITE_LOGIN_REQUIRED")
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+        self._ensure_not_cancelled()
+
+        # Allow the result cards to render asynchronously.
+        try:
+            self.page.wait_for_timeout(2000)
+        except Exception:
+            pass
+        self._ensure_not_cancelled()
+
+        # Extract structured data from all visible supplier cards via JS.
+        try:
+            cards = self._locator("sourcing_1688_card")
+            count = cards.count()
+        except Exception as exc:
+            raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
+
+        if count == 0:
+            return []
+
+        suppliers: list[dict[str, Any]] = []
+        for i in range(min(count, 30)):  # Cap at 30 cards to stay bounded.
+            self._ensure_not_cancelled()
+            try:
+                card = cards.nth(i)
+                raw = card.evaluate(_CARD_EXTRACT_JS)
+                if isinstance(raw, dict) and raw.get("title"):
+                    suppliers.append(raw)
+            except Exception:
+                continue
+        self._ensure_not_cancelled()
+        return suppliers
 
     def wait_for_browser_download(self, snapshot: DownloadSnapshot) -> DownloadedArtifact:
         self._ensure_not_cancelled()

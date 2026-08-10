@@ -145,6 +145,9 @@ class Settings(BaseSettings):
     # Browser/plugin sourcing is the production path.  Keep the legacy Open
     # Platform clients available for explicit diagnostics only.
     enable_alibaba_open_api_matcher: bool = False
+    # 卖家精灵插件「1688找货」匹配源。默认开启，实际运行需要 locator profile
+    # 中配置 sourcing_1688_* 定位符且 Chrome 9222 可达。
+    enable_sellersprite_1688_sourcing: bool = True
     alibaba_allow_mock_suppliers: bool = False  # formal runs: mock off by default; smoke-run --allow-mock opts in
     pipeline_crawl_timeout_seconds: float = 300.0
     pipeline_match_timeout_seconds: float = 900.0

@@ -26,3 +26,27 @@ services:
       - "host.docker.internal:host-gateway"
     command: ["agent-web", "--host", "0.0.0.0", "--port", "8765"]
     restart: unless-stopped
+
+  selector-mcp:
+    profiles: ["assistant"]
+    build: .
+    image: amazon-selector:dev
+    env_file: .env
+    environment:
+      ALIBABA_ALLOW_MOCK_SUPPLIERS: "false"
+      SELECTOR_API_BASE_URL: http://amazon-selector:8765
+      SELECTOR_PUBLIC_BASE_URL: http://127.0.0.1:8765
+      SELECTOR_IDEMPOTENCY_PATH: /app/data/mcp_idempotency.json
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8766:8766"
+    depends_on:
+      - amazon-selector
+    command: ["selector-mcp", "--host", "0.0.0.0", "--port", "8766"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8766), 2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped

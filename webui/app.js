@@ -3799,6 +3799,7 @@ function sourceLabel(source) {
     alibaba_text_search: "Text API",
     alibaba_playwright: "Playwright",
     alibaba_scrapling: "Scrapling",
+    sellersprite_1688: "SellerSprite 1688",
     mock: "Mock",
     unknown: "Unknown",
   };

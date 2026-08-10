@@ -254,6 +254,22 @@ def match_suppliers(
         except Exception as e:
             logger.warning(f"[match] Scrapling 搜索失败 ({product.asin}): {e}，降级到 Playwright")
 
+    # ── Step 2c-bis: 卖家精灵插件 1688 找货 ─────────────────
+    if not suppliers and _cfg.enable_sellersprite_1688_sourcing:
+        _check_cancel(cancel_check, "sellersprite 1688 sourcing")
+        try:
+            from agent.sellersprite_1688_sourcing import run_sellersprite_1688_sourcing
+            suppliers = run_sellersprite_1688_sourcing(
+                product.asin,
+                cancel_check=cancel_check,
+            )
+            if suppliers:
+                logger.info(f"[match] ASIN={product.asin} 卖家精灵 1688 找货 → {len(suppliers)} 条")
+        except (CancellationRequested, HumanActionRequired):
+            raise
+        except Exception as e:
+            logger.info(f"[match] 卖家精灵 1688 找货不可用 ({product.asin}): {e}")
+
     # ── Step 2d: Playwright 兜底 ───────────────────────────
     circuit_open = circuit_is_open()
     if not suppliers and circuit_open:

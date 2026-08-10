@@ -233,6 +233,7 @@ def test_formal_matcher_executes_full_plan_and_returns_only_strict_keep(monkeypa
     monkeypatch.setattr(matchers, "Alibaba1688PlaywrightMatcher", FakePlaywright)
     monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", False)
     monkeypatch.setattr(settings, "enable_scrapling_matcher", False)
+    monkeypatch.setattr(settings, "enable_sellersprite_1688_sourcing", False)
     monkeypatch.setattr(settings, "alibaba_allow_mock_suppliers", False)
     monkeypatch.setattr(settings, "enable_llm_verification", False)
 

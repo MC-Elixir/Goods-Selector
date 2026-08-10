@@ -1,0 +1,82 @@
+# This profile intentionally exposes only clarification plus the allow-listed
+# Amazon Selector MCP tools. The client cannot obtain a terminal, filesystem,
+# generic browser, web-search, memory, scheduling, messaging, or delegation tool.
+model:
+  default: ${SELECTOR_HERMES_MODEL}
+  provider: custom
+  base_url: ${SELECTOR_HERMES_MODEL_BASE_URL}
+  api_key: ${SELECTOR_HERMES_MODEL_API_KEY}
+
+agent:
+  reasoning_effort: medium
+  max_turns: 40
+  disabled_toolsets:
+    - terminal
+    - file
+    - browser
+    - web
+    - search
+    - session_search
+    - memory
+    - skills
+    - code_execution
+    - delegation
+    - cronjob
+    - image_gen
+    - vision
+    - tts
+    - todo
+    - homeassistant
+    - messaging
+    - debugging
+    - computer_use
+    - video
+    - video_gen
+    - kanban
+    - moa
+    - safe
+    - x_search
+    - yuanbao
+    - spotify
+    - discord
+    - discord_admin
+    - rl
+    - context_engine
+    - google_meet
+
+toolsets:
+  - clarify
+  - mcp-amazon_selector
+
+mcp_servers:
+  amazon_selector:
+    url: http://127.0.0.1:8766/mcp
+    headers:
+      Authorization: Bearer ${SELECTOR_MCP_TOKEN}
+    timeout: 45
+    connect_timeout: 10
+    supports_parallel_tool_calls: false
+    trust: untrusted
+    tools:
+      include:
+        - selector_check_environment
+        - selector_list_categories
+        - selector_list_jobs
+        - selector_get_job
+        - selector_wait_for_job
+        - selector_start_sourcing
+        - selector_get_top_candidates
+        - selector_get_candidate
+        - selector_compare_candidates
+        - selector_explain_rejection
+        - selector_save_candidate
+        - selector_get_report
+        - selector_list_human_actions
+        - selector_browser_status
+        - selector_begin_login
+        - selector_finish_login
+        - selector_resume_job
+        - selector_cancel_job
+        - selector_retry_job
+      prompts: false
+      resources: false

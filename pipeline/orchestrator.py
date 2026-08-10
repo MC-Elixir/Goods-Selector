@@ -772,6 +772,13 @@ def _rank_suppliers_by_profit(product: ProductDTO, suppliers: list[SupplierDTO])
             raw["supplier_profit_margin"] = round(profit.profit_margin, 4)
             raw["supplier_net_profit"] = round(profit.net_profit, 4)
             raw["supplier_purchase_cost"] = round(profit.purchase_cost, 4)
+            raw["supplier_shipping_cost"] = round(profit.shipping_cost, 4)
+            raw["supplier_fba_fee"] = round(profit.fba_fee, 4)
+            raw["supplier_commission"] = round(profit.commission, 4)
+            raw["supplier_ad_cost"] = round(profit.ad_cost, 4)
+            raw["supplier_return_loss"] = round(profit.return_loss, 4)
+            raw["supplier_exchange_loss"] = round(profit.exchange_loss, 4)
+            raw["supplier_total_cost"] = round(profit.total_cost, 4)
             raw["supplier_profit_score"] = profit_score
         except InsufficientCostEvidence as exc:
             evidence_error = exc

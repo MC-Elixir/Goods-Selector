@@ -50,7 +50,7 @@ _auth_error: str | None = None
 
 
 class CallbackHandler(BaseHTTPRequestHandler):
-    """拦截 1688 回调，提取 ?code= 或 ?error="""
+    """拦截 1688 回调，提取 ?code= 或 ?error= 参数。"""
 
     def do_GET(self):  # noqa: N802
         global _auth_code, _auth_error

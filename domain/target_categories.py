@@ -183,7 +183,10 @@ def classify_target_category(text: str) -> str | None:
         "伞形取暖器", "蘑菇头取暖器",
     )):
         return "patio_heater"
-    if _contains(value, (
+    umbrella_context = "umbrella" in value and _contains(
+        value, ("patio", "outdoor", "garden", "table", "market")
+    )
+    if umbrella_context or _contains(value, (
         "patio umbrella", "market umbrella", "cantilever umbrella", "offset umbrella",
         "beach umbrella", "clamp umbrella", "umbrella canopy", "shade sail",
         "gazebo canopy", "sun shade", "遮阳伞", "沙滩伞", "香蕉伞", "侧立伞",
@@ -297,7 +300,10 @@ def _subtype(text: str, category_id: str, relation: str) -> str:
         return "beach_umbrella"
     if _contains(value, ("clamp umbrella", "chair umbrella", "夹式伞", "椅夹伞")):
         return "clamp_umbrella"
-    if _contains(value, ("patio umbrella", "market umbrella", "庭院伞", "中柱伞", "中柱遮阳伞", "市场伞")):
+    if _contains(value, (
+        "patio umbrella", "market umbrella", "table umbrella", "umbrella outdoor patio",
+        "庭院伞", "中柱伞", "中柱遮阳伞", "市场伞",
+    )):
         return "market_umbrella"
     return "patio_umbrella"
 

@@ -218,6 +218,13 @@ def test_spec_from_text_supports_target_outdoor_categories_and_units():
     assert umbrella.category == "户外遮阳"
 
 
+def test_table_umbrella_with_reordered_outdoor_patio_words_is_canonicalized():
+    spec = spec_from_text(
+        "9FT Umbrella Outdoor Patio, Table Umbrella with Push Button Tilt and Crank"
+    )
+    assert spec.category == "户外遮阳"
+
+
 def test_decimal_dimension_prefix_does_not_become_stainless_steel_material():
     spec = spec_from_text("304.8x365.76cm 长方形户外遮阳帆 185gsm HDPE")
 

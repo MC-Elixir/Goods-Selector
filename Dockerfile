@@ -39,6 +39,6 @@ RUN mkdir -p /app/data/cache /app/data/exports /app/data/images /app/data/logs
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
-EXPOSE 8765
+EXPOSE 8765 8766
 ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["agent-web", "--host", "0.0.0.0", "--port", "8765"]

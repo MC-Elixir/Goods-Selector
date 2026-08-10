@@ -114,12 +114,157 @@ def _json_cell(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _supplier_raw_value(supplier, key: str):
+    raw = getattr(supplier, "raw_data", None) if supplier else None
+    return (raw or {}).get(key) if isinstance(raw, dict) else None
+
+
+def _supplier_match_decision(supplier) -> tuple[str, str]:
+    """Return an evidence-aware, human-readable supplier row decision."""
+    if _supplier_invalid_for_decision(supplier):
+        return "不可用", "缺少可验证的真实 1688 货源身份"
+
+    raw = getattr(supplier, "raw_data", None) or {}
+    spec = raw.get("spec_match") if isinstance(raw.get("spec_match"), dict) else {}
+    conflicts = list(spec.get("conflicts") or [])
+    method = str(getattr(supplier, "match_verification_method", "") or "").lower()
+    if method == "heuristic_rejected" or conflicts:
+        reason = "匹配冲突: " + ", ".join(conflicts) if conflicts else "语义匹配未通过"
+        return "淘汰", reason
+
+    match_score = getattr(supplier, "match_quality_score", None)
+    profit_margin = raw.get("supplier_profit_margin")
+    rank_score = raw.get("supplier_rank_score")
+    missing = []
+    if match_score is None:
+        missing.append("匹配度")
+    if getattr(supplier, "base_price_cny", None) is None:
+        missing.append("采购价")
+    if profit_margin is None:
+        missing.append("利润")
+    if missing:
+        return "待核验", "缺少" + "/".join(missing) + "证据"
+
+    if float(match_score) >= 0.55 and float(profit_margin) >= 0.20 and float(rank_score or 0) >= 0.62:
+        return "推荐", "匹配度、利润率和综合排名分均达标"
+    if float(match_score) >= 0.40 and float(profit_margin) >= 0.10:
+        return "观察", "可继续核对规格、样品与物流成本"
+    return "淘汰", "匹配度或预估利润偏低"
+
+
+def _write_supplier_match_sheet(workbook, candidates: list) -> int:
+    """Write one sortable row per Amazon-product/1688-supplier pair."""
+    from openpyxl.formatting.rule import ColorScaleRule
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    ws = workbook.create_sheet("完整匹配评分表")
+    headers = [
+        "建议", "建议依据", "Amazon排名", "ASIN", "Amazon标题", "Amazon链接",
+        "Amazon售价($)", "Amazon评分", "Amazon评论数", "BSR排名", "产品综合分",
+        "需求得分", "竞争得分", "供应得分", "物流得分", "风险得分",
+        "1688供应商排名", "1688货源标题", "1688供应商", "是否工厂", "货源来源",
+        "1688货源链接", "1688采购价(CNY)", "MOQ", "1688月销", "回头率",
+        "匹配度", "规格匹配度", "图片相似度", "候选质量分", "供应商质量分",
+        "业务条件分", "利润得分", "匹配+利润综合分", "预估利润率", "预估净利润($)",
+        "采购成本($)", "头程($)", "FBA费($)", "佣金($)", "广告费($)", "退货损耗($)",
+        "汇率损耗($)", "总成本($)", "匹配方式", "已匹配规格", "缺失证据", "冲突项",
+    ]
+    header_fill = PatternFill("solid", fgColor="17365D")
+    header_font = Font(color="FFFFFF", bold=True, size=10)
+    decision_fills = {
+        "推荐": PatternFill("solid", fgColor="C6EFCE"),
+        "观察": PatternFill("solid", fgColor="FFEB9C"),
+        "待核验": PatternFill("solid", fgColor="DDEBF7"),
+        "淘汰": PatternFill("solid", fgColor="FFC7CE"),
+        "不可用": PatternFill("solid", fgColor="D9D9D9"),
+    }
+    for column, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=column, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    row_index = 2
+    for amazon_rank, record in enumerate(candidates, 1):
+        product = record.product
+        score = getattr(record, "score", None)
+        for supplier_rank, supplier in enumerate(getattr(record, "suppliers", None) or [], 1):
+            raw = getattr(supplier, "raw_data", None) or {}
+            spec = raw.get("spec_match") if isinstance(raw.get("spec_match"), dict) else {}
+            decision, decision_reason = _supplier_match_decision(supplier)
+            values = [
+                decision, decision_reason, amazon_rank, getattr(product, "asin", None),
+                getattr(product, "title", None), getattr(product, "listing_url", None),
+                getattr(product, "price", None), getattr(product, "rating", None),
+                getattr(product, "review_count", None), getattr(product, "bsr_rank", None),
+                getattr(score, "total_score", None) if score else None,
+                getattr(score, "demand_score", None) if score else None,
+                getattr(score, "competition_score", None) if score else None,
+                getattr(score, "supply_score", None) if score else None,
+                getattr(score, "logistics_score", None) if score else None,
+                getattr(score, "risk_score", None) if score else None,
+                supplier_rank, getattr(supplier, "title_cn", None), getattr(supplier, "supplier_name", None),
+                getattr(supplier, "is_factory", None), _supplier_source(supplier), getattr(supplier, "offer_url", None),
+                getattr(supplier, "base_price_cny", None), getattr(supplier, "moq", None),
+                getattr(supplier, "monthly_sales", None), getattr(supplier, "repeat_buyer_rate", None),
+                getattr(supplier, "match_quality_score", None), spec.get("score"),
+                getattr(supplier, "image_similarity", None), raw.get("supplier_candidate_score"),
+                raw.get("supplier_quality_score"), raw.get("supplier_business_score"),
+                raw.get("supplier_profit_score"), raw.get("supplier_rank_score"),
+                raw.get("supplier_profit_margin"), raw.get("supplier_net_profit"),
+                raw.get("supplier_purchase_cost"), raw.get("supplier_shipping_cost"),
+                raw.get("supplier_fba_fee"), raw.get("supplier_commission"), raw.get("supplier_ad_cost"),
+                raw.get("supplier_return_loss"), raw.get("supplier_exchange_loss"), raw.get("supplier_total_cost"),
+                getattr(supplier, "match_verification_method", None),
+                ", ".join(spec.get("matched") or []), ", ".join(spec.get("missing") or []),
+                ", ".join(spec.get("conflicts") or []),
+            ]
+            for column, value in enumerate(values, 1):
+                cell = ws.cell(row=row_index, column=column, value=value)
+                cell.alignment = Alignment(vertical="center", wrap_text=column in {2, 5, 18, 46, 47, 48})
+            ws.cell(row=row_index, column=1).fill = decision_fills[decision]
+            ws.cell(row=row_index, column=1).font = Font(bold=True)
+            for column in (6, 22):
+                link = ws.cell(row=row_index, column=column)
+                if isinstance(link.value, str) and link.value.startswith(("http://", "https://")):
+                    link.hyperlink = link.value
+                    link.style = "Hyperlink"
+            for column in (26, 27, 28, 29, 30, 31, 32, 33, 34, 35):
+                ws.cell(row=row_index, column=column).number_format = "0.0%"
+            for column in (7, 23, 36, 37, 38, 39, 40, 41, 42, 43, 44):
+                ws.cell(row=row_index, column=column).number_format = "0.00"
+            row_index += 1
+
+    widths = [10, 34, 10, 14, 42, 35, 12, 10, 12, 10, 12, 10, 10, 10, 10, 10,
+              14, 42, 24, 10, 18, 38, 16, 10, 12, 10, 10, 12, 12, 12, 14, 12,
+              12, 16, 14, 14, 14, 11, 11, 11, 11, 13, 13, 13, 18, 28, 28, 28]
+    for column, width in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(column)].width = width
+    ws.row_dimensions[1].height = 36
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    last_row = row_index - 1
+    if last_row >= 2:
+        for column in (11, 27, 28, 30, 31, 32, 33, 34, 35):
+            letter = get_column_letter(column)
+            ws.conditional_formatting.add(
+                f"{letter}2:{letter}{last_row}",
+                ColorScaleRule(
+                    start_type="min", start_color="F8696B",
+                    mid_type="percentile", mid_value=50, mid_color="FFEB84",
+                    end_type="max", end_color="63BE7B",
+                ),
+            )
+    return max(last_row - 1, 0)
+
+
 # ============================================================
 # Excel
 # ============================================================
 
 def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
-    """导出候选池为 Excel。每行一个产品，含评分维度 + 利润明细 + Top1 货源。"""
+    """导出选品 Excel：产品概览 + 完整 Amazon/1688 一对多匹配评分表。"""
     try:
         import openpyxl
         from openpyxl.styles import Alignment, Font, PatternFill
@@ -254,8 +399,12 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
 
+    supplier_row_count = _write_supplier_match_sheet(wb, candidates)
     wb.save(output_path)
-    logger.info(f"Excel 导出完成：{output_path}（{len(candidates)} 行）")
+    logger.info(
+        f"Excel 导出完成：{output_path}"
+        f"（{len(candidates)} 个 Amazon 产品，{supplier_row_count} 条 1688 匹配）"
+    )
     return output_path
 
 
@@ -484,7 +633,7 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
                 "rejection_reasons": sc.rejection_reasons,
             } if sc else None,
             "market": _market_payload(market),
-            "suppliers": [_supplier_payload(s) for s in sups[:10]],
+            "suppliers": [_supplier_payload(s) for s in sups],
         }
         payload.update(_evidence_payload(rec))
         return payload
@@ -511,6 +660,13 @@ def _supplier_payload(supplier) -> dict[str, Any]:
     payload["supplier_quality_score"] = _supplier_raw_score(supplier, "supplier_quality_score")
     payload["supplier_business_score"] = _supplier_raw_score(supplier, "supplier_business_score")
     payload["candidate_score"] = _supplier_raw_score(supplier, "supplier_candidate_score")
+    payload["rank_score"] = _supplier_raw_score(supplier, "supplier_rank_score")
+    payload["profit_score"] = _supplier_raw_score(supplier, "supplier_profit_score")
+    payload["profit_margin"] = _supplier_raw_value(supplier, "supplier_profit_margin")
+    payload["net_profit"] = _supplier_raw_value(supplier, "supplier_net_profit")
+    payload["purchase_cost_usd"] = _supplier_raw_value(supplier, "supplier_purchase_cost")
+    payload["total_cost_usd"] = _supplier_raw_value(supplier, "supplier_total_cost")
+    payload["selection_decision"] = _supplier_match_decision(supplier)[0]
     payload["sourcing_source"] = _supplier_source(supplier)
     payload["invalid_for_decision"] = _supplier_invalid_for_decision(supplier)
     return payload

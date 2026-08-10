@@ -396,6 +396,7 @@ def _supplier_candidates(
             "profit_margin": raw.get("supplier_profit_margin"),
             "net_profit": raw.get("supplier_net_profit"),
             "purchase_cost_usd": raw.get("supplier_purchase_cost"),
+            "total_cost_usd": raw.get("supplier_total_cost"),
             "profit_score": raw.get("supplier_profit_score"),
             "visual_match": raw.get("visual_match") or {},
             "verification_method": supplier.get("match_verification_method"),

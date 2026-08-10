@@ -266,5 +266,15 @@ def agent_web_cmd(host: str, port: int):
     run_server(host=host, port=port)
 
 
+@cli.command("selector-mcp")
+@click.option("--host", default="127.0.0.1", help="MCP host")
+@click.option("--port", default=8766, type=click.IntRange(1, 65535), help="MCP port")
+def selector_mcp_cmd(host: str, port: int):
+    """启动带 Bearer 鉴权的受控 Selector MCP 服务。"""
+    from selector_mcp.server import run_server
+
+    run_server(host=host, port=port)
+
+
 if __name__ == "__main__":
     cli()

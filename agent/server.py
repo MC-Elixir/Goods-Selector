@@ -181,6 +181,9 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             return self._json({"system_prompt": AGENT_SYSTEM_PROMPT})
         if parsed.path.startswith("/api/exports/"):
             return self._send_export(parsed.path.removeprefix("/api/exports/"))
+        if parsed.path in {"/operator", "/operator/"}:
+            self.path = "/operator.html"
+            return super().do_GET()
         if parsed.path == "/":
             self.path = "/index.html"
         return super().do_GET()
@@ -205,6 +208,16 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                     return self._json({"error": market_guard_error}, HTTPStatus.BAD_REQUEST)
                 job = self.runtime.start_run(config)
                 return self._json({"job": job.to_dict()}, HTTPStatus.ACCEPTED)
+            operator_resume_match = re.fullmatch(
+                r"/api/operator/jobs/([A-Za-z0-9_-]{6,64})/resume", parsed.path
+            )
+            if operator_resume_match:
+                payload = _resume_human_job(
+                    self.runtime,
+                    operator_resume_match.group(1),
+                    reason=str(body.get("reason") or "用户已完成人工验证").strip(),
+                )
+                return self._json(payload, HTTPStatus.ACCEPTED)
             if parsed.path.startswith("/api/jobs/"):
                 status, payload = _handle_job_action(parsed.path, self.runtime, body)
                 return self._json(payload, status)
@@ -444,6 +457,49 @@ def _handle_job_action(
         job = runtime.retry_job(job_id)
         return HTTPStatus.ACCEPTED, {"job": job.to_dict()}
     return HTTPStatus.NOT_FOUND, {"error": "not found"}
+
+
+def _resume_human_job(runtime: AgentRuntime, job_id: str, *, reason: str) -> dict:
+    """Resume the first human gate without exposing its token to the browser."""
+    job = runtime.get_job(job_id)
+    if not job:
+        raise KeyError(job_id)
+    if not reason:
+        raise ValueError("reason is required")
+    run_id = job.get("run_log_id")
+    if not run_id:
+        if job.get("status") != "human_required":
+            raise ValueError("job has no human action to resume")
+        return {"job": runtime.retry_job(job_id).to_dict(), "resumed": True}
+    node = next(
+        (
+            item for item in runtime.execution_nodes(int(run_id))
+            if isinstance(item, dict) and item.get("human_action_required")
+        ),
+        None,
+    )
+    if not node:
+        raise ValueError("job has no human action to resume")
+    resume_token = str(node.get("resume_token") or "")
+    if not resume_token:
+        raise ValueError("human action is missing its internal resume token")
+    result = runtime.operate_node(
+        job_id,
+        int(node["id"]),
+        "resume",
+        reason=reason,
+        resume_token=resume_token,
+    )
+    result_node = result.get("node") or {}
+    safe_node = {
+        key: result_node.get(key)
+        for key in (
+            "id", "status", "stage", "scope_type", "scope_key",
+            "error_code", "human_action_required",
+        )
+        if key in result_node
+    }
+    return {"job": result.get("job"), "node": safe_node, "resumed": True}
 
 
 def _save_trial_feedback_for_job(

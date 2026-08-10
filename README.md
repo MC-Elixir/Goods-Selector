@@ -62,6 +62,41 @@ docker compose up -d --build amazon-selector
 
 `python main.py agent-web` 仅用于本机调试备用，不建议作为日常启动方式，否则很容易和 Docker 同时开出两套服务。
 
+### 单甲方自然语言入口（Hermes）
+
+本项目为单个甲方提供了一个受控 Hermes 入口。结论是：当前阶段不重新开发 Agent
+壳，也不接飞书，采用 **Hermes 0.20.x + 本项目专用 MCP sidecar + 极简人工处理页**。
+现有 pipeline、SQLite 和导出逻辑不变，Hermes 只负责对话和调用 19 个经过白名单审查
+的选品工具。
+
+```bash
+# 前提：已经按 Hermes 官方方式安装 0.20.x
+chmod +x scripts/start_hermes_client.sh
+./scripts/start_hermes_client.sh
+```
+
+一键脚本会准备密钥、安装 `amazon-selector-client` profile、启动 WebUI/MCP，并进入
+中文对话。人工登录、验证码或任务续跑时打开：
+
+```text
+http://127.0.0.1:8765/operator
+```
+
+安全边界：MCP 只监听 `127.0.0.1:8766` 并要求 Bearer Token；Hermes profile 禁用
+终端、文件、通用浏览器、搜索、记忆、定时任务、消息和委派；MCP 再做精确工具白名单；
+所有写操作同时经过 Hermes `untrusted` 审批和 `confirm=true` 业务确认；启动任务固定
+Amazon US、No-Mock，先过 preflight，并使用持久化 request_id 防止重复下单式执行。
+
+详细安装、验收与交付边界见
+[Hermes profile 说明](deployment/hermes/amazon-selector-profile/README.md)。
+
+选型原因：Hermes 已提供 profile distribution、中文桌面/CLI、HTTP MCP、Header 鉴权、
+工具 include 白名单和不可信 MCP 审批，适合目前“一个客户、尽快可用”的阶段；Pi 的
+界面和扩展能力很强，但定位更偏开发者编码 TUI，需要另外开发 TypeScript extension、
+业务确认与交付壳；自研 Agent 的可控性最高，但此时要自行承担会话、工具调度、审批、
+升级和客户端体验，收益不足。等出现多租户、品牌化桌面端、细粒度审计/计费或离线部署
+要求，再把当前 MCP 契约复用到自研壳中。
+
 ### 甲方受控试用：一键完整研究
 
 WebUI 默认首页为“一键研究”。试用前在 9222 专用 Chrome 中打开目标 Amazon US

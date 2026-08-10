@@ -4,6 +4,7 @@ import pytest
 
 from crawlers.amazon_bsr import ProductDTO
 from domain.target_categories import (
+    classify_target_category,
     compare_target_profiles,
     profile_from_product,
     profile_from_supplier,
@@ -122,6 +123,12 @@ def test_amazon_target_query_filters_accessories_and_wrong_umbrella_subtypes():
     assert not target_query_matches_product("outdoor patio umbrella", "9 FT Replacement Canopy for Patio Umbrella")
     assert not target_query_matches_product("outdoor patio umbrella", "6 FT Beach Umbrella")
     assert target_query_matches_product("Patio Umbrellas & Shade", "10 FT Cantilever Patio Umbrella")
+
+
+def test_classify_table_umbrella_with_reordered_outdoor_patio_words():
+    assert classify_target_category(
+        "9FT Umbrella Outdoor Patio, Table Umbrella Waterproof UV Protection"
+    ) == "patio_umbrellas_shade"
 
 
 def test_product_and_supplier_profiles_consume_structured_evidence():
