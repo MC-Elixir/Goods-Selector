@@ -250,12 +250,12 @@ def _execute(
                 "product": payload,
                 "source_dependency": source_dependency,
             },
-            handler=lambda _context, item=payload: {
+            handler=lambda _context, item=payload: {  # type: ignore[misc]
                 "schema_version": SCHEMA_VERSION,
                 "product": item,
             },
             result_writer_factory=write_product,
-            success_validator=lambda node, item=payload: _ingest_result_valid(legacy, node, item),
+            success_validator=lambda node, item=payload: _ingest_result_valid(legacy, node, item),  # type: ignore[misc]
         )
         if result.status == NodeStatus.SUCCEEDED.value:
             products.append(load_product(result.output_snapshot["product"]))
@@ -701,7 +701,7 @@ def _run_sellersprite_market_stage(
             result = coordinator.run_node(
                 scope_type="asin", scope_key=product.asin, stage="market",
                 input_snapshot=market_input,
-                handler=lambda _context, item=product, market=existing_market: {
+                handler=lambda _context, item=product, market=existing_market: {  # type: ignore[misc]
                     "schema_version": SCHEMA_VERSION,
                     "product": dump_product(item),
                     "market": dump_market(market),

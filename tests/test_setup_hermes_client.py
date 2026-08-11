@@ -99,3 +99,19 @@ def test_ensure_compatible_hermes_rejects_non_020_versions(monkeypatch):
         assert ">=0.20.0,<0.21.0" in str(exc)
     else:
         raise AssertionError("0.21.0 should be rejected")
+
+
+def test_wait_for_mcp_ready_accepts_auth_required(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout=3):
+        calls["n"] += 1
+        raise setup.urllib.error.HTTPError(
+            "http://127.0.0.1:8766/mcp", 401, "Unauthorized", hdrs={}, fp=None
+        )
+
+    monkeypatch.setattr(setup.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(setup.time, "sleep", lambda *_: None)
+
+    setup.wait_for_mcp_ready(timeout_seconds=5)
+    assert calls["n"] == 1

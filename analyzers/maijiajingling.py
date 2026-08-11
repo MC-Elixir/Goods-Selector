@@ -6,9 +6,15 @@ API 文档：https://open.sellersprite.com/api/1
 网关：https://api.sellersprite.com
 认证方式：secret-key 请求头（非 Bearer Token）
 
+支持两条取数通道，字段契约一致，由 `MJJL_TRANSPORT` 切换：
+  rest  按单接口订阅的 REST 网关（默认）
+  mcp   打包计费的官方 MCP 网关，见 analyzers/sellersprite_mcp.py
+
 环境变量：
-    MJJL_API_KEY       卖家精灵 API 密钥
-    MJJL_API_BASE      API 网关地址（可选，默认 https://api.sellersprite.com）
+    MJJL_API_KEY       卖家精灵密钥（两条通道通用）
+    MJJL_API_BASE      REST 网关地址（可选，默认 https://api.sellersprite.com）
+    MJJL_TRANSPORT     rest | mcp（可选，默认 rest）
+    MJJL_MCP_URL       MCP 网关地址（可选，默认 https://mcp.sellersprite.com/mcp）
 
 清单（本模块已对接的接口）：
   编号  名称                    MCP Code             方法
@@ -424,6 +430,7 @@ class MaijiajinglingClient:
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        transport: Optional[str] = None,
     ):
         self.api_key = api_key or settings.mjjl_api_key
         # 不要带 /v1 后缀——httpx 会拼接完整路径
@@ -433,20 +440,34 @@ class MaijiajinglingClient:
         if self.base_url.endswith("/v1"):
             self.base_url = self.base_url[:-3]
 
+        self.transport = (
+            transport or getattr(settings, "mjjl_transport", "rest") or "rest"
+        ).strip().lower()
+
         self._configured: bool = bool(self.api_key)
         self._response_diagnostics: list[dict[str, str]] = []
         if not self._configured:
             logger.warning("MJJL_API_KEY 未配置 — 所有 API 调用将跳过")
 
-        self._client = httpx.Client(
-            base_url=self.base_url,
-            headers={
-                "secret-key": self.api_key,
-                "Content-Type": "application/json;charset=utf-8",
-                "x-request-id": str(uuid4()),
-            },
-            timeout=30.0,
-        )
+        if self.transport == "mcp":
+            # 延迟导入：sellersprite_mcp 依赖本模块的 MarketDataError
+            from analyzers.sellersprite_mcp import SellerSpriteMcpTransport
+
+            self._client = SellerSpriteMcpTransport(
+                api_key=self.api_key,
+                url=getattr(settings, "mjjl_mcp_url", "") or "",
+                timeout=float(getattr(settings, "mjjl_mcp_timeout_seconds", 60.0)),
+            )
+        else:
+            self._client = httpx.Client(
+                base_url=self.base_url,
+                headers={
+                    "secret-key": self.api_key,
+                    "Content-Type": "application/json;charset=utf-8",
+                    "x-request-id": str(uuid4()),
+                },
+                timeout=30.0,
+            )
 
     def _request(self, method: str, endpoint: str, **kwargs) -> tuple[dict, dict]:
         """Request JSON with stable errors and non-sensitive diagnostics."""
@@ -1038,6 +1059,12 @@ class MaijiajinglingClient:
         """查询当前月份剩余调用次数。"""
         if not self._configured:
             return {"code": "SKIP", "message": "API key not configured"}
+        if self.transport == "mcp":
+            # MCP 网关没有额度工具，余量只能在开放平台后台查看
+            return {
+                "code": "UNSUPPORTED",
+                "message": "SellerSprite MCP exposes no quota tool; check the open platform console",
+            }
 
         resp = self._send("GET", "/v1/visits")
         return resp.json()

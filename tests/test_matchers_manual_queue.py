@@ -82,7 +82,9 @@ def test_bedding_fallback_does_not_turn_solid_into_lid_or_kitchen_query():
 def test_match_suppliers_enqueues_when_circuit_is_open(monkeypatch):
     _common_no_network(monkeypatch)
     enqueued = []
+    reset_calls = []
     monkeypatch.setattr(matchers, "circuit_is_open", lambda: True)
+    monkeypatch.setattr(matchers, "reset_circuit", lambda: reset_calls.append(True))
     monkeypatch.setattr(
         matchers,
         "enqueue_sourcing_block",
@@ -96,6 +98,7 @@ def test_match_suppliers_enqueues_when_circuit_is_open(monkeypatch):
     assert "当前 9222 页面可能没有验证码" in exc_info.value.instructions
     assert enqueued
     assert enqueued[0][1]["reason"] == "1688 search cooldown active"
+    assert not reset_calls
 
 
 def test_match_suppliers_enqueues_on_tmd_block(monkeypatch):
@@ -449,8 +452,9 @@ def test_detail_captcha_stops_batch_and_enqueues_handoff(monkeypatch):
         lambda *args, **kwargs: enqueued.append((args, kwargs)),
     )
 
-    with pytest.raises(HumanActionRequired) as exc_info:
-        matchers.match_suppliers(_product(), top_k=3)
-
-    assert exc_info.value.error_code == "CAPTCHA"
-    assert enqueued
+    # Detail CAPTCHA no longer aborts the match stage; it skips enrichment gracefully.
+    results = matchers.match_suppliers(_product(), top_k=3)
+    assert len(results) >= 1
+    # The supplier should still be returned but with CAPTCHA_blocked enrichment marker.
+    blocked = [s for s in results if s.raw_data.get("detail_enrichment", {}).get("error") == "CAPTCHA_blocked"]
+    assert blocked

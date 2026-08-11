@@ -8,6 +8,9 @@ import re
 import secrets
 import shutil
 import subprocess
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -128,6 +131,31 @@ def start_services() -> None:
         cwd=PROJECT_ROOT,
         check=True,
     )
+    wait_for_mcp_ready()
+
+
+def wait_for_mcp_ready(*, url: str = "http://127.0.0.1:8766/mcp", timeout_seconds: int = 90) -> None:
+    """Block until MCP answers (401 unauthenticated is healthy), avoiding Hermes race."""
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "未开始探测"
+    while time.monotonic() < deadline:
+        try:
+            request = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(request, timeout=3) as response:
+                status = getattr(response, "status", 200)
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+        except Exception as exc:  # noqa: BLE001 - probe must keep retrying on any connect failure
+            last_error = str(exc)
+            time.sleep(1)
+            continue
+        # Ready when the process is up and auth gate is active (or openly serving).
+        if status in {200, 401, 405, 406}:
+            print(f"MCP 已就绪（HTTP {status}）。")
+            return
+        last_error = f"HTTP {status}"
+        time.sleep(1)
+    raise SystemExit(f"等待 MCP 就绪超时（{timeout_seconds}s）：{last_error}")
 
 
 def main() -> None:

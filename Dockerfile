@@ -27,6 +27,10 @@ RUN python -m venv /opt/browser-agent \
 # (default Amazon scraper). install-deps requires the Python package above.
 RUN python -m playwright install-deps chromium \
     && python -m playwright install chromium \
+    # Scrapling's default fetcher uses Patchright, which has a separate
+    # browser revision from Playwright. Install both at build time so the
+    # first Amazon crawl cannot fail with a missing Chromium executable.
+    && python -m patchright install chromium \
     && scrapling install
 
 # Application code (respects .dockerignore).

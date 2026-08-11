@@ -97,7 +97,7 @@ def reload_profit_params() -> None:
 
 def normalize_positive_number(value: object) -> Optional[float]:
     try:
-        normalized = float(value)
+        normalized = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
     if not math.isfinite(normalized) or normalized <= 0:

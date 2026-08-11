@@ -127,7 +127,7 @@ def generate_query_plan(u: AmazonProductUnderstanding) -> list[QueryPlan]:
         result.append(QueryPlan(
             query_id=_query_id(u.asin, query_type, text),
             asin=u.asin,
-            query_type=query_type,
+            query_type=query_type,  # type: ignore[arg-type]
             text=text,
             reason=f"derive {query_type} query from structured Amazon evidence",
             excluded_brand_tokens=list(u.excluded_brand_tokens),

@@ -132,6 +132,8 @@ main.py (click CLI: init-db | run)
 
 **Stage failure policy**: Stage 1 failure aborts the entire run. All other stages fail per-product and continue.
 
+**Sellersprite subsystem**: `agent/sellersprite_*.py` provides an independent browser-automation workflow that exports reverse-keyword market data from Sellersprite, imports the CSV into `db/sellersprite_repository.py`, and feeds keyword/market signals into Stage 4 (market analysis). It runs outside the 7-stage pipeline and is orchestrated by `agent/sellersprite_service.py` with its own retry, quota, and human-intervention policies.
+
 ### Module boundaries
 
 | Module | Responsibility |
@@ -141,9 +143,12 @@ main.py (click CLI: init-db | run)
 | `analyzers/` | Profit model, market analysis, scoring |
 | `pipeline/` | Orchestration, filtering, ranking |
 | `db/` | SQLAlchemy ORM models, session, migrations |
-| `execution/` | Run coordination, leases, policies |
+| `execution/` | Run coordination, leases, recovery policies |
 | `agent/` | WebUI server, preflight, runner, history |
+| `agent/sellersprite_*.py` | Sellersprite data acquisition and browser automation |
 | `config/` | YAML params, pydantic-settings |
+| `domain/` | Domain models and target category contracts |
+| `schemas/` | Pydantic DTO schema definitions |
 | `reports/` | Excel/Markdown/JSON export |
 
 ### DTO / ORM boundary
@@ -174,6 +179,7 @@ Both use module-level cache with `reload_*()` for hot-reload. `config/settings.p
 - `scoring_weights.yaml` weights **must sum to exactly 1.0** — enforced at load time and by `tests/test_scoring.py::test_weights_sum_to_one`.
 - **Always re-run `pytest tests/test_scoring.py` after editing `scoring_weights.yaml`.**
 - Hard filters eliminate products before ranking; eliminated products are persisted with `passed_hard_filter=False`.
+- **Core path files** (`matchers/__init__.py`, `pipeline/orchestrator.py`, `analyzers/scorer.py`) are protected by `CODEOWNERS` — any modification **must** be accompanied by corresponding test changes in `tests/` and pass review before merge.
 
 ### Database patterns
 
@@ -187,3 +193,21 @@ Both use module-level cache with `reload_*()` for hot-reload. `config/settings.p
 - `docs/database_schema.md` — schema design rationale
 - `docs/DEPLOYMENT.md` — Docker deployment guide
 - `docs/UI_DESIGN.md` — UI design tokens (Linear-style dark theme, webui/ only)
+
+## AI Debug Route
+
+Diagnosing 1688 matching failures:
+
+1. **Structured degradation logs** — `matchers/__init__.py` emits JSON lines with prefix `[match-diag]` on every backend degradation:
+   ```json
+   {"event": "degradation", "from": "playwright", "to": "mock", "reason": "TimeoutError", "run_id": "run-abcd1234"}
+   ```
+   Grep application logs for `[match-diag]` to trace the full fallback chain of a run.
+
+2. **Failure screenshots** — When a Playwright browser operation fails, a PNG screenshot is automatically saved to `data/logs/artifacts/` with a timestamped filename (e.g. `20260801_143022_kw_折叠桌.png`). The path is logged with prefix `[1688-diag]`.
+
+3. **Diagnostic steps**:
+   - Search logs for `[match-diag]` to identify which backend degraded and why.
+   - Check `data/logs/artifacts/` for screenshots showing the browser state at failure time (captcha, login wall, TMD block).
+   - Correlate via `run_id` field to group all degradation events from the same pipeline run.
+   - If `reason` is `HumanActionRequired`, check the manual queue (`agent/manual_queue.py`) for pending human actions.

@@ -265,7 +265,7 @@ class Alibaba1688ScraplingMatcher:
                 page = StealthyFetcher.fetch(
                     _gbk_url(kw),
                     headless=self.headless,
-                    stealth=True,
+                    stealth=True,  # type: ignore[call-arg]
                     network_idle=True,
                     timeout=60_000,
                     extra_headers=extra,

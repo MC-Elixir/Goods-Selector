@@ -102,6 +102,22 @@ class Settings(BaseSettings):
         default="https://api.sellersprite.com/v1",
         validation_alias=AliasChoices("MJJL_API_BASE", "SELLERSPRITE_API_BASE"),
     )
+    # "rest" 走按接口计费的 REST 网关；"mcp" 走打包计费的官方 MCP 网关。
+    # 两者字段契约相同，切换不影响 Stage 4 的 DTO。
+    mjjl_transport: str = Field(
+        default="rest",
+        validation_alias=AliasChoices("MJJL_TRANSPORT", "SELLERSPRITE_TRANSPORT"),
+    )
+    mjjl_mcp_url: str = Field(
+        default="https://mcp.sellersprite.com/mcp",
+        validation_alias=AliasChoices("MJJL_MCP_URL", "SELLERSPRITE_MCP_URL"),
+    )
+    mjjl_mcp_timeout_seconds: float = Field(
+        default=60.0,
+        ge=1.0,
+        le=300.0,
+        validation_alias=AliasChoices("MJJL_MCP_TIMEOUT_SECONDS", "SELLERSPRITE_MCP_TIMEOUT_SECONDS"),
+    )
     mjjl_max_products_per_run: int = Field(
         default=3,
         validation_alias=AliasChoices(
@@ -138,6 +154,9 @@ class Settings(BaseSettings):
     # 1688 Scrapling 匹配器（patchright HTTP 路径）。被 1688 TMD 反爬拦截、0 结果，
     # 默认禁用、直接降级 Playwright；待该路径修好后置 True 启用。
     enable_scrapling_matcher: bool = False
+    # 1688 拍立淘图搜（imageAddress 路径不稳定）。暂时禁用，全部走关键词搜索；
+    # 需要恢复时置 True。
+    enable_image_search: bool = False
     alibaba_real_result_cache_ttl_seconds: int = 604800
     alibaba_detail_enrich_limit: int = 2
     alibaba_detail_cache_ttl_seconds: int = 604800

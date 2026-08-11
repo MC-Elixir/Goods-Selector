@@ -1,0 +1,6 @@
+# Core pipeline paths — require code review before merge
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+/matchers/__init__.py   @MC-Elixir/reviewers
+/pipeline/orchestrator.py   @MC-Elixir/reviewers
+/analyzers/scorer.py   @MC-Elixir/reviewers

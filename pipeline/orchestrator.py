@@ -496,7 +496,7 @@ def _call_match_suppliers(
         accepts_market_keywords = False
         accepts_run_ref = False
     try:
-        kwargs = {}
+        kwargs: dict = {}
         if accepts_cancel:
             kwargs["cancel_check"] = cancel_check
         if accepts_market_keywords:
@@ -929,11 +929,11 @@ def _evidence_rejection_reasons(
             return ["missing_purchase_price"]
         if fields & {"weight_kg", "length_cm", "width_cm", "height_cm"}:
             return ["missing_logistics_dimensions"]
-    if error.dimension == "competition":
+    if error.dimension == "competition":  # type: ignore[union-attr]
         return ["missing_market_evidence"]
-    if error.dimension == "logistics":
+    if error.dimension == "logistics":  # type: ignore[union-attr]
         return ["missing_logistics_dimensions"]
-    if error.dimension == "supply":
+    if error.dimension == "supply":  # type: ignore[union-attr]
         reasons = []
         if "purchase_price" in fields:
             reasons.append("missing_purchase_price")

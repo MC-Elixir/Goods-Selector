@@ -206,7 +206,7 @@ class Alibaba1688Verifier:
     def _attribute_score(self, supplier, analysis):
         if analysis is None:
             return SCORE_DEFAULT
-        checks = 0; passed = 0
+        checks = 0; passed = 0.0
         if analysis.material:
             checks += 1
             if supplier.material and _material_match(analysis.material, supplier.material):
@@ -461,19 +461,19 @@ class LLMVisualVerifier:
                 content.append({"type": "text", "text": prompt})
                 response = client.chat.completions.create(
                     model=self._model, max_tokens=1536,
-                    messages=[{"role": "user", "content": content}],
+                    messages=[{"role": "user", "content": content}],  # type: ignore[list-item,misc]
                 )
                 text = response.choices[0].message.content
             else:
                 import anthropic
-                client = anthropic.Anthropic(api_key=self._api_key)
+                client = anthropic.Anthropic(api_key=self._api_key)  # type: ignore[assignment]
                 content = []
                 for side in ("amazon", "supplier"):
                     content.append({"type": "text", "text": f"{side} 图片："})
                     content.extend(self._anthropic_task_image_block(image, media_type)
                                    for image, media_type in images[side])
                 content.append({"type": "text", "text": prompt})
-                response = client.messages.create(
+                response = client.messages.create(  # type: ignore[attr-defined]
                     model=self._model, max_tokens=1536,
                     messages=[{"role": "user", "content": content}],
                 )

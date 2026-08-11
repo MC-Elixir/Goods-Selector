@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import time
@@ -22,6 +23,7 @@ def run_preflight() -> dict[str, Any]:
         _check_ppio(),
         _check_seller_sprite(),
         check_seller_sprite_browser(),
+        _check_1688_browser_session(),
         _check_alibaba_open(),
         _check_amazon_cookies(),
         _check_1688_cookies(),
@@ -114,6 +116,35 @@ def _check_seller_sprite_browser() -> dict[str, Any]:
 def check_seller_sprite_browser() -> dict[str, Any]:
     """Public browser readiness result used by market-data gates."""
     return _check_seller_sprite_browser()
+
+
+def _check_1688_browser_session() -> dict[str, Any]:
+    """Block runs when the configured 1688 CDP session is unavailable.
+
+    Stored cookies remain a valid fallback when no CDP endpoint is configured.
+    Once an endpoint is configured, however, the matcher deliberately uses that
+    dedicated human session; silently continuing without it produces supplier-
+    evidence gaps that a formal no-mock run cannot use.
+    """
+    key = "1688_browser"
+    configured = bool(
+        (os.environ.get("BU_CDP_HTTP") or "").strip()
+        or (os.environ.get("BU_CDP_WS") or "").strip()
+        or (settings.bu_cdp_http or "").strip()
+        or (settings.bu_cdp_ws or "").strip()
+    )
+    if not configured:
+        return _ok(key, "1688 dedicated Chrome not configured", "Using stored-cookie fallback")
+    try:
+        cdp_ws = _resolve_cdp_ws()
+        _assert_cdp_websocket_reachable(cdp_ws)
+    except Exception:
+        return _err(
+            key,
+            "1688 dedicated Chrome unavailable",
+            "Start the dedicated Chrome profile on port 9222, then complete login or verification if prompted",
+        )
+    return _ok(key, "1688 dedicated Chrome ready", "Chrome CDP session is reachable")
 
 
 def _assert_sellersprite_download_dir_writable(raw_path: str | None = None) -> None:

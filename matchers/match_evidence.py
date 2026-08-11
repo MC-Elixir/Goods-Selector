@@ -347,5 +347,5 @@ def build_match_evidence(
         mismatch_reasons=list(dict.fromkeys(mismatch)),
         missing_evidence=sorted(set(missing)),
         passed_reasons=list(dict.fromkeys(passed)),
-        decision=decision,
+        decision=decision,  # type: ignore[arg-type]
     )

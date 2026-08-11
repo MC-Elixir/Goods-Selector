@@ -57,3 +57,4 @@ responses>=0.24.0        # mock requests
 
 # 代码质量
 ruff>=0.5.0
+mypy>=1.10.0

@@ -22,7 +22,7 @@ from matchers.alibaba_detail import BlockedOfferPage, parse_1688_offer_detail_ht
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 except ImportError:  # Playwright is an optional runtime dependency for import-only users.
-    PlaywrightTimeoutError = TimeoutError
+    PlaywrightTimeoutError = TimeoutError  # type: ignore[misc,assignment]
 
 logger = logging.getLogger(__name__)
 

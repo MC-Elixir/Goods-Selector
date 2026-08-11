@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
@@ -46,6 +48,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _PROFILE_DIR = _PROJECT_ROOT / "data" / "browser_profiles" / "1688"
 _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
+_ARTIFACTS_DIR = _PROJECT_ROOT / "data" / "logs" / "artifacts"
+_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+
 _COOKIES_FILE = _PROJECT_ROOT / "data" / "1688_cookies.json"
 
 _SEARCH_BASE = "https://s.1688.com/selloffer/offer_search.htm"
@@ -53,6 +58,21 @@ _SEARCH_BASE = "https://s.1688.com/selloffer/offer_search.htm"
 _CARD_SEL = "a.search-offer-item.major-offer"
 
 _PAGE_WAIT = 10
+
+
+def _save_failure_screenshot(page, context_label: str) -> str | None:
+    """在浏览器失败时自动保存截图到 data/logs/artifacts/，返回截图路径。"""
+    try:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        safe_label = re.sub(r"[^\w\-]", "_", context_label)[:60]
+        filename = f"{ts}_{safe_label}.png"
+        filepath = _ARTIFACTS_DIR / filename
+        page.screenshot(path=str(filepath), full_page=False)
+        logger.info(f"[1688-diag] 失败截图已保存: {filepath}")
+        return str(filepath)
+    except Exception as exc:
+        logger.debug(f"[1688-diag] 截图保存失败: {exc}")
+        return None
 
 
 def _system_proxy() -> Optional[str]:
@@ -140,10 +160,10 @@ def _playwright_context(headless: bool, proxy_url: Optional[str]):
             "--no-sandbox",
         ],
     }
-    proxy = _playwright_proxy(proxy_url)
+    proxy = _playwright_proxy(proxy_url)  # type: ignore[assignment]
     if proxy:
         kwargs["proxy"] = proxy
-    ctx = pw.chromium.launch_persistent_context(**kwargs)
+    ctx = pw.chromium.launch_persistent_context(**kwargs)  # type: ignore[arg-type]
     return _ContextManager(ctx, pw, close_context=True)
 
 
@@ -337,51 +357,57 @@ class Alibaba1688PlaywrightMatcher:
             try:
                 with _playwright_context(self.headless, self._proxy) as ctx:
                     page = ctx.pages[0] if ctx.pages else ctx.new_page()
-                    loaded = _load_cookies_into(ctx)
-                    if loaded:
-                        logger.info(f"[1688] 已加载 {loaded} 个 cookies")
-                    page.goto(_gbk_url(kw), wait_until="domcontentloaded", timeout=60_000)
-                    page.wait_for_timeout(int(self.page_wait * 1000))
-                    dismissed = _dismiss_popups(page)
-                    if dismissed:
-                        logger.info(f"[1688] 已关闭 {dismissed} 个弹窗/遮罩")
-                        page.wait_for_timeout(1500)
-                    page_url = page.url or ""
-                    _raise_if_visible_human_block(page)
-                    remaining = per_query_limit if exhaustive else limit - len(results)
-                    batch = self._parse_playwright_page(page, remaining)
-                    for dto in batch:
-                        raw = dto.raw_data if isinstance(dto.raw_data, dict) else {}
-                        dto.raw_data = raw
-                        queries = raw.setdefault("search_queries", [])
-                        if kw not in queries:
-                            queries.append(kw)
-                        raw["search_backend"] = "alibaba_playwright_keyword"
-                        if dto.alibaba_offer_id not in seen_ids:
-                            seen_ids.add(dto.alibaba_offer_id)
-                            results.append(dto)
-                        else:
-                            existing = next(
-                                item for item in results
-                                if item.alibaba_offer_id == dto.alibaba_offer_id
-                            )
-                            existing_raw = existing.raw_data if isinstance(existing.raw_data, dict) else {}
-                            existing.raw_data = existing_raw
-                            existing_queries = existing_raw.setdefault("search_queries", [])
-                            if kw not in existing_queries:
-                                existing_queries.append(kw)
-                    logger.info(f"[1688-kw] '{kw}' → {len(batch)} 条")
-                    self.last_query_attempts.append({
-                        "query": kw,
-                        "status": "completed",
-                        "result_count": len(batch),
-                        "result_refs": [
-                            f"offer:{dto.alibaba_offer_id}" for dto in batch
-                            if dto.alibaba_offer_id
-                        ],
-                        "error": None,
-                        "backend": "alibaba_playwright_keyword",
-                    })
+                    try:
+                        loaded = _load_cookies_into(ctx)
+                        if loaded:
+                            logger.info(f"[1688] 已加载 {loaded} 个 cookies")
+                        page.goto(_gbk_url(kw), wait_until="domcontentloaded", timeout=60_000)
+                        page.wait_for_timeout(int(self.page_wait * 1000))
+                        dismissed = _dismiss_popups(page)
+                        if dismissed:
+                            logger.info(f"[1688] 已关闭 {dismissed} 个弹窗/遮罩")
+                            page.wait_for_timeout(1500)
+                        page_url = page.url or ""
+                        _raise_if_visible_human_block(page)
+                        remaining = per_query_limit if exhaustive else limit - len(results)
+                        batch = self._parse_playwright_page(page, remaining)
+                        for dto in batch:
+                            raw = dto.raw_data if isinstance(dto.raw_data, dict) else {}
+                            dto.raw_data = raw
+                            queries = raw.setdefault("search_queries", [])
+                            if kw not in queries:
+                                queries.append(kw)
+                            raw["search_backend"] = "alibaba_playwright_keyword"
+                            if dto.alibaba_offer_id not in seen_ids:
+                                seen_ids.add(dto.alibaba_offer_id)
+                                results.append(dto)
+                            else:
+                                existing = next(
+                                    item for item in results
+                                    if item.alibaba_offer_id == dto.alibaba_offer_id
+                                )
+                                existing_raw = existing.raw_data if isinstance(existing.raw_data, dict) else {}
+                                existing.raw_data = existing_raw
+                                existing_queries = existing_raw.setdefault("search_queries", [])
+                                if kw not in existing_queries:
+                                    existing_queries.append(kw)
+                        logger.info(f"[1688-kw] '{kw}' → {len(batch)} 条")
+                        # Anti-TMD: random delay between keyword searches
+                        time.sleep(random.uniform(3, 7))
+                        self.last_query_attempts.append({
+                            "query": kw,
+                            "status": "completed",
+                            "result_count": len(batch),
+                            "result_refs": [
+                                f"offer:{dto.alibaba_offer_id}" for dto in batch
+                                if dto.alibaba_offer_id
+                            ],
+                            "error": None,
+                            "backend": "alibaba_playwright_keyword",
+                        })
+                    except Exception:
+                        _save_failure_screenshot(page, f"kw_{kw}")
+                        raise
             except HumanActionRequired as e:
                 self.last_query_attempts.append({
                     "query": kw,
@@ -391,7 +417,12 @@ class Alibaba1688PlaywrightMatcher:
                     "backend": "alibaba_playwright_keyword",
                 })
                 logger.warning(f"[1688-kw] '{kw}' 失败: {e}")
-                raise
+                # If we already have partial results, use them instead of aborting.
+                if results:
+                    logger.info(f"[1688-kw] 已有 {len(results)} 条部分结果，跳过剩余关键词继续")
+                else:
+                    logger.warning("[1688-kw] 无部分结果，跳过剩余关键词（pipeline 将继续无供应商匹配）")
+                break
             except Exception as e:
                 self.last_query_attempts.append({
                     "query": kw,
@@ -412,18 +443,22 @@ class Alibaba1688PlaywrightMatcher:
 
         with _playwright_context(self.headless, self._proxy) as ctx:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            loaded = _load_cookies_into(ctx)
-            if loaded:
-                logger.info(f"[1688] 已加载 {loaded} 个 cookies")
-            page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-            page.wait_for_timeout(int(self.page_wait * 1000))
-            dismissed = _dismiss_popups(page)
-            if dismissed:
-                logger.info(f"[1688] 已关闭 {dismissed} 个弹窗/遮罩")
-                page.wait_for_timeout(1500)
-            page_url = page.url or ""
-            _raise_if_visible_human_block(page)
-            results = self._parse_playwright_page(page, limit)
+            try:
+                loaded = _load_cookies_into(ctx)
+                if loaded:
+                    logger.info(f"[1688] 已加载 {loaded} 个 cookies")
+                page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                page.wait_for_timeout(int(self.page_wait * 1000))
+                dismissed = _dismiss_popups(page)
+                if dismissed:
+                    logger.info(f"[1688] 已关闭 {dismissed} 个弹窗/遮罩")
+                    page.wait_for_timeout(1500)
+                page_url = page.url or ""
+                _raise_if_visible_human_block(page)
+                results = self._parse_playwright_page(page, limit)
+            except Exception:
+                _save_failure_screenshot(page, "image_search")
+                raise
         for rank, dto in enumerate(results, 1):
             raw = dto.raw_data if isinstance(dto.raw_data, dict) else {}
             dto.raw_data = raw
@@ -488,20 +523,24 @@ class Alibaba1688PlaywrightMatcher:
         try:
             with _playwright_context(self.headless, self._proxy) as ctx:
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
-                loaded = _load_cookies_into(ctx)
-                if loaded:
-                    logger.info(f"[1688-detail] 已加载 {loaded} 个 cookies")
-                page.goto(supplier.offer_url, wait_until="domcontentloaded", timeout=60_000)
-                page.wait_for_timeout(int(min(self.page_wait, 5) * 1000))
-                _raise_if_visible_human_block(page)
-                html = page.content()
-                final_url = page.url or ""
-                # Parse while the browser context is still attached. A visible
-                # verification page must remain open and must never yield a
-                # supplier price merely because embedded JSON was present.
-                return _enrich_supplier_from_detail_html(
-                    supplier, html, page_url=final_url
-                )
+                try:
+                    loaded = _load_cookies_into(ctx)
+                    if loaded:
+                        logger.info(f"[1688-detail] 已加载 {loaded} 个 cookies")
+                    page.goto(supplier.offer_url, wait_until="domcontentloaded", timeout=60_000)
+                    page.wait_for_timeout(int(min(self.page_wait, 5) * 1000))
+                    _raise_if_visible_human_block(page)
+                    html = page.content()
+                    final_url = page.url or ""
+                    # Parse while the browser context is still attached. A visible
+                    # verification page must remain open and must never yield a
+                    # supplier price merely because embedded JSON was present.
+                    return _enrich_supplier_from_detail_html(
+                        supplier, html, page_url=final_url
+                    )
+                except Exception:
+                    _save_failure_screenshot(page, f"detail_{supplier.alibaba_offer_id or 'unknown'}")
+                    raise
         except HumanActionRequired:
             raise
         except BlockedOfferPage as exc:
@@ -787,6 +826,305 @@ def _profile_has_cookies() -> bool:
     )
 
 
+def _wait_for_slider_render(page, timeout_ms: int = 8000) -> bool:
+    """Wait for the NoCaptcha slider to be rendered by punishpage.min.js.
+
+    The TMD punish page loads slider JS asynchronously. This polls for the
+    presence of known slider DOM elements until they appear or timeout.
+    """
+    poll_interval = 500
+    elapsed = 0
+    check_js = """
+        () => {
+            // Check for any known slider element
+            const selectors = [
+                '#nc_1_n1z', '.btn_slide', '.nc_iconfont.btn_slide',
+                '#nocaptcha .nc_wrapper', '.slidetounlock',
+                '.nc_scale', '#nocaptcha .nc-lang-cnt',
+            ];
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el && el.getBoundingClientRect().width > 0) return true;
+            }
+            // Also check for >> text element (the slider arrow button)
+            const allEls = document.querySelectorAll('span, div, a, i');
+            for (const el of allEls) {
+                const text = (el.textContent || '').trim();
+                if (text === '>>' || text === '\\u00bb\\u00bb') {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width > 15 && rect.width < 80 && rect.height > 15 && rect.height < 60) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    """
+    while elapsed < timeout_ms:
+        try:
+            if page.evaluate(check_js):
+                logger.debug(f"[1688-tmd-slider] 滑块已渲染 (等待 {elapsed}ms)")
+                return True
+        except Exception:
+            pass
+        page.wait_for_timeout(poll_interval)
+        elapsed += poll_interval
+    logger.debug(f"[1688-tmd-slider] 等待滑块渲染超时 ({timeout_ms}ms)")
+    return False
+
+
+def _try_solve_tmd_slider(page, max_attempts: int = 3) -> bool:
+    """Attempt to solve the TMD full-page slider CAPTCHA by simulating a human-like drag.
+
+    The TMD punish page (s.1688.com/.../___tmd___/punish) shows a simple
+    left-to-right slider with text "请按住滑块，拖动到最右边".
+    The slider is rendered asynchronously by punishpage.min.js into #nocaptcha.
+    This function waits for the slider to render, locates the button, drags it
+    across the track with human-like motion, and checks whether the page
+    navigated away from the TMD block.
+
+    Returns True if the slider was solved and the page is no longer blocked.
+    """
+    import math
+
+    # Wait for the slider JS to render (punishpage.min.js is async)
+    _wait_for_slider_render(page, timeout_ms=8000)
+
+    # Selector strategies for the slider button (ordered by specificity)
+    slider_selectors = (
+        "#nc_1_n1z",                          # Classic Alibaba NoCaptcha slider
+        ".nc_iconfont.btn_slide",              # NoCaptcha icon button
+        ".btn_slide",                          # Generic slide button
+        "[data-nc-lang='SLIDE']",              # NoCaptcha data attribute
+        ".nc-lang-cnt .nc_iconfont",           # NoCaptcha container icon
+        "span.nc_iconfont",                    # Icon span inside slider
+        "#nocaptcha .nc_wrapper .btn_slide",   # Full path
+        ".slidetounlock .btn_slide",           # Slide-to-unlock variant
+        "#nocaptcha span.btn_slide",           # Inside nocaptcha container
+        ".nc_wrapper .btn_slide",             # Wrapper variant
+        "span.btn_slide",                      # Any span with btn_slide
+    )
+    # Track selectors for width calculation
+    track_selectors = (
+        "#nc_1__scale_text",
+        ".nc-lang-cnt",
+        ".scale_text",
+        ".slidetounlock",
+        "[data-nc-lang='SLIDE']",
+        "#nocaptcha .nc_scale",               # NoCaptcha scale/track
+        ".nc_scale",                          # Generic track
+        "#nocaptcha",                          # The container itself
+    )
+
+    for attempt in range(1, max_attempts + 1):
+        logger.info(f"[1688-tmd-slider] 尝试第 {attempt}/{max_attempts} 次自动滑动")
+        slider_btn = None
+        track_el = None
+
+        # Try to locate slider button via CSS selectors
+        for sel in slider_selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=800):
+                    slider_btn = loc
+                    break
+            except Exception:
+                continue
+
+        # Fallback 1: XPath for nc_wrapper descendants
+        if slider_btn is None:
+            try:
+                slider_btn = page.locator(
+                    "xpath=//div[contains(@class,'nc_wrapper')]//span[contains(@class,'btn')]"
+                ).first
+                if slider_btn.count() == 0 or not slider_btn.is_visible(timeout=500):
+                    slider_btn = None
+            except Exception:
+                slider_btn = None
+
+        # Fallback 2: Find by JS - look for small clickable element with >> or slider icon
+        if slider_btn is None:
+            try:
+                btn_handle = page.evaluate_handle("""
+                    () => {
+                        // Strategy A: element with >> text content (the arrow icon)
+                        const allEls = document.querySelectorAll('span, div, a, i');
+                        for (const el of allEls) {
+                            const text = (el.textContent || '').trim();
+                            if (text === '>>' || text === '\\u00bb\\u00bb' || text === '\\xbb\\xbb') {
+                                const rect = el.getBoundingClientRect();
+                                if (rect.width > 15 && rect.width < 80 && rect.height > 15 && rect.height < 60) {
+                                    return el;
+                                }
+                            }
+                        }
+                        // Strategy B: element with cursor:move or cursor:grab near slider text
+                        const sliderText = document.querySelector(
+                            '[data-nc-lang], .nc-lang-cnt, .scale_text'
+                        );
+                        if (sliderText) {
+                            const parent = sliderText.closest('.nc_wrapper, .slidetounlock, #nocaptcha') || sliderText.parentElement;
+                            if (parent) {
+                                const candidates = parent.querySelectorAll('span, div, a');
+                                for (const el of candidates) {
+                                    const style = window.getComputedStyle(el);
+                                    const rect = el.getBoundingClientRect();
+                                    if ((style.cursor === 'move' || style.cursor === 'grab' || style.cursor === 'pointer')
+                                        && rect.width > 15 && rect.width < 80
+                                        && rect.height > 15 && rect.height < 60) {
+                                        return el;
+                                    }
+                                }
+                            }
+                        }
+                        // Strategy C: first child of nc_scale or track-like element
+                        const track = document.querySelector('.nc_scale, .slidetounlock, [class*="scale"]');
+                        if (track) {
+                            const firstChild = track.firstElementChild;
+                            if (firstChild) {
+                                const rect = firstChild.getBoundingClientRect();
+                                if (rect.width > 15 && rect.width < 80 && rect.height > 15) {
+                                    return firstChild;
+                                }
+                            }
+                        }
+                        return null;
+                    }
+                """)
+                el = btn_handle.as_element()
+                if el and el.is_visible():
+                    slider_btn = el
+            except Exception:
+                pass
+
+        # Try to locate the track (for width calculation)
+        for sel in track_selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    track_el = loc
+                    break
+            except Exception:
+                continue
+
+        if slider_btn is None:
+            logger.warning("[1688-tmd-slider] 未找到滑块按钮元素")
+            # On retry, wait more for JS to render
+            if attempt < max_attempts:
+                page.wait_for_timeout(3000)
+                _wait_for_slider_render(page, timeout_ms=5000)
+            continue
+
+        try:
+            btn_box = slider_btn.bounding_box()
+        except Exception:
+            btn_box = None
+        if not btn_box:
+            logger.warning("[1688-tmd-slider] 无法获取滑块按钮坐标")
+            return False
+
+        # Determine drag distance
+        if track_el:
+            try:
+                track_box = track_el.bounding_box()
+                drag_distance = track_box["width"] - btn_box["width"] - 4
+            except Exception:
+                drag_distance = 300
+        else:
+            # Fallback: use viewport width heuristic
+            try:
+                vp = page.viewport_size or {"width": 1280}
+                drag_distance = min(vp["width"] * 0.35, 340)
+            except Exception:
+                drag_distance = 300
+
+        # Ensure minimum drag distance
+        drag_distance = max(drag_distance, 200)
+
+        # Starting position: center of slider button
+        start_x = btn_box["x"] + btn_box["width"] / 2
+        start_y = btn_box["y"] + btn_box["height"] / 2
+
+        # Generate human-like trajectory points
+        steps = random.randint(25, 40)
+        points: list[tuple[float, float]] = []
+        for i in range(steps + 1):
+            t = i / steps
+            # Ease-in-out cubic with slight overshoot
+            if t < 0.5:
+                ease = 4 * t * t * t
+            else:
+                ease = 1 - (-2 * t + 2) ** 3 / 2
+            # Add slight overshoot at the end (humans often overshoot)
+            if t > 0.85:
+                overshoot = math.sin((t - 0.85) / 0.15 * math.pi) * random.uniform(3, 8)
+            else:
+                overshoot = 0
+            dx = ease * (drag_distance + overshoot)
+            # Y-axis jitter: small random vertical movement
+            dy = random.gauss(0, 1.5) if 0.1 < t < 0.9 else 0
+            points.append((start_x + dx, start_y + dy))
+
+        # Final position: exact end of track (correct overshoot)
+        points.append((start_x + drag_distance, start_y + random.uniform(-1, 1)))
+
+        # Perform the drag
+        try:
+            page.mouse.move(start_x, start_y)
+            page.wait_for_timeout(random.randint(100, 300))
+            page.mouse.down()
+            page.wait_for_timeout(random.randint(50, 150))
+
+            for idx, (px, py) in enumerate(points[1:], 1):
+                page.mouse.move(px, py)
+                # Variable delay: faster in middle, slower at start/end
+                progress = idx / len(points)
+                if progress < 0.2 or progress > 0.8:
+                    delay = random.randint(15, 35)
+                else:
+                    delay = random.randint(5, 18)
+                # Occasional micro-pause (human hesitation)
+                if random.random() < 0.05:
+                    delay += random.randint(50, 120)
+                page.wait_for_timeout(delay)
+
+            page.wait_for_timeout(random.randint(80, 200))
+            page.mouse.up()
+        except Exception as exc:
+            logger.warning(f"[1688-tmd-slider] 鼠标拖动异常: {exc}")
+            continue
+
+        # Wait for page navigation / verification result
+        page.wait_for_timeout(random.randint(2000, 3500))
+
+        # Check if TMD block is gone
+        new_url = page.url or ""
+        try:
+            new_title = page.title() or ""
+        except Exception:
+            new_title = ""
+        if not _is_tmd_block(new_url, new_title):
+            logger.info("[1688-tmd-slider] 滑块验证通过，页面已跳转")
+            return True
+
+        # Check for success indicators on the same page
+        try:
+            body = page.locator("body").inner_text(timeout=2000)
+            if "验证通过" in body or "验证成功" in body:
+                logger.info("[1688-tmd-slider] 页面显示验证通过")
+                page.wait_for_timeout(1500)
+                return True
+        except Exception:
+            pass
+
+        logger.info(f"[1688-tmd-slider] 第 {attempt} 次滑动未通过，页面仍在 TMD")
+        # Wait before retry (the slider may reset)
+        page.wait_for_timeout(random.randint(1500, 3000))
+
+    logger.warning("[1688-tmd-slider] 所有自动滑动尝试均失败")
+    return False
+
+
 def _dismiss_popups(page) -> int:
     selectors = (
         ".next-dialog-close",
@@ -809,6 +1147,13 @@ def _dismiss_popups(page) -> int:
         "text=知道了",
         "text=稍后再说",
         "text=×",
+        # 1688 baxia verification overlay close button
+        ".baxia-dialog-close",
+        ".baxia-dialog .close",
+        "#baxia-dialog-content .close",
+        ".J_MIDDLEWARE_FRAME_WIDGET .close",
+        "a.nc-close",
+        ".nc_iconfont.btn_close",
     )
     clicked = 0
     for _ in range(3):
@@ -835,6 +1180,82 @@ def _dismiss_popups(page) -> int:
             page.wait_for_timeout(500)
         except Exception:
             pass
+    # JS fallback: click baxia/verification overlay close buttons that CSS selectors miss.
+    if clicked == 0:
+        try:
+            js_clicked = page.evaluate("""
+                () => {
+                    // Strategy 1: class-based close buttons
+                    const candidates = document.querySelectorAll(
+                        '[class*="close"], [class*="Close"], [aria-label*="close"], [aria-label*="Close"]'
+                    );
+                    for (const el of candidates) {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0 && rect.width < 60) {
+                            el.click();
+                            return 1;
+                        }
+                    }
+                    // Strategy 2: elements containing × or ✕ character (baxia overlay)
+                    const allEls = document.querySelectorAll('span, a, div, button, i');
+                    for (const el of allEls) {
+                        const text = (el.textContent || '').trim();
+                        if (text === '×' || text === '✕' || text === 'X' || text === 'x') {
+                            const rect = el.getBoundingClientRect();
+                            // Must be small (icon-sized) and visible in viewport
+                            if (rect.width > 0 && rect.width < 50 && rect.height < 50
+                                && rect.top > 100 && rect.top < 600) {
+                                el.click();
+                                return 2;
+                            }
+                        }
+                    }
+                    return 0;
+                }
+            """)
+            if js_clicked:
+                clicked += 1
+                page.wait_for_timeout(500)
+        except Exception:
+            pass
+    # Also try dismissing in iframes (baxia may render in a frame)
+    if clicked == 0:
+        for frame in page.frames:
+            if frame == page.main_frame:
+                continue
+            try:
+                js_clicked = frame.evaluate("""
+                    () => {
+                        const candidates = document.querySelectorAll(
+                            '[class*="close"], [class*="Close"]'
+                        );
+                        for (const el of candidates) {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0 && rect.width < 60) {
+                                el.click();
+                                return 1;
+                            }
+                        }
+                        const allEls = document.querySelectorAll('span, a, div, button, i');
+                        for (const el of allEls) {
+                            const text = (el.textContent || '').trim();
+                            if (text === '×' || text === '✕') {
+                                const rect = el.getBoundingClientRect();
+                                if (rect.width > 0 && rect.width < 50 && rect.height < 50) {
+                                    el.click();
+                                    return 2;
+                                }
+                            }
+                        }
+                        return 0;
+                    }
+                """)
+                if js_clicked:
+                    clicked += 1
+                    page.wait_for_timeout(500)
+                    break
+            except Exception:
+                continue
     return clicked
 
 
@@ -901,6 +1322,24 @@ def _raise_if_visible_human_block(page) -> None:
     if not blocked:
         return
     error_code, diagnostic = blocked
+    # Dismissable overlay popups (e.g. detail-page slider captcha) can be closed
+    # by clicking the X button or pressing Escape.  Try that before raising.
+    if error_code == "CAPTCHA" and not _is_tmd_block(page.url or "", ""):
+        dismissed = _dismiss_popups(page)
+        if dismissed:
+            page.wait_for_timeout(1000)
+            blocked = _visible_human_block(page)
+            if not blocked:
+                logger.info("[1688] 验证弹窗已自动关闭，继续操作")
+                return
+    # TMD full-page slider: attempt automatic solve before requiring human action
+    if error_code == "CAPTCHA" and _is_tmd_block(page.url or "", ""):
+        if _try_solve_tmd_slider(page):
+            page.wait_for_timeout(1500)
+            blocked = _visible_human_block(page)
+            if not blocked:
+                logger.info("[1688] TMD 滑块已自动通过，继续操作")
+                return
     action = "重新登录" if error_code == "AUTH_REQUIRED" else "完成登录或滑块验证"
     raise HumanActionRequired(
         error_code,

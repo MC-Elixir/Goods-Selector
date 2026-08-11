@@ -149,6 +149,32 @@ def test_seller_sprite_browser_preflight_warns_when_raw_cdp_websocket_is_unreach
     assert attempted == [(("stale.example.invalid", 9222), 2.0)]
 
 
+def test_1688_browser_session_blocks_when_configured_cdp_is_unreachable(monkeypatch):
+    monkeypatch.setattr(settings, "bu_cdp_http", "http://host.docker.internal:9222")
+    monkeypatch.setattr(preflight, "_resolve_cdp_ws", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
+
+    check = preflight._check_1688_browser_session()
+
+    assert check["key"] == "1688_browser"
+    assert check["level"] == "error"
+    assert "unavailable" in check["label"].lower()
+
+
+def test_1688_browser_session_is_ready_when_configured_cdp_is_reachable(monkeypatch):
+    monkeypatch.setattr(settings, "bu_cdp_http", "http://host.docker.internal:9222")
+    monkeypatch.setattr(preflight, "_resolve_cdp_ws", lambda: "ws://host.docker.internal:9222/devtools/browser/id")
+    monkeypatch.setattr(preflight, "_assert_cdp_websocket_reachable", lambda _value: None)
+
+    check = preflight._check_1688_browser_session()
+
+    assert check == {
+        "key": "1688_browser",
+        "label": "1688 dedicated Chrome ready",
+        "detail": "Chrome CDP session is reachable",
+        "level": "ok",
+    }
+
+
 def test_alibaba_open_preflight_ok_after_successful_diagnostic(monkeypatch):
     monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", True)
     monkeypatch.setattr(settings, "alibaba_app_key", "app-key")

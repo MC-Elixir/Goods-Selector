@@ -24,5 +24,19 @@ jobs:
       - name: Ruff lint
         run: ruff check .
 
+      - name: Mypy type check
+        run: mypy matchers/ pipeline/ analyzers/ --ignore-missing-imports
+
       - name: Pytest
         run: pytest tests/ -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t amazon-selector:test .
+
+      - name: Validate docker-compose config
+        run: docker compose config --quiet

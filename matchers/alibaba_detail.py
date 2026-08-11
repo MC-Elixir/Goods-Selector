@@ -101,7 +101,7 @@ def parse_1688_offer_detail(raw: str | dict[str, Any]) -> dict[str, Any]:
     customization = _first_present(data, "supportCustom", "customization", "isCustomized")
     package_quantity = spec.pack_count
     if category_profile and category_profile.numeric.get("piece_count") is not None:
-        package_quantity = int(category_profile.numeric["piece_count"])
+        package_quantity = int(category_profile.numeric["piece_count"])  # type: ignore[arg-type]
     product_type = None
     function = None
     if category_profile:
@@ -259,7 +259,7 @@ def apply_1688_detail_to_supplier(supplier: SupplierDTO, raw: str | dict[str, An
                 "patio_umbrellas_shade": "户外遮阳",
             }[profile.category_id])
             if profile.numeric.get("piece_count") is not None:
-                detail.setdefault("package_quantity", int(profile.numeric["piece_count"]))
+                detail.setdefault("package_quantity", int(profile.numeric["piece_count"]))  # type: ignore[arg-type]
     if not isinstance(detail.get("factory_evidence"), dict):
         detail["factory_evidence"] = {
             key: detail.get(key)
