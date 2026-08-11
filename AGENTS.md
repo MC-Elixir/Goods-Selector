@@ -81,3 +81,14 @@ http://127.0.0.1:8765
 `python main.py agent-web` remains available only for local debugging fallback.
 
 The UI can launch new sourcing runs, show preflight health, read previous product selection exports, search candidates, download Excel files, and save product selections to `data/agent_saved_items.json`.
+
+## Cursor Cloud specific instructions
+
+This environment runs the project directly on the VM (not via Docker). Standard commands live in `README.md` / `CLAUDE.md`; the notes below only capture non-obvious, durable caveats.
+
+- Python runs in a `.venv` virtualenv at the repo root. Run everything through it, e.g. `.venv/bin/python main.py ...`, `.venv/bin/python -m pytest tests/`, `.venv/bin/python -m benchmarks.evaluate_target_contract`. The startup update script keeps `.venv` in sync with `requirements.txt`.
+- System-level dependencies are baked into the environment image (not reinstalled by the update script): `python3.12-venv`, `python3-dev`, and the Playwright/Chromium runtime libraries (`playwright install-deps chromium`, which needs root). Reinstall these with `sudo apt-get install` only if a fresh base VM is ever missing them.
+- Two Chromium engines are used and both are installed as browser binaries (no root needed): Playwright Chromium (1688 matcher) via `.venv/bin/python -m playwright install chromium`, and patchright Chromium (the default Scrapling Amazon scraper) via `.venv/bin/patchright install chromium`. If a run errors with "Executable doesn't exist at .../chromium-*/chrome", the patchright browser is what is missing.
+- Automated tests: `.venv/bin/python -m pytest tests/` runs fully offline with no secrets. Two tests fail on a clean checkout because they read local-only, git-ignored files that do not exist in a fresh clone: `test_docker_deployment.py` reads `.env.example`, and `test_target_contract_benchmark.py` reads a `data/exports/candidates_*.json` fixture. These are environment/fixture gaps, not code regressions.
+- Live sourcing: the Amazon BSR crawl (pipeline stage 1) works with no API key or cookies. The 1688 supplier-match stage needs user secrets — `PPIO_API_KEY` (or `ANTHROPIC_API_KEY`) for vision keywords plus `data/1688_cookies.json` — otherwise it returns 0 candidates. Image-based 1688 search without cookies hits a TMD captcha, which opens a ~900s circuit-breaker cooldown that also blocks later runs; `smoke-run --allow-mock` does not bypass that captcha block.
+- Fully-offline end-to-end core action (no secrets): the Market Research / seller-shortlist feature. Place a SellerSprite competitor export CSV under `data/imports/` and run `.venv/bin/python main.py seller-research --file <name>.csv --category patio_heater --no-ai`, or use the WebUI "Market Research" tab. It produces a ranked shortlist plus Excel/JSON in `data/exports/`.
