@@ -19,6 +19,13 @@ PROFILE_SOURCE = PROJECT_ROOT / "deployment" / "hermes" / "amazon-selector-profi
 PROFILE_NAME = "amazon-selector-client"
 MIN_HERMES_VERSION = (0, 20, 0)
 MAX_HERMES_VERSION = (0, 21, 0)
+RUNTIME_DEFAULTS = {
+    "DATABASE_URL": "sqlite:///data/amazon_selector.db",
+    "ALIBABA_ALLOW_MOCK_SUPPLIERS": "false",
+    "ENABLE_SCRAPLING_MATCHER": "false",
+    "LOG_DIR": "data/logs",
+    "BU_CDP_HTTP": "http://host.docker.internal:9222",
+}
 
 
 def _read_env(path: Path) -> dict[str, str]:
@@ -64,18 +71,28 @@ def _update_env(path: Path, values: dict[str, str]) -> None:
     os.chmod(path, 0o600)
 
 
+def _absent_or_blank(current: dict[str, str], key: str) -> bool:
+    return not str(current.get(key) or "").strip()
+
+
 def prepare_project_env() -> dict[str, str]:
     current = _read_env(PROJECT_ENV)
+    if _absent_or_blank(current, "PPIO_API_KEY") and _absent_or_blank(current, "ANTHROPIC_API_KEY"):
+        raise SystemExit("请在 .env 填写 PPIO_API_KEY 后再安装。")
     token = current.get("SELECTOR_MCP_TOKEN") or secrets.token_urlsafe(32)
     if len(token) < 24:
         raise SystemExit("现有 SELECTOR_MCP_TOKEN 少于 24 位，请删除后重新运行或换用强随机值。")
+    runtime = {
+        key: current[key] if not _absent_or_blank(current, key) else default
+        for key, default in RUNTIME_DEFAULTS.items()
+    }
     values = {
         "SELECTOR_MCP_TOKEN": token,
         "SELECTOR_HERMES_MODEL": current.get("SELECTOR_HERMES_MODEL") or current.get("PPIO_TEXT_MODEL") or "minimax/minimax-m3",
         "SELECTOR_HERMES_MODEL_BASE_URL": current.get("SELECTOR_HERMES_MODEL_BASE_URL") or current.get("PPIO_API_BASE") or "https://api.ppio.com/openai",
         "SELECTOR_HERMES_MODEL_API_KEY": current.get("SELECTOR_HERMES_MODEL_API_KEY") or current.get("PPIO_API_KEY") or "",
     }
-    _update_env(PROJECT_ENV, values)
+    _update_env(PROJECT_ENV, {**runtime, **values})
     return values
 
 
@@ -166,14 +183,17 @@ def main() -> None:
 
     values = prepare_project_env()
     print("已准备项目配置；MCP 密钥已安全写入 .env（未显示）。")
-    if not values["SELECTOR_HERMES_MODEL_API_KEY"]:
-        print("注意：尚未配置 Hermes 文本模型密钥，请在 .env 填写 PPIO_API_KEY 或 SELECTOR_HERMES_MODEL_API_KEY。")
+    if not values["SELECTOR_HERMES_MODEL_API_KEY"] and (args.install_profile or args.start):
+        raise SystemExit("尚未配置 Hermes 文本模型密钥，请在 .env 填写 PPIO_API_KEY 或 SELECTOR_HERMES_MODEL_API_KEY。")
     if args.install_profile:
         profile_env = install_profile(values)
         print(f"Hermes profile 已安装：{PROFILE_NAME}（环境文件：{profile_env}）")
     if args.start:
         start_services()
-        print("服务已启动：操作页 http://127.0.0.1:8765/operator，MCP http://127.0.0.1:8766/mcp")
+        print(
+            "服务已启动：操作页 http://127.0.0.1:8765/operator，"
+            "一键研究 http://127.0.0.1:8765，MCP http://127.0.0.1:8766/mcp"
+        )
     if not args.install_profile and not args.start:
         print("下一步：加 --install-profile --start 完成安装和启动。")
 

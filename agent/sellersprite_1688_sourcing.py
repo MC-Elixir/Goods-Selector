@@ -136,6 +136,7 @@ def _convert_to_supplier_dtos(
         price = _parse_price(raw.get("price"))
         moq = _parse_int(raw.get("moq"))
         monthly_sales = _parse_int(raw.get("monthly_sales"))
+        repeat_buyer_rate = _parse_percentage(raw.get("repeat_buyer_rate"))
         supplier_name = str(raw.get("supplier_name") or "").strip() or None
         image_url = str(raw.get("image_url") or "").strip() or None
         is_factory_raw = raw.get("is_factory")
@@ -150,7 +151,7 @@ def _convert_to_supplier_dtos(
             base_price_cny=price,
             price_tiers=[{"qty": moq or 1, "price": price}] if price else None,
             monthly_sales=monthly_sales,
-            repeat_buyer_rate=None,
+            repeat_buyer_rate=repeat_buyer_rate,
             is_factory=is_factory,
             title_cn=title,
             # The extension finding a candidate is discovery evidence, not a
@@ -230,3 +231,13 @@ def _parse_int(value: object) -> int | None:
         return result if result > 0 else None
     except (ValueError, OverflowError):
         return None
+
+
+def _parse_percentage(value: object) -> float | None:
+    if value is None:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", str(value))
+    if not match:
+        return None
+    parsed = float(match.group(1)) / 100
+    return parsed if 0 <= parsed <= 1 else None

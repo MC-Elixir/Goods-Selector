@@ -60,6 +60,8 @@ def test_compose_uses_single_persistent_data_volume_and_local_only_port():
     assert 'profiles: ["assistant"]' in compose
     assert "127.0.0.1:8766:8766" in compose
     assert "SELECTOR_API_BASE_URL: http://amazon-selector:8765" in compose
+    assert "7897" not in compose
+    assert "HTTP_PROXY" not in compose
 
 
 def test_docs_present_docker_as_the_default_webui_runtime():

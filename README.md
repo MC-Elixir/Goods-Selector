@@ -69,17 +69,27 @@ docker compose up -d --build amazon-selector
 现有 pipeline、SQLite 和导出逻辑不变，Hermes 只负责对话和调用 19 个经过白名单审查
 的选品工具。
 
+甲方本机最小前置：
+
+1. 已安装 Docker 与 Hermes 0.20.x
+2. 在项目 `.env` 填写 **`PPIO_API_KEY`**（视觉/对话模型）
+3. 安装后在 9222 专用 Chrome 登录卖家精灵插件，并在 WebUI 完成 Amazon / 1688 登录
+
+不需要 `MJJL_API_KEY`、`KEEPA_API_KEY`、`RAINFOREST_API_KEY`。Amazon 默认走爬虫；
+卖家精灵市场分析走浏览器导出。`SELECTOR_MCP_TOKEN` 由脚本自动生成，不会打印。
+
 ```bash
-# 前提：已经按 Hermes 官方方式安装 0.20.x
+# 前提：已经按 Hermes 官方方式安装 0.20.x，并在 .env 填写 PPIO_API_KEY
 chmod +x scripts/start_hermes_client.sh
 ./scripts/start_hermes_client.sh
 ```
 
 一键脚本会准备密钥、安装 `amazon-selector-client` profile、启动 WebUI/MCP，并进入
-中文对话。人工登录、验证码或任务续跑时打开：
+中文对话。人工登录、验证码或任务续跑时打开操作页；一键研究走 WebUI 首页：
 
 ```text
 http://127.0.0.1:8765/operator
+http://127.0.0.1:8765
 ```
 
 安全边界：MCP 只监听 `127.0.0.1:8766` 并要求 Bearer Token；Hermes profile 禁用
@@ -256,7 +266,7 @@ docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -e LOG_DIR=/app/data/logs \
 
 数据持久化：`./data:/app/data` 卷挂载，SQLite 数据库、缓存、cookies、导出文件、日志都落在这里。首次启动时 entrypoint 会自动创建 `cache/`、`exports/`、`images/`、`logs/` 并跑 `init-db` 建表。
 
-环境变量：按 [部署说明](docs/DEPLOYMENT.md) 手工创建仅供本机使用、不得提交的 `.env`，至少需要 `PPIO_API_KEY`（视觉识别）。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，容器通过卷挂载读取。关键变量：`PPIO_API_KEY`（视觉识别，必需）、`KEEPA_API_KEY`/`RAINFOREST_API_KEY`（Amazon API 抓取，可选，否则走 scrapling）、`MJJL_API_KEY`（卖家精灵市场分析，可选）、`ALIBABA_DETAIL_ENRICH_LIMIT=2`（每个商品最多补全的 1688 详情候选数）、`LOG_DIR=data/logs`（日志目录）、`ALIBABA_ALLOW_MOCK_SUPPLIERS=false`（正式跑保持 `false`）。
+环境变量：按 [部署说明](docs/DEPLOYMENT.md) 手工创建仅供本机使用、不得提交的 `.env`，至少需要 `PPIO_API_KEY`（视觉识别）。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，或在 WebUI 登录卡片完成。本次交付不需要 `KEEPA_API_KEY` / `RAINFOREST_API_KEY`（不配则 Amazon 走 scrapling 爬虫）和 `MJJL_API_KEY`（市场分析走 9222 Chrome 卖家精灵插件）。关键变量：`PPIO_API_KEY`（视觉识别，必需）、`ALIBABA_DETAIL_ENRICH_LIMIT=2`（每个商品最多补全的 1688 详情候选数）、`LOG_DIR=data/logs`（日志目录）、`ALIBABA_ALLOW_MOCK_SUPPLIERS=false`（正式跑保持 `false`）。
 
 本机调试备用入口：
 

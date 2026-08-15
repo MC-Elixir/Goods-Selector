@@ -69,7 +69,11 @@ def _check_seller_sprite() -> dict[str, Any]:
             "SellerSprite API key configured but unverified",
             "Run SellerSprite ASIN check before requiring market data",
         )
-    return _warn("seller_sprite", "SellerSprite API key missing", "Set MJJL_API_KEY")
+    return _ok(
+        "seller_sprite",
+        "SellerSprite API skipped",
+        "Market analysis uses browser export; MJJL_API_KEY is optional",
+    )
 
 
 def _check_seller_sprite_browser() -> dict[str, Any]:

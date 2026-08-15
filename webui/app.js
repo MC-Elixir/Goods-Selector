@@ -371,7 +371,7 @@ const I18N = {
     "settings.capability.browserAgent": "Browser Assistant",
     "settings.capability.mock": "Mock suppliers",
     "settings.capability.scrapling": "Scrapling matcher",
-    "settings.capability.sellerSprite": "SellerSprite market data",
+    "settings.capability.sellerSprite": "SellerSprite API (optional)",
     "settings.capability.vision": "Vision model",
     "settings.configured": "Configured",
     "settings.disabled": "Disabled",
@@ -380,6 +380,7 @@ const I18N = {
     "settings.promptTitle": "Runtime Prompt",
     "settings.saveSellerSprite": "Save SellerSprite",
     "settings.sellerSpriteBase": "API base",
+    "settings.sellerSpriteOptional": "Optional; market analysis uses browser export, not MJJL_API_KEY",
     "settings.sellerSpriteAsin": "SellerSprite ASIN check",
     "settings.checkAsin": "Check ASIN",
     "settings.checkingAsin": "Checking ASIN",
@@ -787,7 +788,7 @@ const I18N = {
     "settings.capability.browserAgent": "浏览器助手",
     "settings.capability.mock": "Mock 供应商",
     "settings.capability.scrapling": "Scrapling 匹配器",
-    "settings.capability.sellerSprite": "卖家精灵市场数据",
+    "settings.capability.sellerSprite": "卖家精灵 API（可选）",
     "settings.capability.vision": "视觉模型",
     "settings.configured": "已配置",
     "settings.disabled": "已关闭",
@@ -796,6 +797,7 @@ const I18N = {
     "settings.promptTitle": "运行提示词",
     "settings.saveSellerSprite": "保存卖家精灵",
     "settings.sellerSpriteBase": "API 地址",
+    "settings.sellerSpriteOptional": "未启用 API；市场分析走浏览器导出，不需要 MJJL_API_KEY",
     "settings.sellerSpriteAsin": "卖家精灵 ASIN 检查",
     "settings.checkAsin": "检查 ASIN",
     "settings.checkingAsin": "正在检查 ASIN",
@@ -874,7 +876,7 @@ const PREFLIGHT_LABELS = {
     exports: "导出目录可写",
     "1688_circuit": "1688 熔断已清除",
     disk: "存储空间可用",
-    seller_sprite: "卖家精灵 API Key 已配置",
+    seller_sprite: "卖家精灵 API（可选，默认走浏览器导出）",
     seller_sprite_browser: "卖家精灵浏览器自动化",
   },
 };
@@ -2706,6 +2708,7 @@ function renderConfigStatus() {
       "settings.capability.sellerSprite",
       Boolean(status.seller_sprite?.configured),
       sellerSpriteDetail(status.seller_sprite),
+      !status.seller_sprite?.configured,
     ),
     capabilityCard(
       "settings.capability.vision",
@@ -2782,7 +2785,7 @@ function capabilityCard(labelKey, ok, detail, neutral = false) {
 }
 
 function sellerSpriteDetail(status) {
-  if (!status?.configured) return status?.env || "MJJL_API_KEY";
+  if (!status?.configured) return t("settings.sellerSpriteOptional");
   const cap = Number(status.max_products_per_run ?? 0);
   const keyLength = Number(status.key_length ?? 0);
   const check = status.last_check || {};

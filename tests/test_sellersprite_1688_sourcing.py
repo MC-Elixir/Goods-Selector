@@ -12,6 +12,7 @@ from agent.sellersprite_1688_sourcing import (
     _convert_to_supplier_dtos,
     _extract_offer_id,
     _parse_int,
+    _parse_percentage,
     _parse_price,
     run_sellersprite_1688_sourcing,
 )
@@ -167,6 +168,24 @@ class TestConvertToSupplierDTOs:
         dtos = _convert_to_supplier_dtos(raw, "B00Q7OAN50")
         assert len(dtos) == 5
 
+    def test_newton_card_with_real_offer_identity_is_retained(self):
+        dtos = _convert_to_supplier_dtos(
+            [{
+                "title": "水果杯304不锈钢弹跳杯",
+                "price": "16.00",
+                "moq": "一件起订",
+                "monthly_sales": "10+",
+                "repeat_buyer_rate": "67%",
+                "supplier_name": "永康市云迹工贸有限公司",
+                "offer_url": "https://detail.1688.com/offer/1048948332973.html",
+            }],
+            "B00Q7OAN50",
+        )
+
+        assert len(dtos) == 1
+        assert dtos[0].alibaba_offer_id == "1048948332973"
+        assert dtos[0].repeat_buyer_rate == 0.67
+
 
 # ============================================================
 # Parsing helper tests
@@ -198,6 +217,16 @@ class TestParseHelpers:
     ])
     def test_parse_int(self, value, expected):
         assert _parse_int(value) == expected
+
+    @pytest.mark.parametrize("value,expected", [
+        ("67%", 0.67),
+        ("4.5%", 0.045),
+        ("-", None),
+        (None, None),
+        ("120%", None),
+    ])
+    def test_parse_percentage(self, value, expected):
+        assert _parse_percentage(value) == expected
 
     @pytest.mark.parametrize("url,expected", [
         ("https://detail.1688.com/offer/123456789.html", "123456789"),
@@ -358,3 +387,14 @@ class TestSource1688SuppliersMethod:
         )
         with pytest.raises(SellerSpriteWorkflowError, match="EXTENSION_UNAVAILABLE"):
             session.source_1688_suppliers("B00Q7OAN50")
+
+    def test_waits_for_attached_card_when_result_is_below_fold(self, monkeypatch):
+        session = PlaywrightSellerSpriteSession(
+            profile=_sourcing_profile(),
+            download_dir="/tmp",
+            page=object(),
+        )
+        locator = FakeLocator(count=1)
+        monkeypatch.setattr(session, "_locator", lambda _name: locator)
+
+        assert session._wait_until_attached("sourcing_1688_results") is True

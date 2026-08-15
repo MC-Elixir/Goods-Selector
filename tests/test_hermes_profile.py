@@ -37,3 +37,6 @@ def test_profile_prompt_requires_confirmation_and_no_mock():
     assert "confirm=true" in soul
     assert "No-Mock" in soul
     assert "mcp__amazon_selector__selector_check_environment" in soul
+    assert "MJJL_API_KEY" in soul
+    assert "浏览器导出" in soul
+    assert "不要向用户索要" in soul

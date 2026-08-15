@@ -79,6 +79,16 @@ def test_webui_renders_recent_job_events():
     assert ".job-events" in styles
 
 
+def test_webui_treats_sellersprite_api_as_optional():
+    app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
+
+    assert "settings.sellerSpriteOptional" in app
+    assert "!status.seller_sprite?.configured" in app
+    assert "SellerSprite API (optional)" in app
+    assert "卖家精灵 API（可选）" in app
+    assert "market analysis uses browser export" in app
+
+
 def test_webui_exposes_browser_assistant_panel():
     index = (ROOT / "webui" / "index.html").read_text(encoding="utf-8")
     app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")

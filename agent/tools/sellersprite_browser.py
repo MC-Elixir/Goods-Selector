@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from time import monotonic
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -29,6 +30,7 @@ from agent.tools.sellersprite_importer import (
 )
 
 _AMAZON_US_HOSTS = frozenset({"amazon.com", "www.amazon.com"})
+_SOURCING_1688_HOSTS = frozenset({"aibuy.1688.com"})
 _ASIN_PATH_RE = re.compile(r"^/dp/(?P<asin>[A-Z0-9]{10})(?:/|$)", re.IGNORECASE)
 _HUMAN_TERMINAL_LOCATORS = (
     ("captcha", "CAPTCHA"),
@@ -56,7 +58,7 @@ _LOCATOR_PREFIXES = frozenset(
 # JavaScript executed inside each 1688 supplier card element to extract
 # structured data.  Uses defensive accessors so missing sub-elements yield
 # null rather than throwing.
-_CARD_EXTRACT_JS = """
+_CARD_EXTRACT_JS = r"""
 (el) => {
     const text = (sel) => {
         const node = el.querySelector(sel);
@@ -66,6 +68,34 @@ _CARD_EXTRACT_JS = """
         const node = el.querySelector(sel);
         return node ? (node.getAttribute(name) || '') : '';
     };
+    const labeledValue = (label) => {
+        for (const row of el.querySelectorAll('[class*="attrItem"], [class*="attribute"]')) {
+            const labelNode = row.querySelector('[class*="attrLabel"], [class*="label"]');
+            if ((labelNode?.textContent || '').trim() !== label) continue;
+            const valueNode = row.querySelector('[class*="attrValue"], [class*="value"]');
+            return (valueNode?.textContent || '').trim();
+        }
+        return '';
+    };
+    // The 1688 Newton page renders a result without an anchor in the public
+    // markup. Its already-rendered React data is a fallback only; Python
+    // still validates the returned offer URL before accepting a candidate.
+    const reactCardData = () => {
+        try {
+            const fiberKey = Object.keys(el).find((key) => key.startsWith('__reactFiber$'));
+            let fiber = fiberKey ? el[fiberKey] : null;
+            for (let level = 0; fiber && level < 6; level += 1, fiber = fiber.return) {
+                const data = fiber.memoizedProps?.data;
+                if (data && typeof data === 'object' && (data.offerId || data.link || data.title)) {
+                    return data;
+                }
+            }
+        } catch (_) {
+            // A different renderer simply falls back to the public DOM.
+        }
+        return {};
+    };
+    const cardData = reactCardData();
     const link = el.querySelector('a[href*="1688.com/offer/"], a[href*="detail.1688.com"]');
     const img = el.querySelector('img');
     const body = (el.textContent || '').trim();
@@ -79,13 +109,19 @@ _CARD_EXTRACT_JS = """
     return {
         title: text('.title, .offer-title, [class*="title"]')
             || (link ? (link.textContent || '').trim() : '')
+            || (cardData.title || '')
             || body.slice(0, 120),
-        price: text('.price, .offer-price, [class*="price"]'),
-        moq: text('.moq, .min-order, [class*="moq"], [class*="min-order"]'),
-        monthly_sales: text('.sales, .monthly-sales, [class*="sales"], [class*="deal"]'),
-        supplier_name: text('.company, .supplier-name, [class*="company"], [class*="supplier"]'),
-        offer_url: link ? link.href : '',
-        image_url: img ? (img.src || img.getAttribute('data-src') || '') : '',
+        price: text('.price, .offer-price, [class*="price"]') || (cardData.price || ''),
+        moq: text('.moq, .min-order, [class*="moq"], [class*="min-order"]')
+            || ((body.match(/(\d+)\s*件起订/) || [])[1] || '')
+            || (body.includes('一件起订') ? '1' : ''),
+        monthly_sales: text('.sales, .monthly-sales, [class*="sales"], [class*="deal"], [class*="sold"]')
+            || (cardData.soldText || ''),
+        repeat_buyer_rate: labeledValue('回头率:') || (cardData.repurchaseRate || ''),
+        supplier_name: text('.company, .supplier-name, [class*="company"], [class*="supplier"]')
+            || (cardData.companyName || ''),
+        offer_url: link ? link.href : (cardData.link || ''),
+        image_url: img ? (img.src || img.getAttribute('data-src') || '') : (cardData.imageUrl || ''),
         is_factory: factory ? true : (trader ? false : null),
     };
 }
@@ -425,7 +461,7 @@ class PlaywrightSellerSpriteSession:
         return self.wait_for_browser_download(snapshot)
 
     def source_1688_suppliers(self, asin: str) -> list[dict[str, Any]]:
-        """Click the extension's 1688 sourcing tab and extract supplier cards from DOM.
+        """Open SellerSprite's 1688 sourcing page and extract supplier cards.
 
         Returns a list of raw dicts, one per visible 1688 supplier card.  The
         caller is responsible for converting these into SupplierDTO objects.
@@ -442,14 +478,24 @@ class PlaywrightSellerSpriteSession:
         if getattr(self.profile, "sourcing_1688_login", "") and self._is_visible("sourcing_1688_login"):
             raise SellerSpriteWorkflowError("SELLERSPRITE_LOGIN_REQUIRED")
 
-        # Click the 1688 sourcing navigation tab.
+        # SellerSprite injects the product quick-view only when the Amazon
+        # product section enters the viewport. This is DOM-based, not a pixel
+        # coordinate, so browser zoom and resolution do not change the path.
+        self._reveal_sourcing_1688_nav()
+        known_pages = self._attached_pages()
+
+        # This SellerSprite version opens the 1688 Newton result in a new tab.
+        # Existing profiles that render in-place remain supported.
         self._click_required("sourcing_1688_nav")
+        self._switch_to_sourcing_1688_page(known_pages)
         self._raise_if_human_terminal()
         self._ensure_not_cancelled()
 
-        # Wait for the results container to become visible.
+        # A Newton card may render below the current viewport. Wait for its
+        # DOM attachment instead of visibility so zoom and viewport height do
+        # not turn a loaded result into a false extension failure.
         results_timeout = max(int(self.page_timeout_seconds), int(self.export_timeout_seconds))
-        if not self._wait_until_visible("sourcing_1688_results", timeout_seconds=results_timeout):
+        if not self._wait_until_attached("sourcing_1688_results", timeout_seconds=results_timeout):
             self._raise_if_human_terminal()
             if getattr(self.profile, "sourcing_1688_login", "") and self._is_visible("sourcing_1688_login"):
                 raise SellerSpriteWorkflowError("SELLERSPRITE_LOGIN_REQUIRED")
@@ -485,6 +531,67 @@ class PlaywrightSellerSpriteSession:
                 continue
         self._ensure_not_cancelled()
         return suppliers
+
+    def _reveal_sourcing_1688_nav(self) -> None:
+        """Bring the lazily injected Amazon product quick-view into the DOM."""
+        self._ensure_not_cancelled()
+        if self._is_visible("sourcing_1688_nav"):
+            return
+        try:
+            self.page.locator("#productTitle").scroll_into_view_if_needed(
+                timeout=self.page_timeout_seconds * 1000
+            )
+        except Exception:
+            try:
+                self.page.evaluate("window.scrollTo(0, 900)")
+            except Exception as exc:
+                raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE") from exc
+        self._ensure_not_cancelled()
+        if not self._wait_until_visible(
+            "sourcing_1688_nav",
+            timeout_seconds=min(int(self.page_timeout_seconds), 15),
+        ):
+            self._raise_if_human_terminal()
+            raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+
+    def _attached_pages(self) -> tuple[Any, ...]:
+        if self._browser is None:
+            return (self.page,)
+        return tuple(
+            page
+            for context in self._browser.contexts
+            for page in context.pages
+        )
+
+    def _switch_to_sourcing_1688_page(self, known_pages: tuple[Any, ...]) -> None:
+        """Switch to the new SellerSprite 1688 tab when the extension opens one."""
+        if _is_sourcing_1688_url(getattr(self.page, "url", "")):
+            return
+        deadline = monotonic() + min(
+            max(int(self.page_timeout_seconds), int(self.export_timeout_seconds)),
+            30,
+        )
+        while monotonic() < deadline:
+            self._ensure_not_cancelled()
+            for candidate in self._attached_pages():
+                if candidate in known_pages or not _is_sourcing_1688_url(getattr(candidate, "url", "")):
+                    continue
+                self._page = candidate
+                try:
+                    candidate.wait_for_load_state(
+                        "domcontentloaded",
+                        timeout=self.page_timeout_seconds * 1000,
+                    )
+                except Exception:
+                    # The reviewed results locator below, rather than navigation
+                    # alone, remains the authority for result readiness.
+                    pass
+                return
+            try:
+                self.page.wait_for_timeout(250)
+            except Exception as exc:
+                raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE") from exc
+        raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
 
     def wait_for_browser_download(self, snapshot: DownloadSnapshot) -> DownloadedArtifact:
         self._ensure_not_cancelled()
@@ -629,6 +736,33 @@ class PlaywrightSellerSpriteSession:
         self._ensure_not_cancelled()
         return visible
 
+    def _wait_until_attached(
+        self,
+        locator_name: str,
+        *,
+        timeout_seconds: int | None = None,
+    ) -> bool:
+        """Wait for one reviewed locator to be present, even below the fold."""
+        self._ensure_not_cancelled()
+        try:
+            locator = self._locator(locator_name)
+            first = getattr(locator, "first", locator)
+            wait_for = getattr(locator, "wait_for", None)
+            if callable(wait_for):
+                getattr(first, "wait_for", wait_for)(
+                    state="attached",
+                    timeout=(
+                        int(timeout_seconds or self.page_timeout_seconds) * 1000
+                    ),
+                )
+            attached = locator.count() > 0
+        except SellerSpriteWorkflowError:
+            raise
+        except Exception:
+            return False
+        self._ensure_not_cancelled()
+        return attached
+
     def _locator(self, locator_name: str) -> Any:
         # The profile validates this locator's syntax at load time.  Passing it
         # verbatim preserves its explicit selector engine and forbids generated
@@ -711,6 +845,16 @@ def _page_asin_matches(page: Any, asin: str) -> bool:
     host = (parsed.hostname or "").lower()
     match = _ASIN_PATH_RE.match(parsed.path)
     return bool(match and host in _AMAZON_US_HOSTS and match.group("asin").upper() == asin)
+
+
+def _is_sourcing_1688_url(url: object) -> bool:
+    if not isinstance(url, str) or not url:
+        return False
+    try:
+        hostname = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return hostname in _SOURCING_1688_HOSTS
 
 
 def _profile_is_valid(profile: SellerSpriteLocatorProfile) -> bool:

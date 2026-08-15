@@ -23,7 +23,57 @@ def test_prepare_project_env_generates_token_and_derives_model(monkeypatch, tmp_
     assert written["SELECTOR_HERMES_MODEL"] == "test/model"
     assert written["SELECTOR_HERMES_MODEL_BASE_URL"] == "https://example.test/openai"
     assert written["SELECTOR_HERMES_MODEL_API_KEY"] == "test-model-key"
+    assert written["DATABASE_URL"] == "sqlite:///data/amazon_selector.db"
+    assert written["ALIBABA_ALLOW_MOCK_SUPPLIERS"] == "false"
+    assert written["ENABLE_SCRAPLING_MATCHER"] == "false"
+    assert written["LOG_DIR"] == "data/logs"
+    assert written["BU_CDP_HTTP"] == "http://host.docker.internal:9222"
+    assert "MJJL_API_KEY" not in written
+    assert "KEEPA_API_KEY" not in written
+    assert "RAINFOREST_API_KEY" not in written
     assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
+
+
+def test_prepare_project_env_requires_vision_key(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text("LOG_LEVEL=INFO\n", encoding="utf-8")
+    monkeypatch.setattr(setup, "PROJECT_ENV", env_path)
+
+    try:
+        setup.prepare_project_env()
+    except SystemExit as exc:
+        assert "PPIO_API_KEY" in str(exc)
+    else:
+        raise AssertionError("missing vision key should abort install")
+
+
+def test_prepare_project_env_keeps_existing_runtime_values(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "PPIO_API_KEY=test-model-key\n"
+        "DATABASE_URL=sqlite:///custom.db\n"
+        "BU_CDP_HTTP=http://127.0.0.1:9222\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(setup, "PROJECT_ENV", env_path)
+
+    setup.prepare_project_env()
+    written = setup._read_env(env_path)
+
+    assert written["DATABASE_URL"] == "sqlite:///custom.db"
+    assert written["BU_CDP_HTTP"] == "http://127.0.0.1:9222"
+    assert "MJJL_API_KEY" not in written
+
+
+def test_start_hermes_client_script_checks_prereqs_and_prints_local_urls():
+    script = Path("scripts/start_hermes_client.sh").read_text(encoding="utf-8")
+
+    assert "command -v docker" in script
+    assert "command -v hermes" in script
+    assert "http://127.0.0.1:8765/operator" in script
+    assert "http://127.0.0.1:8765" in script
+    assert "http://127.0.0.1:8766/mcp" in script
+    assert "SELECTOR_MCP_TOKEN" not in script
 
 
 def test_install_profile_uses_local_distribution_and_writes_profile_env(monkeypatch, tmp_path):

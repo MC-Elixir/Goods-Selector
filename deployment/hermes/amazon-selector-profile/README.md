@@ -7,8 +7,9 @@ Agent 均关闭。
 
 ## 安装与启动
 
-先安装官方 Hermes Agent 0.20.x，并在项目 `.env` 中配置好现有选品服务和文本模型。
-然后从项目根目录执行：
+先安装 Docker 与官方 Hermes Agent 0.20.x，并在项目 `.env` 中填写 **`PPIO_API_KEY`**。
+当前交付不要求 `MJJL_API_KEY`、Keepa 或 Rainforest：Amazon 走爬虫，市场分析走
+9222 专用 Chrome + 卖家精灵插件。然后从项目根目录执行：
 
 ```bash
 ./scripts/start_hermes_client.sh
@@ -29,10 +30,11 @@ python scripts/setup_hermes_client.py --install-profile --start
 amazon-selector-client chat
 ```
 
-人工登录、验证码与续跑统一打开：
+人工登录、验证码与续跑统一打开操作页；一键研究走 WebUI 首页：
 
 ```text
 http://127.0.0.1:8765/operator
+http://127.0.0.1:8765
 ```
 
 ## 验收
@@ -45,9 +47,9 @@ docker compose --profile assistant ps
 amazon-selector-client chat
 ```
 
-在对话中依次测试“检查选品环境”“列出支持类目”。再要求开始一个 1 件商品的小任务：
-Hermes 应先复述影响并请求确认，未确认时不得启动；确认后可启动，重复相同 request_id
-不得创建第二个任务。
+在对话中依次测试“检查选品环境”“列出支持类目”。缺少 `MJJL_API_KEY` 不算环境失败。
+再要求开始一个 1 件商品的小任务：Hermes 应先复述影响并请求确认，未确认时不得启动；
+确认后可启动，重复相同 request_id 不得创建第二个任务。
 
 ## 交付边界
 
