@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
+import pytest
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -136,7 +138,7 @@ def test_category_source_mode_keeps_existing_bsr_crawler(monkeypatch, tmp_path):
         assert run.api_calls["source_query"] == "Home & Kitchen"
 
 
-def test_scored_research_seeds_skip_amazon_crawlers(monkeypatch, tmp_path):
+def test_formal_pipeline_rejects_seed_products(monkeypatch, tmp_path):
     engine = create_engine(
         f"sqlite:///{tmp_path / 'research-seed.db'}",
         future=True,
@@ -160,7 +162,8 @@ def test_scored_research_seeds_skip_amazon_crawlers(monkeypatch, tmp_path):
     monkeypatch.setattr("matchers.match_suppliers", lambda product: [])
     monkeypatch.setattr("pipeline.orchestrator.rank_candidates", lambda records, top_n: [])
 
-    run_id = run_pipeline(
+    with pytest.raises(ValueError, match="Amazon crawler discovery is mandatory"):
+        run_pipeline(
         category="Home & Kitchen",
         source_mode="category",
         limit=1,
@@ -173,18 +176,7 @@ def test_scored_research_seeds_skip_amazon_crawlers(monkeypatch, tmp_path):
             "price": 39.99,
             "raw_data": {"research_fit_score": 91.0},
         }],
-    )
-
-    with temp_session_scope() as session:
-        run = session.get(RunLog, run_id)
-        assert run.products_crawled == 1
-        assert run.api_calls["source_origin"] == "seller_research"
-        source = session.query(ExecutionNode).filter_by(
-            run_id=run_id, scope_key="run", stage="source_discovery"
-        ).one()
-        product = source.output_snapshot["products"][0]
-        assert product["asin"] == "B000000777"
-        assert product["raw_data"]["source_mode"] == "seller_research"
+        )
 
 
 def test_keyword_captcha_becomes_human_required_with_sanitized_diagnostics(monkeypatch, tmp_path):

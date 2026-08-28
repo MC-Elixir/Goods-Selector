@@ -42,7 +42,7 @@ def test_prepare_project_env_requires_vision_key(monkeypatch, tmp_path):
     try:
         setup.prepare_project_env()
     except SystemExit as exc:
-        assert "PPIO_API_KEY" in str(exc)
+        assert "ALIYUN_TOKEN_PLAN_API_KEY" in str(exc)
     else:
         raise AssertionError("missing vision key should abort install")
 
@@ -63,6 +63,23 @@ def test_prepare_project_env_keeps_existing_runtime_values(monkeypatch, tmp_path
     assert written["DATABASE_URL"] == "sqlite:///custom.db"
     assert written["BU_CDP_HTTP"] == "http://127.0.0.1:9222"
     assert "MJJL_API_KEY" not in written
+
+
+def test_prepare_project_env_derives_aliyun_token_plan_for_hermes(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "ALIYUN_TOKEN_PLAN_API_KEY=sk-sp-secret\n"
+        "ALIYUN_TOKEN_PLAN_API_BASE=https://token-plan.example/compatible-mode/v1\n"
+        "ALIYUN_TOKEN_PLAN_TEXT_MODEL=qwen-plan\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(setup, "PROJECT_ENV", env_path)
+
+    values = setup.prepare_project_env()
+
+    assert values["SELECTOR_HERMES_MODEL"] == "qwen-plan"
+    assert values["SELECTOR_HERMES_MODEL_BASE_URL"] == "https://token-plan.example/compatible-mode/v1"
+    assert values["SELECTOR_HERMES_MODEL_API_KEY"] == "sk-sp-secret"
 
 
 def test_start_hermes_client_script_checks_prereqs_and_prints_local_urls():

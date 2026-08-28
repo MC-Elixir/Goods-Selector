@@ -75,10 +75,44 @@ def _absent_or_blank(current: dict[str, str], key: str) -> bool:
     return not str(current.get(key) or "").strip()
 
 
+def _resolve_openai_model_env(current: dict[str, str]) -> dict[str, str]:
+    requested = str(current.get("MODEL_API_PROVIDER") or "auto").strip().lower().replace("-", "_")
+    candidates = {
+        "aliyun_token_plan": (
+            "ALIYUN_TOKEN_PLAN_API_KEY", "ALIYUN_TOKEN_PLAN_API_BASE",
+            "ALIYUN_TOKEN_PLAN_TEXT_MODEL",
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "qwen-plus",
+        ),
+        "aliyun": (
+            "ALIYUN_API_KEY", "ALIYUN_API_BASE", "ALIYUN_TEXT_MODEL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus",
+        ),
+        "ppio": (
+            "PPIO_API_KEY", "PPIO_API_BASE", "PPIO_TEXT_MODEL",
+            "https://api.ppio.com/openai", "minimax/minimax-m3",
+        ),
+    }
+    order = [requested] if requested in candidates else ["aliyun_token_plan", "aliyun", "ppio"]
+    for provider in order:
+        key_name, base_name, model_name, default_base, default_model = candidates[provider]
+        key = str(current.get(key_name) or "").strip()
+        if key:
+            return {
+                "provider": provider,
+                "key": key,
+                "base_url": str(current.get(base_name) or default_base).strip(),
+                "model": str(current.get(model_name) or default_model).strip(),
+            }
+    return {"provider": "none", "key": "", "base_url": "", "model": ""}
+
+
 def prepare_project_env() -> dict[str, str]:
     current = _read_env(PROJECT_ENV)
-    if _absent_or_blank(current, "PPIO_API_KEY") and _absent_or_blank(current, "ANTHROPIC_API_KEY"):
-        raise SystemExit("请在 .env 填写 PPIO_API_KEY 后再安装。")
+    model_api = _resolve_openai_model_env(current)
+    if model_api["provider"] == "none" and _absent_or_blank(current, "ANTHROPIC_API_KEY"):
+        raise SystemExit(
+            "请在 .env 填写 ALIYUN_TOKEN_PLAN_API_KEY、ALIYUN_API_KEY、PPIO_API_KEY 或 ANTHROPIC_API_KEY。"
+        )
     token = current.get("SELECTOR_MCP_TOKEN") or secrets.token_urlsafe(32)
     if len(token) < 24:
         raise SystemExit("现有 SELECTOR_MCP_TOKEN 少于 24 位，请删除后重新运行或换用强随机值。")
@@ -88,9 +122,9 @@ def prepare_project_env() -> dict[str, str]:
     }
     values = {
         "SELECTOR_MCP_TOKEN": token,
-        "SELECTOR_HERMES_MODEL": current.get("SELECTOR_HERMES_MODEL") or current.get("PPIO_TEXT_MODEL") or "minimax/minimax-m3",
-        "SELECTOR_HERMES_MODEL_BASE_URL": current.get("SELECTOR_HERMES_MODEL_BASE_URL") or current.get("PPIO_API_BASE") or "https://api.ppio.com/openai",
-        "SELECTOR_HERMES_MODEL_API_KEY": current.get("SELECTOR_HERMES_MODEL_API_KEY") or current.get("PPIO_API_KEY") or "",
+        "SELECTOR_HERMES_MODEL": current.get("SELECTOR_HERMES_MODEL") or model_api["model"],
+        "SELECTOR_HERMES_MODEL_BASE_URL": current.get("SELECTOR_HERMES_MODEL_BASE_URL") or model_api["base_url"],
+        "SELECTOR_HERMES_MODEL_API_KEY": current.get("SELECTOR_HERMES_MODEL_API_KEY") or model_api["key"],
     }
     _update_env(PROJECT_ENV, {**runtime, **values})
     return values
@@ -184,7 +218,7 @@ def main() -> None:
     values = prepare_project_env()
     print("已准备项目配置；MCP 密钥已安全写入 .env（未显示）。")
     if not values["SELECTOR_HERMES_MODEL_API_KEY"] and (args.install_profile or args.start):
-        raise SystemExit("尚未配置 Hermes 文本模型密钥，请在 .env 填写 PPIO_API_KEY 或 SELECTOR_HERMES_MODEL_API_KEY。")
+        raise SystemExit("尚未配置 Hermes 文本模型密钥，请配置阿里云、Token Plan、PPIO 或 SELECTOR_HERMES_MODEL_API_KEY。")
     if args.install_profile:
         profile_env = install_profile(values)
         print(f"Hermes profile 已安装：{PROFILE_NAME}（环境文件：{profile_env}）")

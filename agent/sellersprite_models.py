@@ -46,6 +46,8 @@ _OPTIONAL_LOCATOR_NAMES = (
     "sourcing_1688_results",
     "sourcing_1688_card",
     "sourcing_1688_login",
+    "sourcing_1688_dialog",
+    "sourcing_1688_open_site",
 )
 # The minimum locators required to run one competitor-products export.
 _COMPETITOR_REQUIRED_LOCATORS = (
@@ -147,6 +149,8 @@ class SellerSpriteLocatorProfile:
     sourcing_1688_results: str = ""
     sourcing_1688_card: str = ""
     sourcing_1688_login: str = ""
+    sourcing_1688_dialog: str = ""
+    sourcing_1688_open_site: str = ""
 
     def has_sourcing_1688_locators(self) -> bool:
         """True when the minimum locators for 1688 sourcing via extension are present."""

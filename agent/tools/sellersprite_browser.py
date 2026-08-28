@@ -31,6 +31,7 @@ from agent.tools.sellersprite_importer import (
 
 _AMAZON_US_HOSTS = frozenset({"amazon.com", "www.amazon.com"})
 _SOURCING_1688_HOSTS = frozenset({"aibuy.1688.com"})
+_OFFER_ID_RE = re.compile(r"/offer/(\d+)", re.IGNORECASE)
 _ASIN_PATH_RE = re.compile(r"^/dp/(?P<asin>[A-Z0-9]{10})(?:/|$)", re.IGNORECASE)
 _HUMAN_TERMINAL_LOCATORS = (
     ("captcha", "CAPTCHA"),
@@ -98,34 +99,93 @@ _CARD_EXTRACT_JS = r"""
     const cardData = reactCardData();
     const link = el.querySelector('a[href*="1688.com/offer/"], a[href*="detail.1688.com"]');
     const img = el.querySelector('img');
+    const wrap = el.closest('[class*="productCellWrap"]') || el.parentElement;
     const body = (el.textContent || '').trim();
+    const rowBody = ((wrap && wrap !== el ? wrap.textContent : body) || '').trim();
+    const labeledFromBody = (label, valuePattern) => {
+        const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = valuePattern || '[^\\n]+';
+        const match = body.match(new RegExp(escaped + '\\s*[:：]\\s*(' + pattern + ')'));
+        return match ? match[1].trim() : '';
+    };
+    const looksLikeCompany = (value) => /公司|厂|店|商行|工作室|集团|有限/.test(value || '');
+    const looksLikeMetric = (value) => /复购率|月销|起批|起订|揽收|退款|评分/.test(value || '');
+    const companyFromDom = [...el.querySelectorAll('.company, .supplier-name, .seller-nick, [class*="company"], [class*="supplier"]')]
+        .map((node) => (node.textContent || '').trim())
+        .find((value) => value && looksLikeCompany(value) && !looksLikeMetric(value)) || '';
     const factory = Boolean(
         el.querySelector('[class*="factory"], [class*="shili"], .icon-factory')
-        || body.includes('实力商家')
-        || body.includes('源头工厂')
-        || body.includes('生产厂家')
+        || /实力商家|源头工厂|生产厂家/.test(rowBody)
+        || /生产厂家|源头工厂|超级工厂/.test(String(cardData.gmType || ''))
+        || /超级工厂|源头工厂/.test(String(cardData.merchantIdentity || ''))
     );
-    const trader = body.includes('贸易公司') || body.includes('经销批发');
+    const trader = /贸易公司|经销批发/.test(rowBody)
+        || /贸易公司|经销批发|贸易商/.test(String(cardData.gmType || ''));
     return {
         title: text('.title, .offer-title, [class*="title"]')
             || (link ? (link.textContent || '').trim() : '')
             || (cardData.title || '')
             || body.slice(0, 120),
-        price: text('.price, .offer-price, [class*="price"]') || (cardData.price || ''),
+        price: (() => {
+            const fromDom = text('.price, .offer-price');
+            if (fromDom && /\d/.test(fromDom)) return fromDom;
+            if (cardData.price) return String(cardData.price);
+            const hashed = text('[class*="productPrice"], [class*="priceInteger"]');
+            return hashed && /\d/.test(hashed) ? hashed : '';
+        })(),
         moq: text('.moq, .min-order, [class*="moq"], [class*="min-order"]')
+            || ((body.match(/(\d+)\s*条起批/) || [])[1] || '')
             || ((body.match(/(\d+)\s*件起订/) || [])[1] || '')
-            || (body.includes('一件起订') ? '1' : ''),
-        monthly_sales: text('.sales, .monthly-sales, [class*="sales"], [class*="deal"], [class*="sold"]')
-            || (cardData.soldText || ''),
-        repeat_buyer_rate: labeledValue('回头率:') || (cardData.repurchaseRate || ''),
-        supplier_name: text('.company, .supplier-name, [class*="company"], [class*="supplier"]')
-            || (cardData.companyName || ''),
+            || (body.includes('一件起订') ? '1' : '')
+            || (cardData.quantityBegin ? String(cardData.quantityBegin) : ''),
+        monthly_sales: labeledFromBody('月销量', '[\\d,.]+\\s*万?\\+?')
+            || (cardData.soldText || '')
+            || text('.sales, .monthly-sales, [class*="sales"], [class*="deal"], [class*="sold"]'),
+        repeat_buyer_rate: labeledFromBody('复购率', '\\d+(?:\\.\\d+)?\\s*%')
+            || labeledFromBody('回头率', '\\d+(?:\\.\\d+)?\\s*%')
+            || (cardData.repurchaseRate || '')
+            || labeledValue('回头率:'),
+        supplier_name: companyFromDom || (cardData.companyName || ''),
         offer_url: link ? link.href : (cardData.link || ''),
         image_url: img ? (img.src || img.getAttribute('data-src') || '') : (cardData.imageUrl || ''),
+        gm_type: cardData.gmType || '',
+        merchant_identity: cardData.merchantIdentity || '',
+        delivery_time: cardData.deliveryTime || '',
         is_factory: factory ? true : (trader ? false : null),
     };
 }
 """
+
+
+def _raw_offer_id(raw: dict[str, Any]) -> str:
+    match = _OFFER_ID_RE.search(str(raw.get("offer_url") or ""))
+    return match.group(1) if match else ""
+
+
+def _merge_raw_sourcing_cards(
+    primary: list[dict[str, Any]],
+    secondary: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Fill empty dialog-card fields from Newton cards with the same offer id."""
+    by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for raw in primary:
+        offer_id = _raw_offer_id(raw) or f"idx:{len(order)}"
+        by_id[offer_id] = dict(raw)
+        order.append(offer_id)
+    for raw in secondary:
+        offer_id = _raw_offer_id(raw)
+        if not offer_id:
+            continue
+        if offer_id not in by_id:
+            continue
+        merged = dict(by_id[offer_id])
+        for key, value in raw.items():
+            current = merged.get(key)
+            if current in (None, "") and value not in (None, ""):
+                merged[key] = value
+        by_id[offer_id] = merged
+    return [by_id[offer_id] for offer_id in order]
 
 
 class SellerSpriteWorkflowError(RuntimeError):
@@ -227,6 +287,9 @@ class PlaywrightSellerSpriteSession:
 
     def open_amazon_product(self, asin: str) -> None:
         asin = validate_sellersprite_asin(asin)
+        if _page_asin_matches(self.page, asin):
+            self._ensure_not_cancelled()
+            return
         target = f"https://www.amazon.com/dp/{asin}"
         self._ensure_not_cancelled()
         try:
@@ -461,11 +524,12 @@ class PlaywrightSellerSpriteSession:
         return self.wait_for_browser_download(snapshot)
 
     def source_1688_suppliers(self, asin: str) -> list[dict[str, Any]]:
-        """Open SellerSprite's 1688 sourcing page and extract supplier cards.
+        """Open SellerSprite's 1688 sourcing modal and extract supplier cards.
 
-        Returns a list of raw dicts, one per visible 1688 supplier card.  The
-        caller is responsible for converting these into SupplierDTO objects.
-        Raises SellerSpriteWorkflowError on any browser-layer failure.
+        Current SellerSprite 5.x opens an in-page ``dialog-source`` modal on
+        the Amazon product page. Older layouts that open a 1688 Newton tab
+        remain a fallback. Returns raw dicts; the caller converts them into
+        SupplierDTO objects.
         """
         asin = validate_sellersprite_asin(asin)
         if not self.profile.has_sourcing_1688_locators():
@@ -474,53 +538,54 @@ class PlaywrightSellerSpriteSession:
         self._ensure_not_cancelled()
         self._raise_if_human_terminal()
 
-        # Check for 1688 login wall if the locator is configured.
         if getattr(self.profile, "sourcing_1688_login", "") and self._is_visible("sourcing_1688_login"):
             raise SellerSpriteWorkflowError("SELLERSPRITE_LOGIN_REQUIRED")
 
-        # SellerSprite injects the product quick-view only when the Amazon
-        # product section enters the viewport. This is DOM-based, not a pixel
-        # coordinate, so browser zoom and resolution do not change the path.
-        self._reveal_sourcing_1688_nav()
-        known_pages = self._attached_pages()
+        results_timeout = max(int(self.page_timeout_seconds), int(self.export_timeout_seconds))
+        if self._wait_until_attached("sourcing_1688_results", timeout_seconds=min(2, results_timeout)):
+            return self._extract_sourcing_1688_cards()
 
-        # This SellerSprite version opens the 1688 Newton result in a new tab.
-        # Existing profiles that render in-place remain supported.
-        self._click_required("sourcing_1688_nav")
+        dialog_open = bool(
+            getattr(self.profile, "sourcing_1688_dialog", "")
+            and self._is_visible("sourcing_1688_dialog")
+        )
+        known_pages = self._attached_pages()
+        if not dialog_open:
+            self._reveal_sourcing_1688_nav()
+            known_pages = self._attached_pages()
+            self._click_required("sourcing_1688_nav")
+            self._raise_if_human_terminal()
+            self._ensure_not_cancelled()
+
+        if self._wait_until_attached("sourcing_1688_results", timeout_seconds=results_timeout):
+            return self._extract_sourcing_1688_cards()
+
         self._switch_to_sourcing_1688_page(known_pages)
         self._raise_if_human_terminal()
         self._ensure_not_cancelled()
-
-        # A Newton card may render below the current viewport. Wait for its
-        # DOM attachment instead of visibility so zoom and viewport height do
-        # not turn a loaded result into a false extension failure.
-        results_timeout = max(int(self.page_timeout_seconds), int(self.export_timeout_seconds))
         if not self._wait_until_attached("sourcing_1688_results", timeout_seconds=results_timeout):
             self._raise_if_human_terminal()
             if getattr(self.profile, "sourcing_1688_login", "") and self._is_visible("sourcing_1688_login"):
                 raise SellerSpriteWorkflowError("SELLERSPRITE_LOGIN_REQUIRED")
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
-        self._ensure_not_cancelled()
+        return self._extract_sourcing_1688_cards()
 
-        # Allow the result cards to render asynchronously.
+    def _extract_sourcing_1688_cards(self) -> list[dict[str, Any]]:
+        self._ensure_not_cancelled()
         try:
             self.page.wait_for_timeout(2000)
         except Exception:
             pass
         self._ensure_not_cancelled()
-
-        # Extract structured data from all visible supplier cards via JS.
         try:
             cards = self._locator("sourcing_1688_card")
             count = cards.count()
         except Exception as exc:
             raise SellerSpriteWorkflowError("EXPORT_FAILED") from exc
-
         if count == 0:
             return []
-
         suppliers: list[dict[str, Any]] = []
-        for i in range(min(count, 30)):  # Cap at 30 cards to stay bounded.
+        for i in range(min(count, 30)):
             self._ensure_not_cancelled()
             try:
                 card = cards.nth(i)
@@ -549,7 +614,7 @@ class PlaywrightSellerSpriteSession:
         self._ensure_not_cancelled()
         if not self._wait_until_visible(
             "sourcing_1688_nav",
-            timeout_seconds=min(int(self.page_timeout_seconds), 15),
+            timeout_seconds=int(self.page_timeout_seconds),
         ):
             self._raise_if_human_terminal()
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
@@ -564,34 +629,57 @@ class PlaywrightSellerSpriteSession:
         )
 
     def _switch_to_sourcing_1688_page(self, known_pages: tuple[Any, ...]) -> None:
-        """Switch to the new SellerSprite 1688 tab when the extension opens one."""
+        """Switch to the SellerSprite 1688 Newton tab.
+
+        Prefer a newly opened tab. If the extension reuses an already-open
+        Newton page, wait briefly for a new tab then fall back to the newest
+        existing one instead of treating that reuse as an extension failure.
+        """
         if _is_sourcing_1688_url(getattr(self.page, "url", "")):
             return
-        deadline = monotonic() + min(
+        known_newton = any(
+            _is_sourcing_1688_url(getattr(page, "url", "")) for page in known_pages
+        )
+        wait_seconds = min(
             max(int(self.page_timeout_seconds), int(self.export_timeout_seconds)),
             30,
         )
+        if known_newton:
+            wait_seconds = min(wait_seconds, 3)
+        deadline = monotonic() + wait_seconds
+        existing: list[Any] = []
         while monotonic() < deadline:
             self._ensure_not_cancelled()
-            for candidate in self._attached_pages():
-                if candidate in known_pages or not _is_sourcing_1688_url(getattr(candidate, "url", "")):
+            existing = [
+                candidate
+                for candidate in self._attached_pages()
+                if _is_sourcing_1688_url(getattr(candidate, "url", ""))
+            ]
+            for candidate in existing:
+                if candidate in known_pages:
                     continue
-                self._page = candidate
-                try:
-                    candidate.wait_for_load_state(
-                        "domcontentloaded",
-                        timeout=self.page_timeout_seconds * 1000,
-                    )
-                except Exception:
-                    # The reviewed results locator below, rather than navigation
-                    # alone, remains the authority for result readiness.
-                    pass
+                self._adopt_sourcing_1688_page(candidate)
                 return
             try:
                 self.page.wait_for_timeout(250)
             except Exception as exc:
                 raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE") from exc
+        if existing:
+            self._adopt_sourcing_1688_page(existing[-1])
+            return
         raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
+
+    def _adopt_sourcing_1688_page(self, candidate: Any) -> None:
+        self._page = candidate
+        try:
+            candidate.wait_for_load_state(
+                "domcontentloaded",
+                timeout=self.page_timeout_seconds * 1000,
+            )
+        except Exception:
+            # The reviewed results locator below, rather than navigation
+            # alone, remains the authority for result readiness.
+            pass
 
     def wait_for_browser_download(self, snapshot: DownloadSnapshot) -> DownloadedArtifact:
         self._ensure_not_cancelled()
@@ -654,7 +742,7 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._ensure_not_cancelled()
         try:
-            self._locator(locator_name).click(timeout=self.page_timeout_seconds * 1000)
+            self._target_locator(locator_name).click(timeout=self.page_timeout_seconds * 1000)
         except SellerSpriteWorkflowError:
             raise
         except Exception as exc:
@@ -668,7 +756,7 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._ensure_not_cancelled()
         try:
-            self._locator(locator_name).hover(timeout=self.page_timeout_seconds * 1000)
+            self._target_locator(locator_name).hover(timeout=self.page_timeout_seconds * 1000)
         except SellerSpriteWorkflowError:
             raise
         except Exception as exc:
@@ -682,7 +770,7 @@ class PlaywrightSellerSpriteSession:
             raise SellerSpriteWorkflowError("EXTENSION_UNAVAILABLE")
         self._ensure_not_cancelled()
         try:
-            self._locator(locator_name).fill(
+            self._target_locator(locator_name).fill(
                 value,
                 timeout=self.page_timeout_seconds * 1000,
             )
@@ -702,7 +790,7 @@ class PlaywrightSellerSpriteSession:
     def _is_visible(self, locator_name: str) -> bool:
         self._ensure_not_cancelled()
         try:
-            visible = bool(self._locator(locator_name).is_visible())
+            visible = bool(self._target_locator(locator_name).is_visible())
         except SellerSpriteWorkflowError:
             raise
         except Exception:
@@ -719,7 +807,7 @@ class PlaywrightSellerSpriteSession:
         """Wait for one reviewed locator without discovering alternatives."""
         self._ensure_not_cancelled()
         try:
-            locator = self._locator(locator_name)
+            locator = self._target_locator(locator_name)
             wait_for = getattr(locator, "wait_for", None)
             if callable(wait_for):
                 wait_for(
@@ -762,6 +850,11 @@ class PlaywrightSellerSpriteSession:
             return False
         self._ensure_not_cancelled()
         return attached
+
+    def _target_locator(self, locator_name: str) -> Any:
+        """Use the first match so duplicate extension nodes do not fail strict mode."""
+        locator = self._locator(locator_name)
+        return getattr(locator, "first", locator)
 
     def _locator(self, locator_name: str) -> Any:
         # The profile validates this locator's syntax at load time.  Passing it

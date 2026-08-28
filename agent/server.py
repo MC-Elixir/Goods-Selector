@@ -271,6 +271,7 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                     str(body.get("key") or ""),
                     str(body.get("model") or ""),
                     base_url=body.get("base_url"),
+                    provider=body.get("provider"),
                 )
                 return self._json(result)
             if parsed.path == "/api/config/seller-sprite/asin-check":
@@ -519,13 +520,11 @@ def _save_trial_feedback_for_job(
     if config.get("workflow_mode") != "full_research":
         raise ValueError("feedback is only accepted for a full research trial")
     source_mode = str(config.get("source_mode") or "")
-    research_exports = (job.get("research") or {}).get("exports") or {}
     sourcing_exports = job.get("exports") or {}
-    deliverables_ready = all(
-        payload.get(kind)
-        for payload in (research_exports, sourcing_exports)
-        for kind in ("xlsx", "json")
-    )
+    # The formal workflow has one user-facing deliverable. JSON is a backend
+    # sidecar and the legacy research workbook is no longer produced.
+    workbook_path = sourcing_exports.get("xlsx")
+    deliverables_ready = bool(workbook_path and str(workbook_path).strip())
     normalized = dict(body)
     normalized["job_id"] = job_id
     normalized["job_status"] = job_status

@@ -211,8 +211,14 @@ def test_export_excel_adds_complete_product_supplier_scoring_matrix(tmp_path):
     path = export_excel([record], output_path=tmp_path / "matrix.xlsx")
     import openpyxl
     wb = openpyxl.load_workbook(path)
-    assert wb.sheetnames == ["候选选品", "完整匹配评分表"]
-    ws = wb["完整匹配评分表"]
+    assert wb.sheetnames == [
+        "Amazon商品",
+        "Amazon×1688完整匹配",
+        "卖家精灵市场数据",
+        "未通过及待核验",
+        "运行摘要",
+    ]
+    ws = wb["Amazon×1688完整匹配"]
     headers = [cell.value for cell in ws[1]]
     rows = [dict(zip(headers, (cell.value for cell in row))) for row in ws.iter_rows(min_row=2)]
     assert len(rows) == 2

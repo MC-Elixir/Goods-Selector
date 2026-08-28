@@ -288,6 +288,7 @@ def test_attach_ai_reasons_skips_without_key(monkeypatch):
     from agent import seller_research_service
     from config.settings import settings
 
+    monkeypatch.setattr(settings, "model_api_provider", "ppio")
     monkeypatch.setattr(settings, "ppio_api_key", "")
     shortlist = build_seller_shortlist([_row(seller="Alpha")], as_of=AS_OF)
     status = seller_research_service.attach_ai_reasons(shortlist.items)

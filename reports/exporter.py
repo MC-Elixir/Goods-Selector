@@ -2,10 +2,8 @@
 报告导出
 ========
 
-输出三种产物：
-    1. Excel 候选选品表    .xlsx，每行一个产品，含评分明细 + 利润明细
-    2. Markdown 详情报告   每个产品一份 .md
-    3. JSON                全量数据，便于下游消费
+正式交付为一个 Excel 工作簿；JSON 仅供后台消费。Markdown 导出函数保留
+给诊断调用方，但不再由正式可恢复流水线自动发布。
 
 candidates 为 PipelineRecord 列表（见 pipeline/orchestrator.py）。
 """
@@ -158,7 +156,7 @@ def _write_supplier_match_sheet(workbook, candidates: list) -> int:
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
-    ws = workbook.create_sheet("完整匹配评分表")
+    ws = workbook.create_sheet("Amazon×1688完整匹配")
     headers = [
         "建议", "建议依据", "Amazon排名", "ASIN", "Amazon标题", "Amazon链接",
         "Amazon售价($)", "Amazon评分", "Amazon评论数", "BSR排名", "产品综合分",
@@ -264,7 +262,7 @@ def _write_supplier_match_sheet(workbook, candidates: list) -> int:
 # ============================================================
 
 def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
-    """导出选品 Excel：产品概览 + 完整 Amazon/1688 一对多匹配评分表。"""
+    """导出唯一正式工作簿，覆盖发现、市场、匹配和待核验数据。"""
     try:
         import openpyxl
         from openpyxl.styles import Alignment, Font, PatternFill
@@ -278,7 +276,7 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "候选选品"
+    ws.title = "Amazon商品"
 
     # --- 表头 ---
     headers = [
@@ -400,12 +398,116 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
     ws.auto_filter.ref = ws.dimensions
 
     supplier_row_count = _write_supplier_match_sheet(wb, candidates)
+    _write_market_sheet(wb, candidates)
+    _write_review_sheet(wb, candidates)
+    _write_summary_sheet(wb, candidates, supplier_row_count)
     wb.save(output_path)
     logger.info(
         f"Excel 导出完成：{output_path}"
         f"（{len(candidates)} 个 Amazon 产品，{supplier_row_count} 条 1688 匹配）"
     )
     return output_path
+
+
+def _style_simple_sheet(ws, headers: list[str]) -> None:
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    fill = PatternFill("solid", fgColor="1F4E79")
+    for index, header in enumerate(headers, 1):
+        cell = ws.cell(1, index, header)
+        cell.fill = fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(index)].width = min(max(len(header) * 2, 12), 42)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+
+def _write_summary_sheet(workbook, records: list, supplier_rows: int) -> None:
+    ws = workbook.create_sheet("运行摘要")
+    passed = sum(_record_review_status(record) == "passed" for record in records)
+    pending = sum(_record_review_status(record) != "passed" for record in records)
+    values = [
+        ("工作流", "Amazon crawler → SellerSprite market evidence → SellerSprite 1688 sourcing → evaluation → Excel"),
+        ("生成时间", datetime.now().isoformat(timespec="seconds")),
+        ("Amazon站点", "US"),
+        ("Amazon商品数", len(records)),
+        ("1688匹配行数", supplier_rows),
+        ("通过商品数", passed),
+        ("未通过及待核验数", pending),
+        ("1688候选正式来源", "sellersprite_1688"),
+        ("说明", "JSON为后台数据；本工作簿为默认人工交付物。"),
+    ]
+    _style_simple_sheet(ws, ["项目", "值"])
+    for row_index, row in enumerate(values, 2):
+        ws.cell(row_index, 1, row[0])
+        ws.cell(row_index, 2, row[1])
+    ws.column_dimensions["A"].width = 24
+    ws.column_dimensions["B"].width = 100
+
+
+def _write_market_sheet(workbook, records: list) -> None:
+    ws = workbook.create_sheet("卖家精灵市场数据")
+    headers = [
+        "ASIN", "主关键词", "月搜索量", "月购买量", "购买率", "关键词难度",
+        "机会分", "预估月销量", "竞品数", "Top10均价", "Top10评论数",
+        "头部收入占比", "证据来源", "原始数据",
+    ]
+    _style_simple_sheet(ws, headers)
+    for row_index, record in enumerate(records, 2):
+        market = getattr(record, "market", None)
+        raw = getattr(market, "raw_data", None) if market else None
+        raw = raw if isinstance(raw, dict) else {}
+        row = [
+            record.product.asin,
+            getattr(market, "main_keyword", None),
+            getattr(market, "search_volume_monthly", None),
+            getattr(market, "monthly_purchases", None),
+            getattr(market, "purchase_rate", None),
+            getattr(market, "keyword_difficulty", None),
+            getattr(market, "opportunity_score", None),
+            getattr(market, "est_monthly_sales", None),
+            getattr(market, "competing_listings", None),
+            getattr(market, "avg_price_top10", None),
+            getattr(market, "avg_review_count_top10", None),
+            getattr(market, "top10_revenue_share", None),
+            raw.get("source_type") or raw.get("source") or "sellersprite_browser_extension",
+            _json_cell(raw),
+        ]
+        for column, value in enumerate(row, 1):
+            ws.cell(row_index, column, value)
+    for column in (5, 6, 7, 12):
+        for row_index in range(2, len(records) + 2):
+            ws.cell(row_index, column).number_format = "0.0%"
+
+
+def _write_review_sheet(workbook, records: list) -> None:
+    ws = workbook.create_sheet("未通过及待核验")
+    headers = ["ASIN", "Amazon标题", "状态", "原因", "供应商数", "人工核验任务", "Amazon链接"]
+    _style_simple_sheet(ws, headers)
+    row_index = 2
+    for record in records:
+        status = _record_review_status(record)
+        if status == "passed":
+            continue
+        evidence = _evidence_payload(record)
+        values = [
+            record.product.asin,
+            record.product.title,
+            status,
+            ", ".join(_record_rejection_reasons(record)) or "关键证据或硬筛选结果未满足",
+            len(record.suppliers or []),
+            _json_cell(evidence["manual_verification_tasks"]),
+            getattr(record.product, "listing_url", None),
+        ]
+        for column, value in enumerate(values, 1):
+            ws.cell(row_index, column, value)
+        link = ws.cell(row_index, 7)
+        if isinstance(link.value, str) and link.value.startswith(("http://", "https://")):
+            link.hyperlink = link.value
+            link.style = "Hyperlink"
+        row_index += 1
 
 
 # ============================================================

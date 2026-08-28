@@ -14,12 +14,14 @@ from agent.sellersprite_1688_sourcing import (
     _parse_int,
     _parse_percentage,
     _parse_price,
+    _parse_sales_volume,
     run_sellersprite_1688_sourcing,
 )
 from agent.sellersprite_models import SellerSpriteLocatorProfile
 from agent.tools.sellersprite_browser import (
     PlaywrightSellerSpriteSession,
     SellerSpriteWorkflowError,
+    _merge_raw_sourcing_cards,
 )
 from execution.models import HumanActionRequired
 
@@ -186,6 +188,84 @@ class TestConvertToSupplierDTOs:
         assert dtos[0].alibaba_offer_id == "1048948332973"
         assert dtos[0].repeat_buyer_rate == 0.67
 
+    def test_newton_wan_sales_and_factory_type_are_preserved(self):
+        dtos = _convert_to_supplier_dtos(
+            [{
+                "title": "1钓鱼伞折叠加大鱼伞",
+                "price": "21.00",
+                "moq": "一件起订",
+                "monthly_sales": "1.4万+",
+                "repeat_buyer_rate": "24%",
+                "supplier_name": "泗阳至上户外用品有限公司",
+                "offer_url": "https://detail.1688.com/offer/988881692944.html",
+                "is_factory": True,
+                "gm_type": "生产厂家",
+                "merchant_identity": "超级工厂",
+            }],
+            "B0GGB2RMWK",
+        )
+
+        assert len(dtos) == 1
+        assert dtos[0].monthly_sales == 14000
+        assert dtos[0].is_factory is True
+        assert dtos[0].repeat_buyer_rate == 0.24
+
+    def test_factory_inferred_from_gm_type_when_flag_missing(self):
+        dtos = _convert_to_supplier_dtos(
+            [{
+                "title": "庭院遮阳伞",
+                "offer_url": "https://detail.1688.com/offer/650725223528.html",
+                "gm_type": "生产厂家",
+            }],
+            "B0GGB2RMWK",
+        )
+        assert dtos[0].is_factory is True
+
+    def test_dialog_card_parses_sales_repeat_and_moq_without_fake_company(self):
+        dtos = _convert_to_supplier_dtos(
+            [{
+                "title": "户外钓鱼伞2.2米2.4米钓伞万向防雨折叠钓鱼专用大伞防紫外线",
+                "price": "¥40.80",
+                "moq": "1条起批",
+                "monthly_sales": "月销量:1,240",
+                "repeat_buyer_rate": "复购率:11%",
+                "supplier_name": "",
+                "offer_url": "https://detail.1688.com/offer/1018589675416.html",
+            }],
+            "B0GGB2RMWK",
+        )
+        assert len(dtos) == 1
+        assert dtos[0].monthly_sales == 1240
+        assert dtos[0].repeat_buyer_rate == 0.11
+        assert dtos[0].moq == 1
+        assert dtos[0].base_price_cny == 40.8
+        assert dtos[0].supplier_name is None
+
+
+class TestMergeRawSourcingCards:
+    def test_dialog_keeps_exact_sales_and_fills_newton_company(self):
+        merged = _merge_raw_sourcing_cards(
+            [{
+                "title": "户外钓鱼伞",
+                "monthly_sales": "月销量:1,240",
+                "repeat_buyer_rate": "11%",
+                "supplier_name": "",
+                "offer_url": "https://detail.1688.com/offer/1018589675416.html",
+            }],
+            [{
+                "title": "户外钓鱼伞",
+                "monthly_sales": "1.4万+",
+                "supplier_name": "宿迁市林涧风户外用品有限公司",
+                "gm_type": "生产厂家",
+                "is_factory": True,
+                "offer_url": "https://detail.1688.com/offer/1018589675416.html",
+            }],
+        )
+        assert merged[0]["monthly_sales"] == "月销量:1,240"
+        assert merged[0]["supplier_name"] == "宿迁市林涧风户外用品有限公司"
+        assert merged[0]["is_factory"] is True
+        assert merged[0]["gm_type"] == "生产厂家"
+
 
 # ============================================================
 # Parsing helper tests
@@ -200,6 +280,7 @@ class TestParseHelpers:
         ("", None),
         (None, None),
         ("免费", None),
+        ("￥", None),
         ("0", None),
     ])
     def test_parse_price(self, value, expected):
@@ -207,6 +288,7 @@ class TestParseHelpers:
 
     @pytest.mark.parametrize("value,expected", [
         ("月销 1200+", 1200),
+        ("1条起批", 1),
         ("50件起订", 50),
         ("1,200", 1200),
         (100, 100),
@@ -219,8 +301,28 @@ class TestParseHelpers:
         assert _parse_int(value) == expected
 
     @pytest.mark.parametrize("value,expected", [
+        ("1.4万+", 14000),
+        ("2.6万+", 26000),
+        ("10万+", 100000),
+        ("3100+", 3100),
+        ("900+", 900),
+        ("月销 1200+", 1200),
+        (14000, 14000),
+        ("月销量:1,240", 1240),
+        ("月销量:20,267", 20267),
+        ("1,240最近30天交易记录", 1240),
+        ("", None),
+        (None, None),
+    ])
+    def test_parse_sales_volume(self, value, expected):
+        assert _parse_sales_volume(value) == expected
+
+    @pytest.mark.parametrize("value,expected", [
         ("67%", 0.67),
         ("4.5%", 0.045),
+        ("24.8%", 0.248),
+        ("24", 0.24),
+        (0.59, 0.59),
         ("-", None),
         (None, None),
         ("120%", None),
@@ -319,6 +421,16 @@ class TestRunSellersprite1688Sourcing:
         result = run_sellersprite_1688_sourcing("B00Q7OAN50", dependencies=deps)
         assert result == []
 
+    def test_disabled_is_human_barrier_for_formal_pipeline(self):
+        session = FakeSession(suppliers=[])
+        deps = FakeDeps(session, enabled=False)
+        with pytest.raises(HumanActionRequired) as exc_info:
+            run_sellersprite_1688_sourcing(
+                "B00Q7OAN50", dependencies=deps, required=True
+            )
+        assert exc_info.value.error_code == "EXTENSION_UNAVAILABLE"
+
+
     def test_no_sourcing_locators_returns_empty(self):
         session = FakeSession(suppliers=[{"title": "test"}])
         deps = FakeDeps(session, profile=_profile())  # No sourcing locators
@@ -349,6 +461,40 @@ class TestRunSellersprite1688Sourcing:
 # ============================================================
 # Browser session method tests (mock page)
 # ============================================================
+
+def test_formal_match_merges_market_keywords_into_verification_and_audit(monkeypatch):
+    from types import SimpleNamespace
+    from matchers.alibaba_pailitao import SupplierDTO
+    from pipeline.recoverable import _formal_match_suppliers
+
+    supplier = SupplierDTO(
+        alibaba_offer_id="111",
+        offer_url="https://detail.1688.com/offer/111.html",
+        title_cn="户外遮阳伞",
+        raw_data={"source": "sellersprite_1688"},
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "agent.sellersprite_1688_sourcing.run_sellersprite_1688_sourcing",
+        lambda *args, **kwargs: [supplier],
+    )
+    monkeypatch.setattr("matchers._enrich_supplier_details", lambda values, *args, **kwargs: values)
+    monkeypatch.setattr("matchers._title_fallback_keywords", lambda title: ["遮阳伞"])
+
+    class Verifier:
+        def verify(self, *, suppliers, product, analysis, search_keywords):
+            captured["keywords"] = search_keywords
+            return suppliers
+
+    monkeypatch.setattr("matchers.verifier.Alibaba1688Verifier", Verifier)
+    result = _formal_match_suppliers(
+        SimpleNamespace(asin="B00Q7OAN50", title="Patio Umbrella"),
+        market_keywords=["patio umbrella", "outdoor shade"],
+    )
+    assert captured["keywords"] == ["patio umbrella", "outdoor shade", "遮阳伞"]
+    assert result[0].raw_data["search_query_plan"]["market_keywords"] == [
+        "patio umbrella", "outdoor shade"
+    ]
 
 class FakeLocator:
     def __init__(self, count=0, evaluate_results=None):
@@ -398,3 +544,119 @@ class TestSource1688SuppliersMethod:
         monkeypatch.setattr(session, "_locator", lambda _name: locator)
 
         assert session._wait_until_attached("sourcing_1688_results") is True
+
+    def test_is_visible_uses_first_match_when_locator_is_strict(self, monkeypatch):
+        session = PlaywrightSellerSpriteSession(
+            profile=_sourcing_profile(),
+            download_dir="/tmp",
+            page=_FakeTab("https://www.amazon.com/dp/B0GGB2RMWK"),
+        )
+
+        class _First:
+            def is_visible(self) -> bool:
+                return True
+
+        class _Strict:
+            first = _First()
+
+            def is_visible(self) -> bool:
+                raise RuntimeError("strict mode violation: resolved to 2 elements")
+
+        monkeypatch.setattr(session, "_locator", lambda _name: _Strict())
+        assert session._is_visible("sourcing_1688_nav") is True
+
+    def test_extracts_modal_cards_without_leaving_amazon(self, monkeypatch):
+        amazon = _FakeTab("https://www.amazon.com/dp/B0GGB2RMWK")
+        session = _session_with_tabs(amazon)
+        switched: list[object] = []
+
+        class _CardLocator:
+            def count(self) -> int:
+                return 1
+
+            def nth(self, _index: int) -> "_CardLocator":
+                return self
+
+            def evaluate(self, _js: str) -> dict[str, str]:
+                return {
+                    "title": "户外遮阳伞",
+                    "offer_url": "https://detail.1688.com/offer/988881692944.html",
+                    "price": "21.00",
+                    "supplier_name": "泗阳至上户外用品有限公司",
+                }
+
+        monkeypatch.setattr(session, "_raise_if_human_terminal", lambda: None)
+        monkeypatch.setattr(session, "_is_visible", lambda _name: False)
+        monkeypatch.setattr(session, "_reveal_sourcing_1688_nav", lambda: None)
+        monkeypatch.setattr(session, "_click_required", lambda _name: None)
+        monkeypatch.setattr(
+            session,
+            "_switch_to_sourcing_1688_page",
+            lambda known: switched.append(known),
+        )
+        monkeypatch.setattr(
+            session,
+            "_wait_until_attached",
+            lambda _name, timeout_seconds=None: True,
+        )
+        monkeypatch.setattr(session, "_locator", lambda _name: _CardLocator())
+
+        result = session.source_1688_suppliers("B0GGB2RMWK")
+
+        assert switched == []
+        assert result[0]["title"] == "户外遮阳伞"
+        assert "988881692944" in result[0]["offer_url"]
+
+
+class _FakeTab:
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+    def wait_for_timeout(self, _milliseconds: int) -> None:
+        return None
+
+    def wait_for_load_state(self, *_args, **_kwargs) -> None:
+        return None
+
+
+def _session_with_tabs(*tabs: _FakeTab) -> PlaywrightSellerSpriteSession:
+    amazon = tabs[0]
+    browser = type("Browser", (), {
+        "contexts": [type("Context", (), {"pages": list(tabs)})()],
+    })()
+    session = PlaywrightSellerSpriteSession(
+        profile=_sourcing_profile(),
+        download_dir="/tmp",
+        page=amazon,
+        page_timeout_seconds=1,
+        export_timeout_seconds=1,
+    )
+    session._browser = browser
+    return session
+
+
+class TestSwitchToSourcing1688Page:
+    def test_reuses_existing_newton_tab_when_click_does_not_open_a_new_one(self):
+        amazon = _FakeTab("https://www.amazon.com/dp/B0GGB2RMWK")
+        newton = _FakeTab(
+            "https://aibuy.1688.com/landingpage/new-home/find-products.html"
+        )
+        session = _session_with_tabs(amazon, newton)
+
+        session._switch_to_sourcing_1688_page((amazon, newton))
+
+        assert session.page is newton
+
+    def test_prefers_a_newly_opened_newton_tab_over_an_existing_one(self):
+        amazon = _FakeTab("https://www.amazon.com/dp/B0GGB2RMWK")
+        stale = _FakeTab(
+            "https://aibuy.1688.com/landingpage/new-home/find-products.html?old=1"
+        )
+        fresh = _FakeTab(
+            "https://aibuy.1688.com/landingpage/new-home/find-products.html?new=1"
+        )
+        session = _session_with_tabs(amazon, stale, fresh)
+
+        session._switch_to_sourcing_1688_page((amazon, stale))
+
+        assert session.page is fresh

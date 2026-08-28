@@ -121,7 +121,7 @@ def test_candidates_are_bounded_sorted_and_remove_raw_supplier_data(service):
 def test_report_uses_public_links_and_no_container_paths(service):
     subject, _ = service
     result = run(subject.get_report("job_123456"))
-    assert {item["type"] for item in result["reports"]} == {"sourcing_json", "sourcing_xlsx", "research_xlsx"}
+    assert {item["type"] for item in result["reports"]} == {"sourcing_xlsx"}
     assert all(item["url"].startswith("http://127.0.0.1:8765/api/exports/") for item in result["reports"])
     assert "/app/" not in str(result)
 

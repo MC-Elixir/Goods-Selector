@@ -255,14 +255,14 @@ def test_runtime_keeps_cancellation_message_during_late_progress(monkeypatch, tm
     assert data["events"][-1]["event"] == "match"
 
 
-def test_full_research_job_feeds_scored_asins_directly_to_pipeline(monkeypatch, tmp_path):
+def test_full_research_compatibility_mode_starts_with_amazon_pipeline(monkeypatch, tmp_path):
     export = tmp_path / "candidates_live.json"
     export.write_text('[{"asin": "B000000321"}]', encoding="utf-8")
     captured = {}
 
     monkeypatch.setattr("agent.runner.run_preflight", lambda: {"ready": True, "checks": []})
     monkeypatch.setattr("agent.runner.init_db", lambda: None)
-    monkeypatch.setattr("agent.runner._run_market_research", lambda config: _full_research_payload(tmp_path))
+    monkeypatch.setattr("agent.runner._run_market_research", lambda config: (_ for _ in ()).throw(AssertionError("must not create seed products")))
     monkeypatch.setattr("agent.runner.latest_export_after", lambda started: {"json": export})
     monkeypatch.setattr(
         "agent.runner.audit_export",
@@ -287,15 +287,14 @@ def test_full_research_job_feeds_scored_asins_directly_to_pipeline(monkeypatch, 
     _wait_until(lambda: runtime.get_job(job.id)["status"] == "success")
     result = runtime.get_job(job.id)
 
-    assert captured["seed_products"][0]["asin"] == "B000000321"
-    assert captured["seed_products"][0]["raw_data"]["research_fit_score"] == 88.0
+    assert "seed_products" not in captured
+    assert captured["category"] == "Home & Kitchen"
     assert captured["export_review_on_empty"] is True
-    assert result["research"]["run_id"] == "research-run-1"
-    assert result["research"]["exports"]["xlsx"].endswith("market_research.xlsx")
-    assert any(event["event"] == "market_research_complete" for event in result["events"])
+    assert result["research"] == {}
+    assert not any(event["event"] == "market_research_complete" for event in result["events"])
 
 
-def test_full_research_browser_gate_is_human_required_and_retryable(monkeypatch, tmp_path):
+def test_full_research_no_longer_runs_competitor_export_gate(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr("agent.runner.run_preflight", lambda: {"ready": True, "checks": []})
     monkeypatch.setattr("agent.runner.init_db", lambda: None)
@@ -303,7 +302,9 @@ def test_full_research_browser_gate_is_human_required_and_retryable(monkeypatch,
         "agent.runner._run_market_research",
         lambda config: {"status": "CAPTCHA", "keyword": config.research_keyword},
     )
-    monkeypatch.setattr("pipeline.orchestrator.run_pipeline", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr("pipeline.orchestrator.run_pipeline", lambda **kwargs: calls.append(kwargs) or 914)
+    monkeypatch.setattr("agent.runner.latest_export_after", lambda started: {})
+    monkeypatch.setattr("agent.runner.manual_queue_summary", lambda: {"open": 0, "total": 0})
     runtime = _runtime(tmp_path)
     job = runtime.start_run(AgentRunConfig(
         category="Home & Kitchen",
@@ -312,15 +313,9 @@ def test_full_research_browser_gate_is_human_required_and_retryable(monkeypatch,
         research_keyword="patio umbrella",
     ))
 
-    _wait_until(lambda: runtime.get_job(job.id)["status"] == "human_required")
-    blocked = runtime.get_job(job.id)
-    assert blocked["run_log_id"] is None
-    assert "验证码" in blocked["error"]
-    assert calls == []
-
-    retried = runtime.retry_job(job.id)
-    assert retried.retry_of == job.id
-    _wait_until(lambda: runtime.get_job(retried.id)["status"] == "human_required")
+    _wait_until(lambda: runtime.get_job(job.id)["status"] == "success")
+    assert len(calls) == 1
+    assert "seed_products" not in calls[0]
 
 
 def test_runtime_records_progress_to_persistent_run_events(monkeypatch, tmp_path):
@@ -713,6 +708,7 @@ def test_runtime_keeps_zero_passed_status_when_review_export_exists(
     runtime = _runtime(tmp_path)
     monkeypatch.setattr("agent.runner.session_scope", temp_session_scope)
     monkeypatch.setattr("agent.runner.run_preflight", lambda: {"ready": True, "checks": []})
+    monkeypatch.setattr("agent.runner.seller_sprite_market_data_guard", lambda: (True, ""))
     monkeypatch.setattr("agent.runner.init_db", lambda: None)
     monkeypatch.setattr("pipeline.orchestrator.run_pipeline", lambda **kwargs: 656)
     monkeypatch.setattr(

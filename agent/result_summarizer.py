@@ -51,18 +51,19 @@ def summarize_run_result(
     This is intentionally non-blocking for the pipeline: callers should persist
     the returned status even when the model is unavailable.
     """
-    model = settings.ppio_text_model
-    if not settings.ppio_api_key:
+    provider = settings.openai_compatible_provider
+    model = settings.openai_compatible_text_model
+    if not settings.openai_compatible_api_key:
         return {
             "status": "skipped",
-            "provider": "ppio",
+            "provider": provider,
             "model": model,
-            "error": "PPIO_API_KEY is not configured",
+            "error": "OpenAI-compatible API key is not configured",
         }
     if not _HAS_OPENAI:
         return {
             "status": "skipped",
-            "provider": "ppio",
+            "provider": provider,
             "model": model,
             "error": "openai package is not installed",
         }
@@ -76,8 +77,8 @@ def summarize_run_result(
     }
     try:
         client = _openai.OpenAI(
-            api_key=settings.ppio_api_key,
-            base_url=settings.ppio_api_base,
+            api_key=settings.openai_compatible_api_key,
+            base_url=settings.openai_compatible_api_base,
             timeout=float(settings.llm_request_timeout_seconds),
         )
         response = client.chat.completions.create(
@@ -92,7 +93,7 @@ def summarize_run_result(
         content = (response.choices[0].message.content or "").strip()
         return {
             "status": "success",
-            "provider": "ppio",
+            "provider": provider,
             "model": model,
             "summary": content,
         }
@@ -100,7 +101,7 @@ def summarize_run_result(
         logger.warning(f"[run-summary] LLM summary failed run={run_log_id}: {exc}")
         return {
             "status": "error",
-            "provider": "ppio",
+            "provider": provider,
             "model": model,
             "error": str(exc)[:500],
         }

@@ -89,6 +89,7 @@ def test_chat_answer_uses_minimax_after_tool_context(monkeypatch):
         calls["client_kwargs"] = kwargs
         return FakeClient()
 
+    monkeypatch.setattr(settings, "model_api_provider", "ppio")
     monkeypatch.setattr(settings, "ppio_api_key", "ppio-key")
     monkeypatch.setattr(settings, "ppio_api_base", "https://api.ppio.com/openai")
     monkeypatch.setattr(settings, "ppio_text_model", "minimax/minimax-m3")
@@ -131,6 +132,41 @@ def test_chat_answer_does_not_call_llm_without_data(tmp_path, monkeypatch):
 
     assert "数据不足" in response["answer"]
     assert "llm" not in " ".join(response["used_tools"])
+
+
+def test_chat_answer_uses_aliyun_openai_compatible_config(monkeypatch):
+    calls = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="结论：暂缓"))]
+            )
+
+    class FakeClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    def fake_openai(**kwargs):
+        calls["client_kwargs"] = kwargs
+        return FakeClient()
+
+    monkeypatch.setattr(settings, "model_api_provider", "aliyun")
+    monkeypatch.setattr(settings, "aliyun_api_key", "aliyun-key")
+    monkeypatch.setattr(settings, "aliyun_api_base", "https://dashscope.example/v1")
+    monkeypatch.setattr(settings, "aliyun_text_model", "qwen-plus")
+    monkeypatch.setattr(chat_tools._openai, "OpenAI", fake_openai)
+    monkeypatch.setattr(chat_tools, "get_candidate_detail", lambda *args, **kwargs: {
+        "asin": "B0LLM0001", "title": "Bottle", "supplier": "Factory",
+        "margin": 0.3, "score": 70, "passed": True, "market": {}, "product_spec": {},
+    })
+
+    response = chat_tools.answer_chat("分析", selected_asin="B0LLM0001", use_llm=True)
+
+    assert response["model"] == "qwen-plus"
+    assert calls["client_kwargs"]["api_key"] == "aliyun-key"
+    assert calls["client_kwargs"]["base_url"] == "https://dashscope.example/v1"
 
 
 def test_chat_tools_fallback_to_db_candidate_detail(monkeypatch):

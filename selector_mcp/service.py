@@ -305,15 +305,12 @@ class SelectorService:
         """获取任务报告的本机下载链接。"""
         job = await self.client.get_job(_validate_job_id(job_id))
         exports = job.get("exports") if isinstance(job.get("exports"), dict) else {}
-        research = job.get("research") if isinstance(job.get("research"), dict) else {}
-        research_exports = research.get("exports") if isinstance(research.get("exports"), dict) else {}
         reports = []
-        for kind, raw in [
-            *((f"sourcing_{key}", value) for key, value in exports.items()),
-            *((f"research_{key}", value) for key, value in research_exports.items()),
-        ]:
+        for kind, raw in [("sourcing_xlsx", exports.get("xlsx"))]:
+            if not raw:
+                continue
             name = Path(str(raw)).name
-            if not name or Path(name).suffix.lower() not in {".json", ".xlsx", ".csv", ".md", ".html"}:
+            if not name or Path(name).suffix.lower() != ".xlsx":
                 continue
             reports.append({
                 "type": str(kind),

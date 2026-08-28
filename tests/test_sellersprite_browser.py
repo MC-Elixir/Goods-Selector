@@ -71,6 +71,7 @@ class FakePage:
 
     def goto(self, url: str, **_kwargs) -> None:
         self.goto_calls.append(url)
+        self.url = url
         if self.on_goto:
             self.on_goto()
 
@@ -139,6 +140,7 @@ class FakePlaywright:
 
 def test_adapter_opens_only_us_asin_page_and_checks_redirected_asin(tmp_path):
     page = FakePage(asin="B00Q7OAN50", visible_markers={"ready"})
+    page.url = "https://www.amazon.com/"
     session = PlaywrightSellerSpriteSession(
         profile=valid_profile(),
         download_dir=tmp_path,
@@ -149,14 +151,33 @@ def test_adapter_opens_only_us_asin_page_and_checks_redirected_asin(tmp_path):
 
     assert page.goto_calls == ["https://www.amazon.com/dp/B00Q7OAN50"]
 
-    page.url = "https://www.amazon.com/dp/B000000000"
+    def redirect_to_other_asin() -> None:
+        page.url = "https://www.amazon.com/dp/B000000000"
+
+    page.url = "https://www.amazon.com/"
+    page.on_goto = redirect_to_other_asin
     with pytest.raises(SellerSpriteWorkflowError, match="ASIN_MISMATCH"):
         session.open_amazon_product("B00Q7OAN50")
+
+
+def test_open_amazon_product_skips_reload_when_already_on_asin(tmp_path):
+    page = FakePage(asin="B00Q7OAN50", visible_markers={"ready"})
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        page=page,
+    )
+
+    session.open_amazon_product("B00Q7OAN50")
+
+    assert page.goto_calls == []
+    assert page.timeout_calls == []
 
 
 def test_adapter_cancellation_after_navigation_prevents_followup_wait(tmp_path):
     cancelled = False
     page = FakePage(asin="B00Q7OAN50", visible_markers={"ready"})
+    page.url = "https://www.amazon.com/"
 
     def cancel_after_goto() -> None:
         nonlocal cancelled

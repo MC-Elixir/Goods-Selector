@@ -33,6 +33,45 @@ RUN_SCOPE_KEY = "run"
 SCHEMA_VERSION = "1.0"
 
 
+def _formal_match_suppliers(product, *, market_keywords=None, cancel_check=None):
+    """Discover only via SellerSprite, then enrich/verify returned offer URLs."""
+    from agent.sellersprite_1688_sourcing import run_sellersprite_1688_sourcing
+    from matchers import _enrich_supplier_details, _title_fallback_keywords
+    from matchers.verifier import Alibaba1688Verifier
+
+    suppliers = run_sellersprite_1688_sourcing(
+        product.asin,
+        cancel_check=cancel_check,
+        required=True,
+    )
+    if not suppliers:
+        return []
+    suppliers = _enrich_supplier_details(
+        suppliers,
+        settings,
+        cancel_check=cancel_check,
+    )
+    seller_keywords = [
+        value.strip() for value in (market_keywords or [])
+        if isinstance(value, str) and value.strip()
+    ]
+    keywords = list(dict.fromkeys([*seller_keywords, *_title_fallback_keywords(product.title)]))
+    verified = Alibaba1688Verifier().verify(
+        suppliers=suppliers,
+        product=product,
+        analysis=None,
+        search_keywords=keywords,
+    )
+    for supplier in verified:
+        supplier.raw_data["candidate_discovery_source"] = "sellersprite_1688"
+        supplier.raw_data["search_query_plan"] = {
+            "queries": keywords,
+            "market_keywords": seller_keywords,
+            "market_source": "sellersprite_browser_extension",
+        }
+    return verified
+
+
 def run_recoverable_pipeline(
     *,
     category: str,
@@ -52,6 +91,11 @@ def run_recoverable_pipeline(
     import pipeline.orchestrator as legacy
 
     site, mode, source_query = _validate_source(category, source_mode, keyword, marketplace)
+    if seed_products:
+        raise ValueError(
+            "seed_products is no longer accepted by the formal workflow; "
+            "Amazon crawler discovery is mandatory"
+        )
     config = {
         "schema_version": SCHEMA_VERSION,
         "category": category,
@@ -66,7 +110,6 @@ def run_recoverable_pipeline(
         "export_review_on_empty": bool(export_review_on_empty),
         "allow_mock_suppliers": bool(settings.alibaba_allow_mock_suppliers),
         "stage_timeouts": stage_timeouts or _default_timeouts(),
-        "seed_products": list(seed_products or []),
     }
     api_calls = {
         "source_mode": mode,
@@ -149,30 +192,18 @@ def _execute(
         "source_query": config["source_query"],
         "limit": config["limit"],
         "marketplace": config["marketplace"],
-        "seed_products": config.get("seed_products") or [],
     }
 
     def discover(_context):
-        seed_payloads = config.get("seed_products") or []
-        if seed_payloads:
-            products = [
-                load_product(payload)
-                for payload in seed_payloads[: int(config["limit"])]
-                if isinstance(payload, dict)
-            ]
-            legacy._attach_source_metadata(
-                products, "seller_research", config["source_query"]
-            )
-        else:
-            products = legacy._collect_source_products(
-                config["source_mode"],
-                config["source_query"],
-                config["limit"],
-                config["marketplace"],
-            )
-            legacy._attach_source_metadata(
-                products, config["source_mode"], config["source_query"]
-            )
+        products = legacy._collect_source_products(
+            config["source_mode"],
+            config["source_query"],
+            config["limit"],
+            config["marketplace"],
+        )
+        legacy._attach_source_metadata(
+            products, config["source_mode"], config["source_query"]
+        )
         raw_count = len(products)
         products, removed = legacy._dedupe_products_by_asin(products)
         keyword_normalized = None
@@ -219,9 +250,7 @@ def _execute(
         "amazon_source": len(product_payloads),
         "amazon_source_raw": source_output.get("raw_product_count"),
         "amazon_duplicates_removed": source_output.get("duplicates_removed"),
-        "source_origin": (
-            "seller_research" if config.get("seed_products") else config["source_mode"]
-        ),
+        "source_origin": f"amazon_crawler:{config['source_mode']}",
     })
     if source_output.get("keyword_normalized"):
         api_calls["keyword_normalized"] = source_output["keyword_normalized"]
@@ -289,8 +318,6 @@ def _execute(
         return run_id
 
     # Supplier matching, independently recoverable per ASIN.
-    from matchers import match_suppliers
-
     matched = 0
     match_timeout = _timeout(timeouts, "match")
     previous_allow_mock = settings.alibaba_allow_mock_suppliers
@@ -313,12 +340,13 @@ def _execute(
             }
 
             def match_handler(_context, item=product, hints=market_keywords):
-                suppliers = legacy._call_match_suppliers(
-                    match_suppliers,
+                # Formal candidate discovery has one auditable source.  Other
+                # matchers remain available for diagnostics, but are never an
+                # automatic fallback from this workflow.
+                suppliers = _formal_match_suppliers(
                     item,
-                    cancel_check,
                     market_keywords=hints,
-                    run_ref=f"run:{run_id}",
+                    cancel_check=cancel_check,
                 )
                 return {
                     "schema_version": SCHEMA_VERSION,
@@ -358,12 +386,30 @@ def _execute(
                     "message": f"Matching suppliers for {asin} ({index}/{len(products)})",
                 },
             )
+            if isinstance(result.exception, TimeoutError) and len(products) == 1:
+                _update_run(
+                    legacy,
+                    run_id,
+                    status="failed",
+                    error_message=f"match stage timed out: {result.error_detail}",
+                    api_calls=api_calls,
+                )
+                raise legacy.PipelineTimeout(f"match stage timed out: {result.error_detail}")
             if result.status == NodeStatus.SUCCEEDED.value:
                 restored_product = load_product(result.output_snapshot["product"])
                 suppliers = load_suppliers(result.output_snapshot.get("suppliers"))
                 records_by_asin[asin].product = restored_product
                 records_by_asin[asin].suppliers = suppliers
                 matched += len(suppliers)
+            elif result.status == NodeStatus.TIMED_OUT.value and len(products) == 1:
+                _update_run(
+                    legacy,
+                    run_id,
+                    status="failed",
+                    error_message=f"match stage timed out: {result.error_detail}",
+                    api_calls=api_calls,
+                )
+                raise legacy.PipelineTimeout(f"match stage timed out: {result.error_detail}")
             elif result.status in {
                 NodeStatus.HUMAN_REQUIRED.value,
                 NodeStatus.RETRY_WAIT.value,
@@ -374,15 +420,6 @@ def _execute(
                 # or explicit retry. Stop the ASIN loop at the first barrier so
                 # one 1688 block cannot be repeated across the whole batch.
                 break
-            elif isinstance(result.exception, TimeoutError) and len(products) == 1:
-                _update_run(
-                    legacy,
-                    run_id,
-                    status="failed",
-                    error_message=f"match stage timed out: {result.error_detail}",
-                    api_calls=api_calls,
-                )
-                raise legacy.PipelineTimeout(f"match stage timed out: {result.error_detail}")
     finally:
         settings.alibaba_allow_mock_suppliers = previous_allow_mock
     api_calls["supplier_match_attempts"] = len(products)
@@ -570,12 +607,15 @@ def _execute(
         candidates_after_filter=len(candidates),
     )
 
-    export_records = candidates
-    if config["export"] and not export_records and config["export_review_on_empty"]:
-        restored_records = [
-            _load_record(payload, legacy) for payload in filter_output.get("records") or []
-        ]
-        export_records = legacy._review_fallback_records(restored_records, top_n=config["top_n"])
+    # One workbook contains both accepted candidates and rejected/pending
+    # evidence.  Keep candidate order first, followed by every other product.
+    restored_records = [
+        _load_record(payload, legacy) for payload in filter_output.get("records") or []
+    ]
+    candidate_asins = {record.product.asin for record in candidates}
+    export_records = [*candidates, *(
+        record for record in restored_records if record.product.asin not in candidate_asins
+    )]
 
     export_input = {
         "schema_version": SCHEMA_VERSION,
@@ -608,7 +648,6 @@ def _execute(
             base_name = f"candidates_run_{run_id}_g{context.generation}"
             excel_temp = legacy.export_excel(restored, staging_dir / f"{base_name}.xlsx")
             json_temp = legacy.export_json(restored, staging_dir / f"{base_name}.json")
-            markdown_temps = legacy.export_markdown(restored, staging_reports)
             files = [
                 ArtifactFile(
                     logical_name="excel",
@@ -623,15 +662,6 @@ def _execute(
                     final_path=settings.export_dir / f"{base_name}.json",
                 ),
             ]
-            files.extend(
-                ArtifactFile(
-                    logical_name=f"markdown:{path.stem}",
-                    artifact_type="markdown",
-                    temporary_path=path,
-                    final_path=settings.export_dir / "reports" / f"{base_name}_{path.name}",
-                )
-                for path in markdown_temps
-            )
             manifests = artifact_manager.publish(
                 context=context,
                 artifact_set_id=artifact_set_id,
@@ -667,7 +697,11 @@ def _run_sellersprite_market_stage(
     timeouts: dict[str, Any],
 ) -> None:
     """Collect browser-extension keyword evidence before supplier search."""
-    market_cap = max(int(settings.mjjl_max_products_per_run or 0), 0)
+    configured_market_cap = max(int(settings.mjjl_max_products_per_run or 0), 0)
+    # A positive legacy cap enables the browser stage, but the formal workflow
+    # collects evidence for every Amazon product. Explicit zero remains an
+    # offline/diagnostic switch used by unit tests and maintenance commands.
+    market_cap = len(products) if configured_market_cap > 0 else 0
     skipped_cap = max(len(products) - market_cap, 0)
     if skipped_cap:
         api_calls["mjjl_skipped_cap"] = skipped_cap
@@ -681,6 +715,7 @@ def _run_sellersprite_market_stage(
             browser_dependencies = candidate
     except Exception as exc:
         logger.info(f"SellerSprite browser dependency unavailable: {exc}")
+
 
     browser_market_source = "sellersprite_browser_extension" if browser_dependencies else "unavailable"
     api_calls["market_source"] = browser_market_source
@@ -732,11 +767,22 @@ def _run_sellersprite_market_stage(
             )
             continue
         if browser_dependencies is None:
-            coordinator.skip_node(
+            result = coordinator.run_node(
                 scope_type="asin", scope_key=product.asin, stage="market",
                 input_snapshot=market_input,
-                reason="SellerSprite browser extension unavailable",
+                handler=lambda _context, asin=product.asin: (_ for _ in ()).throw(
+                    HumanActionRequired(
+                        "EXTENSION_UNAVAILABLE",
+                        f"SellerSprite market evidence unavailable for {asin}",
+                        instructions=(
+                            "请在专用 Chrome 中启用并登录卖家精灵插件，确认反查关键词导出可用，"
+                            "然后继续任务。"
+                        ),
+                    )
+                ),
             )
+            if result.status == NodeStatus.HUMAN_REQUIRED.value:
+                break
             continue
 
         def market_handler(_context, item=product):

@@ -7,7 +7,8 @@ Agent 均关闭。
 
 ## 安装与启动
 
-先安装 Docker 与官方 Hermes Agent 0.20.x，并在项目 `.env` 中填写 **`PPIO_API_KEY`**。
+先安装 Docker 与官方 Hermes Agent 0.20.x，并在项目 `.env` 中填写一种受支持的模型
+密钥：阿里云 Token Plan、阿里云百炼按量付费、PPIO 或 Anthropic。
 当前交付不要求 `MJJL_API_KEY`、Keepa 或 Rainforest：Amazon 走爬虫，市场分析走
 9222 专用 Chrome + 卖家精灵插件。然后从项目根目录执行：
 
@@ -18,7 +19,7 @@ Agent 均关闭。
 脚本会：
 
 1. 生成或复用 `SELECTOR_MCP_TOKEN`，密钥不会打印到终端；
-2. 从项目 `.env` 的 PPIO 配置推导 Hermes 模型配置；
+2. 从项目 `.env` 的阿里云 Token Plan、阿里云百炼或 PPIO 配置推导 Hermes 模型配置；
 3. 安装/更新 `amazon-selector-client` profile；
 4. 构建并启动 WebUI 与 MCP sidecar；
 5. 打开 Hermes 对话。
@@ -57,3 +58,6 @@ amazon-selector-client chat
 - `.env`、Hermes profile 的 `.env`、Cookie 文件与 `data/` 不得提交或打包给无关人员。
 - 甲方只使用 `amazon-selector-client chat` 和 `/operator`；完整 WebUI 留给运维人员。
 - 升级 Hermes 前先在测试机验证。此 profile 固定兼容 `>=0.20.0,<0.21.0`，不要自动跨小版本升级。
+
+完整的 Windows/WSL 首次部署、手动 WebUI、卖家精灵插件与官方 MCP 差异、通用 Harness
+接入说明见 [`docs/ZERO_TO_RUN.md`](../../../docs/ZERO_TO_RUN.md)。

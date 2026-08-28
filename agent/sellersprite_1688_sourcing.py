@@ -36,7 +36,7 @@ _HUMAN_CODES = frozenset({
 _OFFER_ID_RE = re.compile(r"/offer/(\d+)", re.IGNORECASE)
 
 _HUMAN_INSTRUCTIONS = {
-    "EXTENSION_UNAVAILABLE": "请在 9222 专用 Chrome 中确认卖家精灵插件已启用、已登录且产品页可见插件面板，然后继续任务。",
+    "EXTENSION_UNAVAILABLE": "请先运行 start.ps1，并在 9222 专用 Chrome 的 chrome://extensions 中确认卖家精灵插件已启用；随后登录卖家精灵和 1688，打开当前 Amazon 商品页确认插件面板可见，再在 WebUI preflight 检查通过后继续任务。",
     "SELLERSPRITE_LOGIN_REQUIRED": "请在 9222 专用 Chrome 中登录卖家精灵和 1688，然后继续任务。",
     "SELLERSPRITE_PERMISSION_REQUIRED": "请在卖家精灵插件中确认当前账号已开通 1688 找货权限。",
     "SELLERSPRITE_QUOTA_EXCEEDED": "卖家精灵 1688 找货额度不足；请恢复额度后继续任务。",
@@ -49,21 +49,34 @@ def run_sellersprite_1688_sourcing(
     *,
     cancel_check: Callable[[], bool] | None = None,
     dependencies: SellerSpriteDependencies | None = None,
+    required: bool = False,
 ) -> list[SupplierDTO]:
     """Use the SellerSprite extension to find 1688 suppliers for an ASIN.
 
-    Returns a list of SupplierDTO objects extracted from the extension's 1688
-    sourcing panel. Returns an empty list when the integration is unconfigured
-    or yields no results; configured human-terminal states are raised.
+    ``required=True`` is the formal-pipeline contract: an unavailable or
+    broken extension is a human-action barrier, never an empty-result fallback.
+    A configured extension which genuinely returns no offers still returns [].
     """
     asin = validate_sellersprite_asin(asin)
     deps = dependencies or SellerSpriteDependencies()
 
     # Guard: browser flow must be enabled and locators configured.
     if not deps.browser_enabled or deps.profile is None or deps.session_factory is None:
+        if required:
+            raise HumanActionRequired(
+                "EXTENSION_UNAVAILABLE",
+                f"SellerSprite 1688 sourcing is not configured for ASIN {asin}",
+                instructions=_HUMAN_INSTRUCTIONS["EXTENSION_UNAVAILABLE"],
+            )
         logger.debug(f"[sellersprite-1688] ASIN={asin} skipped: browser flow not configured")
         return []
     if not deps.profile.has_sourcing_1688_locators():
+        if required:
+            raise HumanActionRequired(
+                "EXTENSION_UNAVAILABLE",
+                f"SellerSprite 1688 sourcing locators are missing for ASIN {asin}",
+                instructions=_HUMAN_INSTRUCTIONS["EXTENSION_UNAVAILABLE"],
+            )
         logger.debug(f"[sellersprite-1688] ASIN={asin} skipped: sourcing_1688 locators not configured")
         return []
 
@@ -92,6 +105,12 @@ def run_sellersprite_1688_sourcing(
     except HumanActionRequired:
         raise
     except Exception as exc:
+        if required:
+            raise HumanActionRequired(
+                "EXTENSION_UNAVAILABLE",
+                f"SellerSprite 1688 sourcing failed for ASIN {asin}",
+                instructions=_HUMAN_INSTRUCTIONS["EXTENSION_UNAVAILABLE"],
+            ) from exc
         logger.info(f"[sellersprite-1688] ASIN={asin} unexpected error: {exc}")
         return []
 
@@ -135,12 +154,11 @@ def _convert_to_supplier_dtos(
 
         price = _parse_price(raw.get("price"))
         moq = _parse_int(raw.get("moq"))
-        monthly_sales = _parse_int(raw.get("monthly_sales"))
+        monthly_sales = _parse_sales_volume(raw.get("monthly_sales"))
         repeat_buyer_rate = _parse_percentage(raw.get("repeat_buyer_rate"))
         supplier_name = str(raw.get("supplier_name") or "").strip() or None
         image_url = str(raw.get("image_url") or "").strip() or None
-        is_factory_raw = raw.get("is_factory")
-        is_factory = is_factory_raw if isinstance(is_factory_raw, bool) else None
+        is_factory = _parse_factory_flag(raw)
 
         dto = SupplierDTO(
             alibaba_offer_id=offer_id,
@@ -164,6 +182,10 @@ def _convert_to_supplier_dtos(
                 "observed_price": raw.get("price"),
                 "observed_moq": raw.get("moq"),
                 "observed_monthly_sales": raw.get("monthly_sales"),
+                "observed_repeat_buyer_rate": raw.get("repeat_buyer_rate"),
+                "observed_gm_type": raw.get("gm_type"),
+                "observed_merchant_identity": raw.get("merchant_identity"),
+                "observed_delivery_time": raw.get("delivery_time"),
                 "identity_verified": True,
             },
         )
@@ -233,11 +255,69 @@ def _parse_int(value: object) -> int | None:
         return None
 
 
+def _parse_sales_volume(value: object) -> int | None:
+    """Parse 1688 sold-text such as '1.4万+' or '3100+' into an integer volume."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value) if value > 0 else None
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    wan = re.search(r"(\d+(?:\.\d+)?)\s*万", text)
+    if wan:
+        result = int(float(wan.group(1)) * 10_000)
+        return result if result > 0 else None
+    qian = re.search(r"(\d+(?:\.\d+)?)\s*千", text)
+    if qian:
+        result = int(float(qian.group(1)) * 1_000)
+        return result if result > 0 else None
+    return _parse_int(text)
+
+
+_FACTORY_POSITIVE_RE = re.compile(r"生产厂家|源头工厂|超级工厂")
+_FACTORY_NEGATIVE_RE = re.compile(r"贸易公司|经销批发|贸易商")
+
+
+def _parse_factory_flag(raw: dict[str, Any]) -> bool | None:
+    """Prefer an explicit boolean, then Newton gmType / merchantIdentity labels."""
+    is_factory_raw = raw.get("is_factory")
+    if isinstance(is_factory_raw, bool):
+        return is_factory_raw
+    blob = " ".join(
+        str(raw.get(key) or "")
+        for key in ("gm_type", "merchant_identity")
+    )
+    if _FACTORY_POSITIVE_RE.search(blob):
+        return True
+    if _FACTORY_NEGATIVE_RE.search(blob):
+        return False
+    return None
+
+
 def _parse_percentage(value: object) -> float | None:
     if value is None:
         return None
-    match = re.search(r"(\d+(?:\.\d+)?)\s*%", str(value))
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        parsed = float(value)
+        if 0 <= parsed <= 1:
+            return parsed
+        if 1 < parsed <= 100:
+            return parsed / 100
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
+    if match:
+        parsed = float(match.group(1)) / 100
+        return parsed if 0 <= parsed <= 1 else None
+    match = re.search(r"^(\d+(?:\.\d+)?)$", text)
     if not match:
         return None
-    parsed = float(match.group(1)) / 100
-    return parsed if 0 <= parsed <= 1 else None
+    parsed = float(match.group(1))
+    if 0 <= parsed <= 1:
+        return parsed
+    if 1 < parsed <= 100:
+        return parsed / 100
+    return None

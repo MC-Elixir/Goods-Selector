@@ -306,16 +306,16 @@ class LLMVisualVerifier:
         from config.settings import settings
         resolved = settings.vision_provider if provider == "auto" else provider
         self._provider = resolved if resolved != "none" else "ppio"
-        if self._provider not in {"ppio", "anthropic"}:
+        if self._provider not in {"ppio", "aliyun", "aliyun_token_plan", "anthropic"}:
             raise ValueError("未知视觉验证 provider")
         if self._provider == "anthropic":
             self._api_key = api_key or settings.anthropic_api_key
             self._api_base = api_base
             self._model = model or settings.anthropic_model
         else:
-            self._api_key = api_key or settings.ppio_api_key
-            self._api_base = api_base or settings.ppio_api_base
-            self._model = model or settings.ppio_model or "qwen/qwen2.5-vl-72b-instruct"
+            self._api_key = api_key or settings.openai_compatible_api_key
+            self._api_base = api_base or settings.openai_compatible_api_base
+            self._model = model or settings.openai_compatible_vision_model or "qwen3-vl-plus"
         self._provider_client = provider_client or _ConfiguredVisionClient(self)
         if provider_client is None and not self._api_key:
             raise ValueError("视觉验证 API key 未配置")
@@ -450,7 +450,7 @@ class LLMVisualVerifier:
 
     def _call_task_b(self, images, prompt) -> dict:
         try:
-            if self._provider == "ppio":
+            if self._provider in {"ppio", "aliyun", "aliyun_token_plan"}:
                 import openai
                 client = openai.OpenAI(api_key=self._api_key, base_url=self._api_base)
                 content = []

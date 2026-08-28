@@ -6,56 +6,61 @@
 
 当前交付只要求：
 
-1. 本机已装 Docker 与 Hermes 0.20.x
-2. 项目 `.env` 填写 **`PPIO_API_KEY`**
-3. 启动后在 9222 专用 Chrome 登录卖家精灵插件（一键研究）
-4. 在 WebUI / 操作页完成 Amazon、1688 登录
+1. 本机已安装 Docker Desktop 与 Google Chrome
+2. 项目 `.env` 配置运行所需密钥
+3. 在 9222 专用 Chrome 登录卖家精灵插件、Amazon 和 1688
 
-不要填写 `MJJL_API_KEY`、`KEEPA_API_KEY`、`RAINFOREST_API_KEY`。Amazon 不配 Keepa/Rainforest 时走爬虫；卖家精灵市场分析走浏览器导出。`SELECTOR_MCP_TOKEN` 由安装脚本自动生成。
+默认不需要填写 `MJJL_API_KEY`、`KEEPA_API_KEY`、`RAINFOREST_API_KEY`。Amazon 不配
+Keepa/Rainforest 时走爬虫；卖家精灵市场分析可走浏览器导出。若已购买卖家精灵开放平台
+能力，也可设置 `MJJL_TRANSPORT=mcp` 使用官方 MCP 获取市场数据，但插件“1688 找货”
+仍是正式供应商发现路径。`SELECTOR_MCP_TOKEN` 由安装脚本自动生成。
 
-```bash
-# 在项目根目录的 .env 写入 PPIO_API_KEY 后：
-chmod +x scripts/start_hermes_client.sh
-./scripts/start_hermes_client.sh
-```
+Windows 在项目根目录运行 `start.ps1` 即可；其他系统运行
+`docker compose up -d --build amazon-selector`。数据库初始化由容器入口自动完成。
+`start.ps1` 不假定 Windows loopback 一定能被 Docker Desktop 转发：它先等待 Windows
+`127.0.0.1:9222/json/version`，再从 `amazon-selector` 内通过
+`host.docker.internal:9222` 解析当前 CDP WebSocket 并验证端口可达。CDP 任一步失败都会
+停止服务并打印分阶段诊断。SellerSprite locator、下载目录或插件会话未就绪时 WebUI
+会保留用于完成配置，但脚本明确警告不要开始正式任务。不要为了绕过检查把 9222
+裸暴露到局域网或公网。
 
 地址：
 
 ```text
 http://127.0.0.1:8765/operator   # 人工登录 / 验证码 / 续跑
 http://127.0.0.1:8765            # 一键研究
-http://127.0.0.1:8766/mcp        # Selector MCP（本机 Bearer）
+http://127.0.0.1:8766/mcp        # 可选 assistant profile / MCP
 ```
 
 需要代理才能构建镜像时，在宿主机导出 `HTTP_PROXY` / `HTTPS_PROXY`；compose 不再写死本机代理端口。
 
 ## 1. 准备 `.env`
 
-`.env`（以及某些机器上已有的 `.env.example`）是本地私有文件，均不会提交到
-仓库，也不会被复制进生产镜像。因此新 clone 的目录**不能假定**存在
-`.env.example`，不要直接执行 `cp .env.example .env`。在部署机器手工创建私有配置：
+`.env.example` 是不含密钥的版本化模板；`.env` 是本机私有文件，不会提交到仓库，也
+不会被复制进生产镜像。新 clone 后创建私有配置：
 
 ```bash
-umask 077
-touch .env
+cp .env.example .env
+chmod 600 .env
 ${EDITOR:-vi} .env
 ```
 
-若团队已通过受控渠道提供了该机器上的本地模板，先确认文件存在且内容可信后才可
-复制它；不要把含密钥的模板提交到仓库。
+不要把真实密钥写回 `.env.example` 或提交 `.env`。
 
 至少配置：
 
 ```dotenv
 DATABASE_URL=sqlite:///data/amazon_selector.db
-PPIO_API_KEY=你的_ppio_key
-PPIO_API_BASE=https://api.ppio.com/openai
-PPIO_MODEL=qwen/qwen3.5-plus
-PPIO_TEXT_MODEL=zai-org/glm-5.2
+MODEL_API_PROVIDER=aliyun_token_plan
+ALIYUN_TOKEN_PLAN_API_KEY=你的_sk-sp_key
+ALIYUN_TOKEN_PLAN_API_BASE=https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+ALIYUN_TOKEN_PLAN_VISION_MODEL=qwen3-vl-plus
+ALIYUN_TOKEN_PLAN_TEXT_MODEL=qwen-plus
 ALIBABA_ALLOW_MOCK_SUPPLIERS=false
 ENABLE_SCRAPLING_MATCHER=false
 LOG_DIR=data/logs
 BU_CDP_HTTP=http://host.docker.internal:9222
+MJJL_MAX_PRODUCTS_PER_RUN=1
 ```
 
 `./scripts/start_hermes_client.sh` 会在缺省时自动补上上述非密钥默认值，并生成
@@ -74,9 +79,12 @@ ALIBABA_ACCESS_TOKEN=
 
 说明：
 
-- `PPIO_API_KEY` 用于视觉识别和 Hermes 对话，正式选品必填。
+- 模型 API 至少配置一种：阿里云 Token Plan、阿里云百炼按量付费、PPIO 或 Anthropic。
+- Token Plan 的 `sk-sp-` Key 必须与对应地域的 Token Plan Base URL 配套；不要与普通百炼端点混用。
 - `KEEPA_API_KEY` / `RAINFOREST_API_KEY` 可作为 Amazon 数据源；不填时默认走爬虫路径。
 - `MJJL_API_KEY` 是卖家精灵 HTTP API；本次交付不使用，市场数据来自浏览器导出。
+- `MJJL_MAX_PRODUCTS_PER_RUN` 在正式浏览器流程中只作为启用开关：任何正数都会对本次
+  Amazon crawler 得到的全部 ASIN 逐一取证；`0` 仅用于离线诊断，不能用于正式任务。
 - `ALIBABA_DETAIL_ENRICH_LIMIT=2` 控制每个 Amazon 商品最多打开多少个 1688 详情页补 MOQ、包装尺寸、交期和风险线索。
 - `ALIBABA_DETAIL_CACHE_TTL_SECONDS=604800` 控制 1688 详情页补全缓存有效期，缓存落在 `data/cache/1688/offer_details.json`。
 - `LOG_DIR=data/logs` 把日志目录放进 `./data` 数据卷，便于备份和排障。
@@ -104,10 +112,10 @@ Docker 部署会把宿主机 `./data` 挂载到容器 `/app/data`，所以容器
 
 ## 3. Docker 部署
 
-一条命令构建并启动 WebUI：
+一条命令构建并启动唯一必需的 WebUI 服务：
 
 ```bash
-docker compose up --build -d
+docker compose up --build -d amazon-selector
 ```
 
 默认只监听宿主机本地：

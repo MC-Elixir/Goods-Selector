@@ -60,8 +60,24 @@ def test_compose_uses_single_persistent_data_volume_and_local_only_port():
     assert 'profiles: ["assistant"]' in compose
     assert "127.0.0.1:8766:8766" in compose
     assert "SELECTOR_API_BASE_URL: http://amazon-selector:8765" in compose
+    assert "BU_CDP_HTTP: http://host.docker.internal:9222" in compose
+    assert "${BU_CDP_HTTP" not in compose
     assert "7897" not in compose
     assert "HTTP_PROXY" not in compose
+
+
+def test_windows_startup_keeps_chrome_private_and_verifies_container_cdp():
+    script = Path("start.ps1").read_text(encoding="utf-8")
+
+    assert '--remote-debugging-address=127.0.0.1' in script
+    assert '"--remote-debugging-address=0.0.0.0",' not in script
+    assert 'http://127.0.0.1:9222/json/version' in script
+    assert 'http://host.docker.internal:9222' in script
+    assert 'from agent.browser_agent import _resolve_cdp_ws' in script
+    assert 'from agent.preflight import _assert_cdp_websocket_reachable' in script
+    assert 'docker compose stop amazon-selector' in script
+    assert 'seller_sprite_browser' in script
+    assert 'do not start a formal run until this check is OK' in script
 
 
 def test_docs_present_docker_as_the_default_webui_runtime():

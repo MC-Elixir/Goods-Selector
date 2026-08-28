@@ -26,8 +26,37 @@ class Settings(BaseSettings):
         default=f"sqlite:///{DATA_DIR}/amazon_selector.db"
     )
 
-    # ---------- 视觉分析后端（二选一，PPIO 优先）----------
-    # PPIO（派噢）— OpenAI 兼容接口，国内访问快，支持 Qwen-VL 等模型
+    # ---------- 视觉/文本模型后端 ----------
+    # 阿里云百炼按量付费（OpenAI 兼容）
+    aliyun_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALIYUN_API_KEY", "DASHSCOPE_API_KEY"),
+    )
+    aliyun_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    aliyun_vision_model: str = "qwen3-vl-plus"
+    aliyun_text_model: str = "qwen-plus"
+
+    # 阿里云 Token Plan。Key、Base URL 必须成对使用，不能和按量付费混用。
+    aliyun_token_plan_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ALIYUN_TOKEN_PLAN_API_KEY",
+            "DASHSCOPE_TOKEN_PLAN_API_KEY",
+            "TOKEN_PLAN_API_KEY",
+        ),
+    )
+    aliyun_token_plan_api_base: str = (
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    )
+    aliyun_token_plan_vision_model: str = "qwen3-vl-plus"
+    aliyun_token_plan_text_model: str = "qwen-plus"
+
+    # auto 优先 Token Plan，其次百炼按量付费、PPIO、Anthropic。
+    model_api_provider: Literal[
+        "auto", "aliyun_token_plan", "aliyun", "ppio", "anthropic"
+    ] = "auto"
+
+    # PPIO（旧配置继续兼容）— OpenAI 兼容接口
     ppio_api_key: str = ""
     ppio_api_base: str = "https://api.ppio.com/openai"
     ppio_model: str = "qwen/qwen3.5-plus"  # PPIO 上的视觉模型（需支持 image 输入）
@@ -36,15 +65,61 @@ class Settings(BaseSettings):
     ppio_text_model: str = "minimax/minimax-m3"
     llm_request_timeout_seconds: float = 30.0
 
-    # Anthropic — Claude Vision（PPIO 未配置时的备用）
+    # Anthropic — Claude Vision（OpenAI 兼容供应商未配置时的备用）
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
 
     @property
-    def vision_provider(self) -> str:
-        """自动选择视觉分析后端：PPIO 优先，其次 Anthropic。"""
+    def openai_compatible_provider(self) -> str:
+        requested = self.model_api_provider
+        if requested != "auto":
+            return requested if requested != "anthropic" else "none"
+        if self.aliyun_token_plan_api_key:
+            return "aliyun_token_plan"
+        if self.aliyun_api_key:
+            return "aliyun"
         if self.ppio_api_key:
             return "ppio"
+        return "none"
+
+    @property
+    def openai_compatible_api_key(self) -> str:
+        return {
+            "aliyun_token_plan": self.aliyun_token_plan_api_key,
+            "aliyun": self.aliyun_api_key,
+            "ppio": self.ppio_api_key,
+        }.get(self.openai_compatible_provider, "")
+
+    @property
+    def openai_compatible_api_base(self) -> str:
+        return {
+            "aliyun_token_plan": self.aliyun_token_plan_api_base,
+            "aliyun": self.aliyun_api_base,
+            "ppio": self.ppio_api_base,
+        }.get(self.openai_compatible_provider, "")
+
+    @property
+    def openai_compatible_vision_model(self) -> str:
+        return {
+            "aliyun_token_plan": self.aliyun_token_plan_vision_model,
+            "aliyun": self.aliyun_vision_model,
+            "ppio": self.ppio_model,
+        }.get(self.openai_compatible_provider, "")
+
+    @property
+    def openai_compatible_text_model(self) -> str:
+        return {
+            "aliyun_token_plan": self.aliyun_token_plan_text_model,
+            "aliyun": self.aliyun_text_model,
+            "ppio": self.ppio_text_model,
+        }.get(self.openai_compatible_provider, "")
+
+    @property
+    def vision_provider(self) -> str:
+        """Resolve an OpenAI-compatible backend first, then Anthropic."""
+        provider = self.openai_compatible_provider
+        if provider != "none" and self.openai_compatible_api_key:
+            return provider
         if self.anthropic_api_key:
             return "anthropic"
         return "none"

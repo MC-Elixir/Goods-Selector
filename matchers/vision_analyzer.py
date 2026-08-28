@@ -3,11 +3,10 @@
 ==========
 输入 Amazon 产品图片（URL 或字节），输出结构化产品信息和 1688 中文搜索关键词。
 
-支持两个后端（自动选择，PPIO 优先）：
+支持 OpenAI 兼容后端（阿里云 Token Plan、百炼、PPIO）和 Anthropic：
 
-  PPIO（推荐）
-      OpenAI 兼容接口，国内访问稳定，支持 Qwen-VL 等多种视觉模型
-      环境变量：PPIO_API_KEY, PPIO_API_BASE, PPIO_MODEL
+  阿里云 / Token Plan / PPIO
+      OpenAI 兼容接口，支持配置对应的视觉模型与地域 Base URL
 
   Anthropic
       Claude Vision，备用方案
@@ -122,7 +121,7 @@ model_provider, model_name, prompt_version。
 Amazon 文本证据：
 """
 
-Provider = Literal["ppio", "anthropic", "auto"]
+Provider = Literal["aliyun_token_plan", "aliyun", "ppio", "anthropic", "auto"]
 
 
 # ============================================================
@@ -132,8 +131,8 @@ class VisionAnalyzer:
     """分析 Amazon 产品图片，提取 1688 搜索关键词。
 
     provider 选项：
-        "auto"      根据已配置的 Key 自动选择（PPIO 优先）
-        "ppio"      PPIO OpenAI 兼容接口（需 PPIO_API_KEY）
+        "auto"      根据已配置的 Key 自动选择（Token Plan → 百炼 → PPIO → Anthropic）
+        "aliyun_token_plan" / "aliyun" / "ppio" 使用 OpenAI 兼容接口
         "anthropic" Anthropic Claude Vision（需 ANTHROPIC_API_KEY）
     """
 
@@ -229,7 +228,7 @@ class VisionAnalyzer:
             sort_keys=True,
             default=str,
         )
-        if self._provider == "ppio":
+        if self._provider in {"ppio", "aliyun", "aliyun_token_plan"}:
             content = [self._openai_image_block(image) for image in images]
             content.append({"type": "text", "text": prompt})
             try:
@@ -278,7 +277,7 @@ class VisionAnalyzer:
 
     # --------------------------------------------------------
     def _call(self, image_bytes: bytes) -> ProductAnalysis:
-        if self._provider == "ppio":
+        if self._provider in {"ppio", "aliyun", "aliyun_token_plan"}:
             return self._call_openai_compatible(image_bytes)
         return self._call_anthropic(image_bytes)
 
@@ -334,14 +333,14 @@ class VisionAnalyzer:
         return settings.vision_provider if settings.vision_provider != "none" else "ppio"
 
     def _build_client(self):
-        if self._provider == "ppio":
+        if self._provider in {"ppio", "aliyun", "aliyun_token_plan"}:
             if not _HAS_OPENAI:
                 raise ImportError("请先安装：pip install openai")
-            key = self._api_key or settings.ppio_api_key
-            base = self._api_base or settings.ppio_api_base
+            key = self._api_key or settings.openai_compatible_api_key
+            base = self._api_base or settings.openai_compatible_api_base
             if not key:
-                raise ValueError("PPIO_API_KEY 未配置，请在 .env 中设置")
-            self._model = self._model or settings.ppio_model
+                raise ValueError("OpenAI-compatible API key 未配置，请在 .env 中设置")
+            self._model = self._model or settings.openai_compatible_vision_model
             return _openai.OpenAI(
                 api_key=key,
                 base_url=base,
@@ -360,7 +359,9 @@ class VisionAnalyzer:
                 timeout=float(settings.llm_request_timeout_seconds),
             )
 
-        raise ValueError(f"未知 provider: {self._provider}，可选：ppio / anthropic")
+        raise ValueError(
+            f"未知 provider: {self._provider}，可选：aliyun_token_plan / aliyun / ppio / anthropic"
+        )
 
 
 # ============================================================

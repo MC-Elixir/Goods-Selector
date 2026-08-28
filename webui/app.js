@@ -131,13 +131,13 @@ const I18N = {
     "research.history": "Recent research runs",
     "trial.kicker": "CONTROLLED TRIAL · REAL DATA",
     "trial.title": "One-click market research and 1688 sourcing",
-    "trial.subtitle": "First open the target Amazon category or search list in the dedicated Chrome on port 9222. The job exports SellerSprite data, scores the market, selects ASINs, finds 1688 suppliers, and produces two Excel reports.",
+    "trial.subtitle": "The job crawls Amazon US first, collects SellerSprite market and 1688 evidence for every ASIN, then produces one Excel workbook.",
     "trial.idle": "Ready to start",
     "trial.sourceMode": "Research source",
     "trial.categoryMode": "Amazon category list",
     "trial.keywordMode": "Amazon search list",
     "trial.englishHint": "Use the English query shown on Amazon US.",
-    "trial.limit": "Top scored candidates for sourcing",
+    "trial.limit": "Amazon products to process",
     "trial.aiReasons": "Generate optional AI research reasons",
     "trial.contract": "The trial uses real Amazon, SellerSprite, and 1688 data only. Missing login, captcha, or supplier evidence pauses or fails explicitly; mock results are never inserted.",
     "trial.start": "Start full research",
@@ -146,12 +146,12 @@ const I18N = {
     "trial.noJob": "No trial job has been created",
     "trial.stagePreflight": "Environment and login checks",
     "trial.stagePreflightHint": "Chrome, cookies, download directory",
-    "trial.stageResearch": "Market export and aggregate scoring",
-    "trial.stageResearchHint": "Real SellerSprite list → research Excel",
+    "trial.stageResearch": "Per-ASIN SellerSprite market evidence",
+    "trial.stageResearchHint": "Every crawled ASIN → reverse-keyword evidence",
     "trial.stageSourcing": "1688 sourcing and profit scoring",
     "trial.stageSourcingHint": "Top ASINs → supplier evidence",
     "trial.stageReport": "Candidate shortlist and delivery",
-    "trial.stageReportHint": "Downloadable Excel / JSON",
+    "trial.stageReportHint": "One downloadable Excel workbook",
     "trial.continue": "Handled — continue job",
     "trial.deliverables": "Deliverables",
     "trial.feedbackTitle": "Trial experience",
@@ -412,6 +412,7 @@ const I18N = {
     "settings.visionBase": "Vision API base",
     "settings.visionKey": "Vision API key",
     "settings.visionModel": "Vision model",
+    "settings.visionProvider": "Vision API provider",
     "settings.visionSaved": "Vision model saved",
     "settings.saveVision": "Save vision model",
     "sidebar.agentDefinition": "Agent Definition",
@@ -548,13 +549,13 @@ const I18N = {
     "research.history": "最近的研究记录",
     "trial.kicker": "受控试用 · 真实数据",
     "trial.title": "一键完成市场研究与 1688 找货",
-    "trial.subtitle": "先在 9222 专用 Chrome 打开目标 Amazon 类目或搜索列表。提交后系统会自动导出卖家精灵数据、汇总评分、筛选 ASIN、匹配 1688 货源并生成两份 Excel。",
+    "trial.subtitle": "任务先抓取 Amazon US，再对每个 ASIN 获取卖家精灵市场与 1688 证据，最终生成一个 Excel 工作簿。",
     "trial.idle": "等待开始",
     "trial.sourceMode": "研究入口",
     "trial.categoryMode": "Amazon 类目列表",
     "trial.keywordMode": "Amazon 搜索列表",
     "trial.englishHint": "Amazon US 请填写英文检索词。",
-    "trial.limit": "进入找货的高分候选数",
+    "trial.limit": "本次处理的 Amazon 商品数",
     "trial.aiReasons": "生成 AI 研究理由（可选）",
     "trial.contract": "正式试用只使用真实 Amazon、卖家精灵与 1688 数据；缺少登录、验证码或有效供应商证据时会暂停或明确失败，不会填充 Mock 结果。",
     "trial.start": "开始完整研究",
@@ -563,12 +564,12 @@ const I18N = {
     "trial.noJob": "尚未创建试用任务",
     "trial.stagePreflight": "运行环境与登录检查",
     "trial.stagePreflightHint": "Chrome、Cookies、下载目录",
-    "trial.stageResearch": "市场数据导出与汇总评分",
-    "trial.stageResearchHint": "卖家精灵真实列表 → 研究 Excel",
+    "trial.stageResearch": "逐 ASIN 卖家精灵市场证据",
+    "trial.stageResearchHint": "每个 Amazon 商品 → 反查关键词证据",
     "trial.stageSourcing": "1688 找货与利润评分",
-    "trial.stageSourcingHint": "高分 ASIN → 供应商证据",
+    "trial.stageSourcingHint": "逐 ASIN 卖家精灵 1688 证据",
     "trial.stageReport": "候选清单与报告交付",
-    "trial.stageReportHint": "可下载 Excel / JSON",
+    "trial.stageReportHint": "下载一个 Excel 工作簿",
     "trial.continue": "我已处理，继续任务",
     "trial.deliverables": "可交付文件",
     "trial.feedbackTitle": "本次试用体验",
@@ -595,7 +596,7 @@ const I18N = {
     "trial.validationImprove": "先改进再打包",
     "trial.validationSamples": "有效反馈",
     "trial.validationCoverage": "入口覆盖",
-    "trial.validationDelivery": "双报告交付率",
+    "trial.validationDelivery": "单一 Excel 交付率",
     "trial.validationEase": "平均顺畅度",
     "trial.validationUsefulness": "报告帮助度",
     "trial.validationAgain": "愿意继续使用",
@@ -829,6 +830,7 @@ const I18N = {
     "settings.visionBase": "视觉 API 地址",
     "settings.visionKey": "视觉 API Key",
     "settings.visionModel": "视觉模型",
+    "settings.visionProvider": "视觉 API 供应商",
     "settings.visionSaved": "视觉模型已保存",
     "settings.saveVision": "保存视觉模型",
     "sidebar.agentDefinition": "Agent 定义",
@@ -974,6 +976,7 @@ function bindActions() {
   });
   $("#sellerSpriteForm").addEventListener("submit", configureSellerSprite);
   $("#visionModelForm").addEventListener("submit", configureVisionModel);
+  $("#visionProviderInput").addEventListener("change", updateVisionProviderHints);
   $("#sellerSpriteAsinForm").addEventListener("submit", checkSellerSpriteAsin);
   $("#alibabaSearchApiForm").addEventListener("submit", configureAlibabaSearchApi);
   $("#alibabaPifatuanForm").addEventListener("submit", checkAlibabaPifatuan);
@@ -1355,6 +1358,7 @@ async function configureVisionModel(event) {
   const status = $("#visionModelConfigStatus");
   try {
     const result = await postJson("/api/config/vision-model", {
+      provider: String(form.get("provider") || ""),
       key: String(form.get("key") || ""),
       model: String(form.get("model") || ""),
       base_url: String(form.get("base_url") || ""),
@@ -1367,6 +1371,37 @@ async function configureVisionModel(event) {
     status.className = "status-error";
     status.textContent = error.message;
   }
+}
+
+function updateVisionProviderHints() {
+  const provider = String($("#visionProviderInput")?.value || "aliyun_token_plan");
+  const hints = {
+    aliyun_token_plan: {
+      base: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      model: "qwen3-vl-plus",
+    },
+    aliyun: {
+      base: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model: "qwen3-vl-plus",
+    },
+    ppio: {
+      base: "https://api.ppio.com/openai",
+      model: "qwen/qwen3.5-plus",
+    },
+  };
+  const selected = hints[provider] || hints.aliyun_token_plan;
+  const baseInput = $("#visionBaseInput");
+  const modelInput = $("#visionModelInput");
+  const knownBases = Object.values(hints).map((item) => item.base);
+  const knownModels = Object.values(hints).map((item) => item.model);
+  if (!baseInput.value.trim() || knownBases.includes(baseInput.value.trim())) {
+    baseInput.value = selected.base;
+  }
+  if (!modelInput.value.trim() || knownModels.includes(modelInput.value.trim())) {
+    modelInput.value = selected.model;
+  }
+  baseInput.placeholder = selected.base;
+  modelInput.placeholder = selected.model;
 }
 
 async function checkSellerSpriteAsin(event) {
@@ -2476,10 +2511,7 @@ function trialDownloadLinks(job) {
     const filename = String(path).split(/[\\/]/).pop();
     links.push(`<a class="ghost-button" href="/api/exports/${encodeURIComponent(filename)}">${escapeHtml(label)}</a>`);
   };
-  add(state.lang === "zh" ? "市场汇总 Excel" : "Market research Excel", job.research?.exports?.xlsx);
-  add(state.lang === "zh" ? "市场数据 JSON" : "Market research JSON", job.research?.exports?.json);
-  add(state.lang === "zh" ? "选品结果 Excel" : "Sourcing results Excel", job.exports?.xlsx);
-  add(state.lang === "zh" ? "选品证据 JSON" : "Sourcing evidence JSON", job.exports?.json);
+  add(state.lang === "zh" ? "选品结果 Excel" : "Sourcing workbook", job.exports?.xlsx);
   return links.join("");
 }
 
@@ -2713,7 +2745,7 @@ function renderConfigStatus() {
     capabilityCard(
       "settings.capability.vision",
       Boolean(status.vision?.configured),
-      status.vision?.configured ? status.vision.provider : "PPIO_API_KEY / ANTHROPIC_API_KEY",
+      status.vision?.configured ? status.vision.provider : "ALIYUN_TOKEN_PLAN_API_KEY / ALIYUN_API_KEY / PPIO_API_KEY / ANTHROPIC_API_KEY",
     ),
     capabilityCard(
       "settings.capability.alibaba",
@@ -2740,8 +2772,14 @@ function renderConfigStatus() {
   ];
   grid.innerHTML = cards.join("");
   if (status.vision) {
+    const providerInput = $("#visionProviderInput");
+    const provider = String(status.vision.provider || "").toLowerCase();
+    if (providerInput && ["aliyun_token_plan", "aliyun", "ppio"].includes(provider)) {
+      providerInput.value = provider;
+    }
     $("#visionModelInput").value = status.vision.model || "";
     $("#visionBaseInput").value = status.vision.base_url || "";
+    updateVisionProviderHints();
   }
   updateRunAvailability();
 }

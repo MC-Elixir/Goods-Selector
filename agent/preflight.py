@@ -44,9 +44,14 @@ def run_preflight() -> dict[str, Any]:
 
 
 def _check_ppio() -> dict[str, Any]:
-    if settings.ppio_api_key or settings.anthropic_api_key:
-        return _ok("vision", "Vision model key configured", "PPIO" if settings.ppio_api_key else "Anthropic")
-    return _err("vision", "Vision model key missing", "Set PPIO_API_KEY or ANTHROPIC_API_KEY")
+    provider = settings.vision_provider
+    if provider != "none":
+        return _ok("vision", "Vision model key configured", provider)
+    return _err(
+        "vision",
+        "Vision model key missing",
+        "Set ALIYUN_TOKEN_PLAN_API_KEY, ALIYUN_API_KEY, PPIO_API_KEY, or ANTHROPIC_API_KEY",
+    )
 
 
 def _check_seller_sprite() -> dict[str, Any]:
@@ -96,19 +101,40 @@ def _check_seller_sprite_browser() -> dict[str, Any]:
             SellerSpriteLocatorProfile.from_json(project_local_path(PROJECT_ROOT, profile_path))
         else:
             SellerSpriteLocatorProfile.from_json(Path(profile_path))
-    except Exception:
-        return _warn(key, "SellerSprite browser locator profile unavailable", "Configure a valid locator profile")
+    except Exception as exc:
+        return _warn(
+            key,
+            "SellerSprite browser locator profile unavailable",
+            _diagnostic_detail(
+                "Set SELLERSPRITE_BROWSER_LOCATOR_PROFILE_PATH to a reviewed JSON file under /app/data/",
+                exc,
+            ),
+        )
 
     try:
         _assert_sellersprite_download_dir_writable(browser_config.download_dir)
-    except Exception:
-        return _warn(key, "SellerSprite browser download directory unavailable", "Configure a writable container download directory")
+    except Exception as exc:
+        return _warn(
+            key,
+            "SellerSprite browser download directory unavailable",
+            _diagnostic_detail(
+                "Set SELLERSPRITE_BROWSER_DOWNLOAD_DIR to a writable directory under /app/data/",
+                exc,
+            ),
+        )
 
     try:
         cdp_ws = _resolve_cdp_ws()
         _assert_cdp_websocket_reachable(cdp_ws)
-    except Exception:
-        return _warn(key, "SellerSprite browser Chrome connection unavailable", "Start Chrome remote debugging and configure CDP")
+    except Exception as exc:
+        return _warn(
+            key,
+            "SellerSprite browser Chrome connection unavailable",
+            _diagnostic_detail(
+                "Run .\\start.ps1; Docker must use BU_CDP_HTTP=http://host.docker.internal:9222",
+                exc,
+            ),
+        )
 
     return _ok(
         key,
@@ -142,11 +168,14 @@ def _check_1688_browser_session() -> dict[str, Any]:
     try:
         cdp_ws = _resolve_cdp_ws()
         _assert_cdp_websocket_reachable(cdp_ws)
-    except Exception:
+    except Exception as exc:
         return _err(
             key,
             "1688 dedicated Chrome unavailable",
-            "Start the dedicated Chrome profile on port 9222, then complete login or verification if prompted",
+            _diagnostic_detail(
+                "Run .\\start.ps1 and verify Chrome at 127.0.0.1:9222; Docker must use host.docker.internal:9222",
+                exc,
+            ),
         )
     return _ok(key, "1688 dedicated Chrome ready", "Chrome CDP session is reachable")
 
@@ -160,6 +189,14 @@ def _assert_sellersprite_download_dir_writable(raw_path: str | None = None) -> N
     probe = path / ".sellersprite_write_probe"
     probe.write_text("ok", encoding="utf-8")
     probe.unlink(missing_ok=True)
+
+
+def _diagnostic_detail(action: str, exc: Exception, *, max_reason_length: int = 240) -> str:
+    """Return an actionable, bounded one-line reason safe for preflight UI."""
+    reason = " ".join(str(exc).split()) or exc.__class__.__name__
+    if len(reason) > max_reason_length:
+        reason = reason[: max_reason_length - 3] + "..."
+    return f"{action}. Reason: {reason}"
 
 
 def _is_safe_cdp_websocket(value: object) -> bool:

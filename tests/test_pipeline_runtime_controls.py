@@ -50,8 +50,8 @@ def test_run_pipeline_emits_per_asin_heartbeat(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "mjjl_max_products_per_run", 0)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: products)
     monkeypatch.setattr(
-        "matchers.match_suppliers",
-        lambda product: [SupplierDTO(alibaba_offer_id=f"offer-{product.asin}", base_price_cny=20.0)],
+            "pipeline.recoverable._formal_match_suppliers",
+            lambda product, **_kwargs: [SupplierDTO(alibaba_offer_id=f"offer-{product.asin}", base_price_cny=20.0)],
     )
     monkeypatch.setattr(
         "pipeline.orchestrator.predict_profit",
@@ -105,13 +105,13 @@ def test_run_pipeline_stage_timeout_fails_run_log(monkeypatch, tmp_path):
     temp_session_scope = _temp_session_scope(tmp_path)
     product = ProductDTO(asin="B0TIMEOUT1", marketplace="US", title="Slow match", price=25.0)
 
-    def slow_match(product):
+    def slow_match(product, **_kwargs):
         raise TimeoutError("match supplier timed out after 0.01s")
 
     monkeypatch.setattr("pipeline.orchestrator.session_scope", temp_session_scope)
     monkeypatch.setattr(settings, "mjjl_max_products_per_run", 0)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
-    monkeypatch.setattr("matchers.match_suppliers", slow_match)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", slow_match)
 
     with pytest.raises(PipelineTimeout):
         run_pipeline(
@@ -134,7 +134,7 @@ def test_run_pipeline_passes_cancel_check_to_matcher_when_supported(monkeypatch,
     product = ProductDTO(asin="B0CANCEL1", marketplace="US", title="Cancelable match", price=25.0)
     received_cancel_check = []
 
-    def fake_match(product, *, cancel_check=None):
+    def fake_match(product, *, market_keywords=None, cancel_check=None):
         received_cancel_check.append(cancel_check)
         assert cancel_check is not None
         assert cancel_check() is False
@@ -143,7 +143,7 @@ def test_run_pipeline_passes_cancel_check_to_matcher_when_supported(monkeypatch,
     monkeypatch.setattr("pipeline.orchestrator.session_scope", temp_session_scope)
     monkeypatch.setattr(settings, "mjjl_max_products_per_run", 0)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
-    monkeypatch.setattr("matchers.match_suppliers", fake_match)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", fake_match)
     monkeypatch.setattr(
         "pipeline.orchestrator.predict_profit",
         lambda product, supplier: SimpleNamespace(
@@ -211,7 +211,7 @@ def test_run_pipeline_persists_products_and_suppliers_during_run(monkeypatch, tm
     monkeypatch.setattr("pipeline.orchestrator.session_scope", temp_session_scope)
     monkeypatch.setattr(settings, "mjjl_max_products_per_run", 0)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
-    monkeypatch.setattr("matchers.match_suppliers", lambda product: [supplier])
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", lambda product, **_kwargs: [supplier])
     monkeypatch.setattr(
         "pipeline.orchestrator.predict_profit",
         lambda product, supplier: SimpleNamespace(

@@ -82,7 +82,7 @@
               <div>
                 <span class="trial-kicker" data-i18n="trial.kicker">受控试用 · 真实数据</span>
                 <h2 data-i18n="trial.title">一键完成市场研究与 1688 找货</h2>
-                <p data-i18n="trial.subtitle">先在 9222 专用 Chrome 打开目标 Amazon 类目或搜索列表。提交后系统会自动导出卖家精灵数据、汇总评分、筛选 ASIN、匹配 1688 货源并生成两份 Excel。</p>
+                <p data-i18n="trial.subtitle">任务先抓取 Amazon US，再对每个 ASIN 获取卖家精灵市场与 1688 证据，最终生成一个 Excel 工作簿。</p>
               </div>
               <span class="badge muted" id="trialStatusBadge" data-i18n="trial.idle">等待开始</span>
             </div>
@@ -118,7 +118,7 @@
                 <small class="field-hint" data-i18n="trial.englishHint">Amazon US 请填写英文检索词。</small>
               </label>
               <label>
-                <span data-i18n="trial.limit">进入找货的高分候选数</span>
+                <span data-i18n="trial.limit">本次处理的 Amazon 商品数</span>
                 <input name="limit" type="number" min="1" max="20" value="10">
               </label>
               <label class="switch-row">
@@ -150,9 +150,9 @@
             </div>
             <ol class="trial-stages" id="trialStages">
               <li data-stage="preflight"><span>1</span><div><strong data-i18n="trial.stagePreflight">运行环境与登录检查</strong><small data-i18n="trial.stagePreflightHint">Chrome、Cookies、下载目录</small></div></li>
-              <li data-stage="research"><span>2</span><div><strong data-i18n="trial.stageResearch">市场数据导出与汇总评分</strong><small data-i18n="trial.stageResearchHint">卖家精灵真实列表 → 研究 Excel</small></div></li>
-              <li data-stage="sourcing"><span>3</span><div><strong data-i18n="trial.stageSourcing">1688 找货与利润评分</strong><small data-i18n="trial.stageSourcingHint">高分 ASIN → 供应商证据</small></div></li>
-              <li data-stage="report"><span>4</span><div><strong data-i18n="trial.stageReport">候选清单与报告交付</strong><small data-i18n="trial.stageReportHint">可下载 Excel / JSON</small></div></li>
+              <li data-stage="research"><span>2</span><div><strong data-i18n="trial.stageResearch">逐 ASIN 卖家精灵市场证据</strong><small data-i18n="trial.stageResearchHint">每个 Amazon 商品 → 反查关键词证据</small></div></li>
+              <li data-stage="sourcing"><span>3</span><div><strong data-i18n="trial.stageSourcing">1688 找货与利润评分</strong><small data-i18n="trial.stageSourcingHint">逐 ASIN 卖家精灵 1688 证据</small></div></li>
+              <li data-stage="report"><span>4</span><div><strong data-i18n="trial.stageReport">候选清单与报告交付</strong><small data-i18n="trial.stageReportHint">下载一个 Excel 工作簿</small></div></li>
             </ol>
             <div class="trial-alert hidden" id="trialAlert" role="alert"></div>
             <button class="ghost-button hidden" id="trialContinueButton" type="button" data-i18n="trial.continue">我已处理，继续任务</button>
@@ -229,7 +229,7 @@
                   <strong id="trialValidationCoverage">0 / 2</strong>
                 </div>
                 <div>
-                  <span data-i18n="trial.validationDelivery">双报告交付率</span>
+                  <span data-i18n="trial.validationDelivery">单一 Excel 交付率</span>
                   <strong id="trialValidationDelivery">—</strong>
                 </div>
                 <div>
@@ -559,16 +559,24 @@
           </form>
           <form class="settings-config-form" id="visionModelForm">
             <label>
+              <span data-i18n="settings.visionProvider">Vision API provider</span>
+              <select id="visionProviderInput" name="provider">
+                <option value="aliyun_token_plan">Aliyun Token Plan</option>
+                <option value="aliyun">Aliyun Bailian</option>
+                <option value="ppio">PPIO</option>
+              </select>
+            </label>
+            <label>
               <span data-i18n="settings.visionKey">Vision API key</span>
               <input id="visionApiKeyInput" name="key" type="password" autocomplete="off">
             </label>
             <label>
               <span data-i18n="settings.visionModel">Vision model</span>
-              <input id="visionModelInput" name="model" autocomplete="off" placeholder="qwen/qwen3.5-plus">
+              <input id="visionModelInput" name="model" autocomplete="off" placeholder="qwen3-vl-plus">
             </label>
             <label>
               <span data-i18n="settings.visionBase">Vision API base</span>
-              <input id="visionBaseInput" name="base_url" type="url" placeholder="https://api.ppio.com/openai">
+              <input id="visionBaseInput" name="base_url" type="url" placeholder="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1">
             </label>
             <button class="ghost-button" type="submit" data-i18n="settings.saveVision">Save vision model</button>
             <small id="visionModelConfigStatus"></small>

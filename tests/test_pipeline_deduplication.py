@@ -53,7 +53,7 @@ def test_run_pipeline_deduplicates_source_products_by_asin(monkeypatch, tmp_path
     monkeypatch.setattr("pipeline.orchestrator.session_scope", temp_session_scope)
     monkeypatch.setattr(settings, "mjjl_max_products_per_run", 0)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: products)
-    monkeypatch.setattr("matchers.match_suppliers", fake_match)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", lambda product, **_kwargs: fake_match(product))
     monkeypatch.setattr(
         "pipeline.orchestrator.predict_profit",
         lambda product, supplier: SimpleNamespace(net_profit=10.0, profit_margin=0.4),
@@ -107,7 +107,7 @@ def test_run_pipeline_deduplicates_suppliers_by_offer_id(monkeypatch, tmp_path):
     monkeypatch.setattr("pipeline.orchestrator.session_scope", temp_session_scope)
     monkeypatch.setattr(settings, "mjjl_max_products_per_run", 0)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
-    monkeypatch.setattr("matchers.match_suppliers", fake_match)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", lambda product, **_kwargs: fake_match(product))
     monkeypatch.setattr(
         "pipeline.orchestrator.predict_profit",
         lambda product, supplier: SimpleNamespace(net_profit=10.0, profit_margin=0.4),

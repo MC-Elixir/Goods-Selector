@@ -1,6 +1,9 @@
 # Amazon Selector
 
-Amazon Best Seller 选品自动化系统。给定一个 Amazon 类目 → 爬取 BSR 榜单产品 → 视觉识别 + 1688 爬虫匹配货源 → 利润预测 → 6 维度评分 → 硬性筛选 → 排名 → 导出候选选品池（Excel / Markdown / JSON）。
+Amazon US 选品自动化系统。正式流程固定为：Amazon 类目/关键词爬虫 → 每 ASIN
+卖家精灵市场证据 → 卖家精灵插件“1688 找货” → 利润与评分 → 单个 Excel 工作簿。
+插件不可用、未登录、无权限、额度不足或验证码会暂停并要求人工处理，不会静默切换
+1688 Open API、Scrapling、普通 Playwright、导入数据或 mock。
 
 当前兼容入口仍是 7 阶段 deterministic pipeline；Phase 3 的 `--mode agent`
 有限状态循环尚未实现。
@@ -34,7 +37,7 @@ cd amazon_selector
 pip install -r requirements.txt
 playwright install chromium          # Amazon / 1688 爬虫需要
 
-# 2. 配置环境变量（参考 .env 已有的模板，至少填 PPIO_API_KEY 用于视觉识别）
+# 2. 配置环境变量（至少配置一种阿里云 Token Plan、百炼、PPIO 或 Anthropic 模型 API）
 #    首次跑前需登录拿 cookies（见下"登录"小节）
 
 # 3. 初始化数据库（SQLite，自动应用版本化迁移）
@@ -60,6 +63,11 @@ docker compose up -d --build amazon-selector
 # 打开 http://127.0.0.1:8765
 ```
 
+Windows 日常使用可直接运行项目根目录的 `start.ps1`：它检查/启动仅监听本机的
+9222 专用 Chrome，从容器内验证 `host.docker.internal:9222` 的实际 CDP 路径，再启动
+唯一必需服务并打开 WebUI。CDP 失败会停止服务；SellerSprite 未就绪会保留 WebUI 供
+配置并给出可操作警告。Hermes 与 MCP sidecar 均为可选能力。
+
 `python main.py agent-web` 仅用于本机调试备用，不建议作为日常启动方式，否则很容易和 Docker 同时开出两套服务。
 
 ### 单甲方自然语言入口（Hermes）
@@ -72,14 +80,14 @@ docker compose up -d --build amazon-selector
 甲方本机最小前置：
 
 1. 已安装 Docker 与 Hermes 0.20.x
-2. 在项目 `.env` 填写 **`PPIO_API_KEY`**（视觉/对话模型）
+2. 在项目 `.env` 配置阿里云 Token Plan、阿里云百炼、PPIO 或 Anthropic 模型密钥
 3. 安装后在 9222 专用 Chrome 登录卖家精灵插件，并在 WebUI 完成 Amazon / 1688 登录
 
 不需要 `MJJL_API_KEY`、`KEEPA_API_KEY`、`RAINFOREST_API_KEY`。Amazon 默认走爬虫；
 卖家精灵市场分析走浏览器导出。`SELECTOR_MCP_TOKEN` 由脚本自动生成，不会打印。
 
 ```bash
-# 前提：已经按 Hermes 官方方式安装 0.20.x，并在 .env 填写 PPIO_API_KEY
+# 前提：已经按 Hermes 官方方式安装 0.20.x，并在 .env 配置受支持的模型 API
 chmod +x scripts/start_hermes_client.sh
 ./scripts/start_hermes_client.sh
 ```
@@ -98,6 +106,7 @@ http://127.0.0.1:8765
 Amazon US、No-Mock，先过 preflight，并使用持久化 request_id 防止重复下单式执行。
 
 详细安装、验收与交付边界见
+[从零部署与使用](docs/ZERO_TO_RUN.md)和
 [Hermes profile 说明](deployment/hermes/amazon-selector-profile/README.md)。
 
 选型原因：Hermes 已提供 profile distribution、中文桌面/CLI、HTTP MCP、Header 鉴权、
@@ -107,17 +116,15 @@ Amazon US、No-Mock，先过 preflight，并使用持久化 request_id 防止重
 升级和客户端体验，收益不足。等出现多租户、品牌化桌面端、细粒度审计/计费或离线部署
 要求，再把当前 MCP 契约复用到自研壳中。
 
-### 甲方受控试用：一键完整研究
+### 一键正式选品
 
-WebUI 默认首页为“一键研究”。试用前在 9222 专用 Chrome 中打开目标 Amazon US
-类目页或搜索列表，并等待卖家精灵表格加载；随后选择相同类目/英文关键词并点击
-“开始完整研究”。同一个可恢复 Job 会依次完成：
+WebUI 的兼容按钮仍显示“一键研究”，但其正式语义已统一为 Amazon US 类目/关键词
+选品。同一个可恢复 Job 会依次完成：
 
 1. 检查 Chrome、卖家精灵、Amazon 与 1688 登录态；
-2. 自动导出当前列表的真实卖家精灵数据，汇总卖家并计算 0–100 研究评分；
-3. 把排名靠前且带有效 ASIN 的候选直接送入 1688 找货、利润与候选评分，不再二次抓取 Amazon；
-4. 交付“市场汇总 Excel/JSON”和“选品结果 Excel/JSON”；即使 0 个商品通过硬筛选，
-   也会输出包含真实供应商证据与淘汰原因的复核报告，不会把淘汰项冒充候选。
+2. 必须先运行 Amazon crawler，得到真实商品和详情；
+3. 对每个 ASIN 获取卖家精灵反查关键词/市场证据，并仅通过插件“1688 找货”发现候选；
+4. 输出一个含五个工作表的 Excel；JSON 仅作为后台机器数据保留。
 
 遇到登录、权限、额度或验证码时，任务会保留进度并显示“我已处理，继续任务”；
 任务结束后页面会显示一份约 20 秒可完成的体验反馈表，记录到本机
@@ -126,7 +133,7 @@ WebUI 默认首页为“一键研究”。试用前在 9222 专用 Chrome 中打
 
 - 至少 3 次已经结束的一键研究任务反馈；
 - “Amazon 类目列表”和“Amazon 搜索列表”两种入口都至少完成一次真实试用；
-- 至少 2/3 的任务完成市场报告与选品结果两组文件交付；
+- 至少 2/3 的任务完成包含五个工作表的单一 Excel 交付；
 - 平均操作顺畅度不低于 4.0 / 5；
 - 平均报告帮助度不低于 4.0 / 5；
 - 至少 2/3 的反馈愿意继续使用；
@@ -139,7 +146,7 @@ WebUI 默认首页为“一键研究”。试用前在 9222 专用 Chrome 中打
 
 WebUI 能做：
 
-- 一键完整研究：卖家精灵列表导出 → 汇总评分 → 高分 ASIN → 1688 找货 → 双报告交付。
+- 一键正式选品：Amazon crawler → 逐 ASIN 卖家精灵市场证据 → 卖家精灵 1688 找货 → 单一 Excel 交付。
 - 运行前 preflight：检查 PPIO、Amazon cookies、1688 cookies、数据库、导出目录、1688 cooldown。
 - 当 Amazon/1688 cookies 缺失时，主动显示登录态补充卡：先尝试从用户授权的
   9222 专用 Chrome 捕获站点 cookies；如尚未登录，则在该 Chrome 中打开登录页，
@@ -266,7 +273,7 @@ docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -e LOG_DIR=/app/data/logs \
 
 数据持久化：`./data:/app/data` 卷挂载，SQLite 数据库、缓存、cookies、导出文件、日志都落在这里。首次启动时 entrypoint 会自动创建 `cache/`、`exports/`、`images/`、`logs/` 并跑 `init-db` 建表。
 
-环境变量：按 [部署说明](docs/DEPLOYMENT.md) 手工创建仅供本机使用、不得提交的 `.env`，至少需要 `PPIO_API_KEY`（视觉识别）。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，或在 WebUI 登录卡片完成。本次交付不需要 `KEEPA_API_KEY` / `RAINFOREST_API_KEY`（不配则 Amazon 走 scrapling 爬虫）和 `MJJL_API_KEY`（市场分析走 9222 Chrome 卖家精灵插件）。关键变量：`PPIO_API_KEY`（视觉识别，必需）、`ALIBABA_DETAIL_ENRICH_LIMIT=2`（每个商品最多补全的 1688 详情候选数）、`LOG_DIR=data/logs`（日志目录）、`ALIBABA_ALLOW_MOCK_SUPPLIERS=false`（正式跑保持 `false`）。
+环境变量：按 [部署说明](docs/DEPLOYMENT.md) 手工创建仅供本机使用、不得提交的 `.env`，至少配置一种受支持的模型 API；推荐公司部署使用阿里云 Token Plan 或百炼按量付费。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，或在 WebUI 登录卡片完成。本次交付不需要 `KEEPA_API_KEY` / `RAINFOREST_API_KEY`（不配则 Amazon 走 scrapling 爬虫）和 `MJJL_API_KEY`（市场分析走 9222 Chrome 卖家精灵插件）。关键变量还包括 `ALIBABA_DETAIL_ENRICH_LIMIT=2`、`LOG_DIR=data/logs`、`ALIBABA_ALLOW_MOCK_SUPPLIERS=false`。
 
 本机调试备用入口：
 

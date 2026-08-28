@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from agent.sellersprite_models import SellerSpriteContext, SellerSpriteResult
 from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
@@ -78,7 +80,7 @@ def test_recoverable_market_falls_back_to_sellersprite_browser(monkeypatch):
             raw_data={"source": "unit-test"},
         )]
 
-    monkeypatch.setattr("matchers.match_suppliers", match_with_market_keywords)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", lambda product, **kwargs: match_with_market_keywords(product, market_keywords=["insulated water bottle"]))
     monkeypatch.setattr("pipeline.orchestrator.predict_profit", _profit)
     monkeypatch.setattr("pipeline.orchestrator.score_product", score)
     monkeypatch.setattr(
@@ -207,7 +209,7 @@ def test_seeded_seller_research_market_evidence_skips_browser_export(monkeypatch
         scored_markets.append(kwargs["market_analysis"])
         return _score(**kwargs)
 
-    monkeypatch.setattr("matchers.match_suppliers", match_with_market_keywords)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", match_with_market_keywords)
     monkeypatch.setattr("pipeline.orchestrator.predict_profit", _profit)
     monkeypatch.setattr("pipeline.orchestrator.score_product", score)
     monkeypatch.setattr(
@@ -216,18 +218,12 @@ def test_seeded_seller_research_market_evidence_skips_browser_export(monkeypatch
     )
     monkeypatch.setattr(settings, "alibaba_allow_mock_suppliers", False)
 
-    run_id = run_pipeline(
-        "",
-        source_mode="keyword",
-        keyword="patio umbrella",
-        limit=1,
-        export=False,
-        seed_products=[product.__dict__],
-    )
-
-    assert matched_market_keywords == ["patio umbrella"]
-    assert scored_markets[0].est_monthly_sales == 527
-    assert scored_markets[0].opportunity_score == 92.5
-    assert scored_markets[0].raw_data["source_type"] == "seller_research_export"
-    with Session() as session:
-        assert session.get(RunLog, run_id).status == "success"
+    with pytest.raises(ValueError, match="Amazon crawler discovery is mandatory"):
+        run_pipeline(
+            "",
+            source_mode="keyword",
+            keyword="patio umbrella",
+            limit=1,
+            export=False,
+            seed_products=[product.__dict__],
+        )

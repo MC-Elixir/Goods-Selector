@@ -285,15 +285,6 @@ class AgentRuntime:
             init_db()
 
             started = time.time()
-            seed_products: list[dict[str, Any]] | None = None
-            if job.config.workflow_mode == "full_research" and not job.run_log_id:
-                seed_products = self._prepare_full_research(job_id)
-                if seed_products is None:
-                    return
-                if self._is_cancel_requested(job_id):
-                    self._mark_cancelled(job_id, "Cancelled after market research")
-                    return
-
             with self._lock:
                 job.message = "Running sourcing pipeline"
                 self._add_event_locked(job, "pipeline", job.message)
@@ -324,17 +315,9 @@ class AgentRuntime:
                         marketplace=job.config.marketplace,
                         progress_callback=lambda event: self._handle_pipeline_progress(job_id, event),
                         cancel_check=lambda: self._is_cancel_requested(job_id),
-                        **(
-                            {
-                                "seed_products": seed_products,
-                                # A controlled full-research trial must still deliver
-                                # auditable supplier/rejection evidence when every
-                                # product is stopped by a hard filter.
-                                "export_review_on_empty": True,
-                            }
-                            if seed_products is not None
-                            else {}
-                        ),
+                        # ``full_research`` remains an API/UI compatibility
+                        # alias, but discovery always starts with Amazon.
+                        export_review_on_empty=(job.config.workflow_mode == "full_research"),
                     )
             finally:
                 settings.alibaba_allow_mock_suppliers = previous_mock

@@ -324,15 +324,8 @@ def test_trial_feedback_endpoint_validates_and_saves(monkeypatch, server_client)
                 "workflow_mode": "full_research",
                 "source_mode": "keyword",
             },
-            "research": {
-                "exports": {
-                    "xlsx": "/app/data/exports/market.xlsx",
-                    "json": "/app/data/exports/market.json",
-                }
-            },
             "exports": {
                 "xlsx": "/app/data/exports/result.xlsx",
-                "json": "/app/data/exports/result.json",
             },
         },
     )
@@ -352,6 +345,62 @@ def test_trial_feedback_endpoint_validates_and_saves(monkeypatch, server_client)
     assert calls[0]["job_status"] == "review_required"
     assert calls[0]["source_mode"] == "keyword"
     assert calls[0]["workflow_completed"] is True
+    assert calls[0]["deliverables_ready"] is True
+
+
+def test_trial_feedback_requires_only_the_single_workbook(monkeypatch):
+    calls = []
+
+    class Runtime:
+        def get_job(self, job_id):
+            return {
+                "id": job_id,
+                "status": "success",
+                "config": {"workflow_mode": "full_research", "source_mode": "category"},
+                "research": {"exports": {"xlsx": "/legacy/market.xlsx"}},
+                "exports": {"json": "/app/data/exports/result.json"},
+            }
+
+    monkeypatch.setattr(
+        server,
+        "save_trial_feedback",
+        lambda payload: calls.append(payload) or payload,
+    )
+    _save_trial_feedback_for_job(Runtime(), {
+        "job_id": "trialjob0001",
+        "ease": 5,
+        "result_usefulness": 5,
+        "would_use_again": True,
+        "blocked_stage": "none",
+    })
+    assert calls[0]["deliverables_ready"] is False
+
+
+def test_trial_feedback_single_workbook_is_ready_without_legacy_exports(monkeypatch):
+    calls = []
+
+    class Runtime:
+        def get_job(self, job_id):
+            return {
+                "id": job_id,
+                "status": "review_required",
+                "config": {"workflow_mode": "full_research", "source_mode": "keyword"},
+                "research": {},
+                "exports": {"xlsx": "/app/data/exports/result.xlsx"},
+            }
+
+    monkeypatch.setattr(
+        server,
+        "save_trial_feedback",
+        lambda payload: calls.append(payload) or payload,
+    )
+    _save_trial_feedback_for_job(Runtime(), {
+        "job_id": "trialjob0002",
+        "ease": 4,
+        "result_usefulness": 5,
+        "would_use_again": True,
+        "blocked_stage": "none",
+    })
     assert calls[0]["deliverables_ready"] is True
 
 

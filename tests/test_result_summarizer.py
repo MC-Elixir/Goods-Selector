@@ -31,6 +31,7 @@ def test_result_summarizer_uses_ppio_text_model(monkeypatch, tmp_path):
         calls["timeout"] = timeout
         return FakeClient()
 
+    monkeypatch.setattr(settings, "model_api_provider", "ppio")
     monkeypatch.setattr(settings, "ppio_api_key", "ppio-key")
     monkeypatch.setattr(settings, "ppio_api_base", "https://api.ppio.com/openai")
     monkeypatch.setattr(settings, "ppio_text_model", "minimax/minimax-m3")
@@ -55,6 +56,7 @@ def test_result_summarizer_uses_ppio_text_model(monkeypatch, tmp_path):
 
 
 def test_result_summarizer_skips_when_ppio_key_missing(monkeypatch):
+    monkeypatch.setattr(settings, "model_api_provider", "ppio")
     monkeypatch.setattr(settings, "ppio_api_key", "")
 
     summary = result_summarizer.summarize_run_result(
@@ -65,4 +67,37 @@ def test_result_summarizer_skips_when_ppio_key_missing(monkeypatch):
     )
 
     assert summary["status"] == "skipped"
-    assert "PPIO_API_KEY" in summary["error"]
+    assert "OpenAI-compatible API key" in summary["error"]
+
+
+def test_result_summarizer_uses_aliyun_token_plan(monkeypatch, tmp_path):
+    export = tmp_path / "candidates.json"
+    export.write_text("[]", encoding="utf-8")
+    calls = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="结论：暂缓"))])
+
+    class FakeClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    def fake_openai(**kwargs):
+        calls["client_kwargs"] = kwargs
+        return FakeClient()
+
+    monkeypatch.setattr(settings, "model_api_provider", "aliyun_token_plan")
+    monkeypatch.setattr(settings, "aliyun_token_plan_api_key", "sk-sp-test")
+    monkeypatch.setattr(settings, "aliyun_token_plan_api_base", "https://token-plan.example/v1")
+    monkeypatch.setattr(settings, "aliyun_token_plan_text_model", "qwen-plan")
+    monkeypatch.setattr(result_summarizer._openai, "OpenAI", fake_openai)
+
+    summary = result_summarizer.summarize_run_result(
+        run_log_id=1, config={}, exports={"json": str(export)}, audit={}
+    )
+
+    assert summary["provider"] == "aliyun_token_plan"
+    assert summary["model"] == "qwen-plan"
+    assert calls["client_kwargs"]["base_url"] == "https://token-plan.example/v1"

@@ -4,6 +4,7 @@ import pytest
 
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.verifier import LLMVisualVerifier, VisionVerificationError
+from config.settings import settings
 from schemas.sourcing import VisionMatchResult
 
 
@@ -59,6 +60,20 @@ def _objects():
         provider_client=client,
     )
     return verifier, client, product, supplier
+
+
+def test_verifier_resolves_aliyun_token_plan_configuration(monkeypatch):
+    monkeypatch.setattr(settings, "model_api_provider", "aliyun_token_plan")
+    monkeypatch.setattr(settings, "aliyun_token_plan_api_key", "sk-sp-test")
+    monkeypatch.setattr(settings, "aliyun_token_plan_api_base", "https://token-plan.example/v1")
+    monkeypatch.setattr(settings, "aliyun_token_plan_vision_model", "qwen-vl-plan")
+
+    verifier = LLMVisualVerifier(provider_client=FakeVisionClient())
+
+    assert verifier._provider == "aliyun_token_plan"
+    assert verifier._api_key == "sk-sp-test"
+    assert verifier._api_base == "https://token-plan.example/v1"
+    assert verifier._model == "qwen-vl-plan"
 
 
 def test_schema_is_strict_and_forbids_extra_fields():

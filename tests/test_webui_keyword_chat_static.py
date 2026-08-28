@@ -52,7 +52,8 @@ def test_webui_exposes_controlled_one_click_research_workflow():
     assert "startFullResearch" in app
     assert "continueTrialJob" in app
     assert "renderTrialFeedbackSummary" in app
-    assert "job.research?.exports?.xlsx" in app
+    assert "job.research?.exports?.xlsx" not in app
+    assert "job.exports?.xlsx" in app
     assert ".trial-workspace" in styles
     assert ".trial-stages" in styles
     assert ".trial-validation-panel" in styles
@@ -106,6 +107,12 @@ def test_webui_exposes_visual_model_and_result_delete_controls():
     app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
 
     assert 'id="visionModelForm"' in index
+    assert 'name="provider"' in index
+    assert 'value="aliyun_token_plan"' in index
+    assert 'value="aliyun"' in index
     assert 'name="model"' in index
     assert "/api/config/vision-model" in app
+    assert "updateVisionProviderHints" in app
+    assert 'providerInput.value = provider' in app
+    assert "knownBases.includes" in app
     assert "hide-result" in app
