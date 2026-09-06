@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from config.settings import DATA_DIR, settings
 from agent.review_decisions import load_supplier_reviews, supplier_review_key
+from config.settings import DATA_DIR, settings
 from matchers.product_spec import spec_from_product, spec_from_supplier
 
 _SAVED_FILE = DATA_DIR / "agent_saved_items.json"
@@ -396,6 +396,7 @@ def _supplier_candidates(
             "profit_margin": raw.get("supplier_profit_margin"),
             "net_profit": raw.get("supplier_net_profit"),
             "purchase_cost_usd": raw.get("supplier_purchase_cost"),
+            "total_cost_usd": raw.get("supplier_total_cost"),
             "profit_score": raw.get("supplier_profit_score"),
             "visual_match": raw.get("visual_match") or {},
             "verification_method": supplier.get("match_verification_method"),

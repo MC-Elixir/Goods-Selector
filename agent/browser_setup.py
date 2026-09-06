@@ -22,7 +22,6 @@ from urllib.parse import urlparse
 from agent.browser_agent import _resolve_cdp_ws
 from config.settings import DATA_DIR, settings
 
-
 _SITE_CONFIG = {
     "amazon": {
         "label": "Amazon",
@@ -77,8 +76,14 @@ def get_browser_setup_status() -> dict[str, Any]:
         ),
         "launch_commands": {
             "windows": (
-                'start "" chrome.exe --remote-debugging-port=9222 '
-                '--user-data-dir="%LOCALAPPDATA%\\AmazonSelector\\ChromeProfile"'
+                '$chrome = @("$env:ProgramFiles\\Google\\Chrome\\Application\\chrome.exe", '
+                '"${env:ProgramFiles(x86)}\\Google\\Chrome\\Application\\chrome.exe", '
+                '"$env:LOCALAPPDATA\\Google\\Chrome\\Application\\chrome.exe") '
+                '| Where-Object { Test-Path $_ } | Select-Object -First 1; '
+                'if (-not $chrome) { throw "Chrome executable not found" }; '
+                'Start-Process -FilePath $chrome -ArgumentList '
+                "'--remote-debugging-port=9222', "
+                '"--user-data-dir=$env:LOCALAPPDATA\\AmazonSelector\\ChromeProfile"'
             ),
             "macos": (
                 'open -na "Google Chrome" --args --remote-debugging-port=9222 '
@@ -172,6 +177,12 @@ def capture_browser_cookies(
                 "message": validation_error,
             }
         _atomic_write_cookies(config["path"], cookies)
+        if site == "1688":
+            # A successful human login/verification changes the external state
+            # that opened the supplier-search circuit. Let a resumed node probe
+            # the fresh session immediately instead of waiting out the cooldown.
+            from matchers.alibaba_result_cache import reset_circuit
+            reset_circuit()
         return {
             "ok": True,
             "status": "saved",
@@ -251,8 +262,9 @@ def _atomic_write_cookies(path: Path, cookies: list[dict[str, Any]]) -> None:
         dir=str(path.parent),
     )
     try:
-        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            if hasattr(os, "fchmod"):
+                os.fchmod(handle.fileno(), 0o600)
             json.dump(cookies, handle, ensure_ascii=False, indent=2)
         os.replace(temp_path, path)
         try:

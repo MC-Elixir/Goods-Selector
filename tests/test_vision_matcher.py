@@ -11,15 +11,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from matchers import vision_analyzer as vision_analyzer_module
+from matchers.alibaba_pailitao import SupplierDTO
+from matchers.alibaba_text_search import _parse_search_response
+from matchers.verifier import LLMVisualVerifier
 from matchers.vision_analyzer import (
     ProductAnalysis,
     VisionAnalyzer,
-    _parse_json_response,
     _detect_media_type,
+    _parse_json_response,
 )
-from matchers.alibaba_text_search import _parse_search_response, _item_to_dto
-from matchers.alibaba_pailitao import SupplierDTO
-from matchers.verifier import LLMVisualVerifier
 
 
 @pytest.fixture(autouse=True)
@@ -265,6 +265,27 @@ class TestVisionAnalyzerAutoDetect:
 
             analyzer = VisionAnalyzer(provider="auto")
             assert analyzer._provider == "ppio"
+
+    @patch("matchers.vision_analyzer.settings")
+    def test_auto_selects_aliyun_token_plan_openai_client(self, mock_settings):
+        mock_settings.vision_provider = "aliyun_token_plan"
+        mock_settings.openai_compatible_api_key = "sk-sp-test"
+        mock_settings.openai_compatible_api_base = "https://token-plan.example/v1"
+        mock_settings.openai_compatible_vision_model = "qwen-vl-plan"
+        mock_settings.llm_request_timeout_seconds = 30.0
+        mock_settings.enable_api_cache = False
+
+        with patch("matchers.vision_analyzer._HAS_OPENAI", True), \
+             patch("matchers.vision_analyzer._openai") as mock_openai:
+            analyzer = VisionAnalyzer(provider="auto")
+
+        assert analyzer._provider == "aliyun_token_plan"
+        assert analyzer._model == "qwen-vl-plan"
+        mock_openai.OpenAI.assert_called_once_with(
+            api_key="sk-sp-test",
+            base_url="https://token-plan.example/v1",
+            timeout=30.0,
+        )
 
 
 def test_high_confidence_negative_is_rejected(monkeypatch):

@@ -4,7 +4,7 @@
 
 降级链（自动按顺序尝试）：
   1. Alibaba1688ScraplingMatcher            Scrapling HTTP 路径（被 TMD 拦，默认禁用）
-  2. Alibaba1688PlaywrightMatcher           Playwright 主路径（图搜 + 关键词）
+  2. Alibaba1688PlaywrightMatcher           Playwright 主路径（关键词；拍立淘图搜已暂时停用）
   3. mock                                   单元测试 / 完全离线兜底
 
 遗留 Open Platform 客户端仅供显式诊断；生产匹配默认不会调用。
@@ -19,39 +19,42 @@
 from __future__ import annotations
 
 import inspect
+import json as _json
 import re
+import uuid
 from typing import Optional
 
 from loguru import logger
 
 from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
-from crawlers.amazon_bsr import ProductDTO
 from agent.manual_queue import enqueue_sourcing_block
+from crawlers.amazon_bsr import ProductDTO
 from domain.target_categories import (
-    understanding_from_target_profile,
     profile_from_product,
+    understanding_from_target_profile,
 )
+from execution.models import HumanActionRequired
+from matchers.alibaba_detail import apply_1688_detail_to_supplier
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.alibaba_pifatuan import AlibabaPifatuanSearch
 from matchers.alibaba_playwright import Alibaba1688PlaywrightMatcher
-from matchers.alibaba_text_search import Alibaba1688TextSearch
-from matchers.alibaba_detail import apply_1688_detail_to_supplier
-from matchers.imported_suppliers import find_imported_suppliers
-from matchers.vision_analyzer import VisionAnalyzer
-from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier, llm_eligible_suppliers
-from matchers.query_planner import generate_query_plan
-from matchers.sourcing_slice import evaluate_prefetched_suppliers, serialize_sourcing_result
 from matchers.alibaba_result_cache import (
     circuit_is_open,
+    is_real_supplier,
     load_cached_offer_detail,
     load_cached_suppliers,
     make_cache_key,
-    is_real_supplier,
     open_circuit,
     reset_circuit,
     save_cached_offer_detail,
     save_cached_suppliers,
 )
+from matchers.alibaba_text_search import Alibaba1688TextSearch
+from matchers.imported_suppliers import find_imported_suppliers
+from matchers.query_planner import generate_query_plan
+from matchers.sourcing_slice import evaluate_prefetched_suppliers, serialize_sourcing_result
+from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier, llm_eligible_suppliers
+from matchers.vision_analyzer import VisionAnalyzer
 
 # Scrapling 优先（patchright 修补的 chromium + curl_cffi TLS 指纹伪装，更快更抗检测）
 try:
@@ -82,6 +85,18 @@ _verifier: Optional[Alibaba1688Verifier] = None
 _llm_verifier: Optional[LLMVisualVerifier] = None
 
 
+def _log_degradation(from_backend: str, to_backend: str, reason: str, run_id: str) -> None:
+    """记录降级链结构化诊断日志。"""
+    payload = {
+        "event": "degradation",
+        "from": from_backend,
+        "to": to_backend,
+        "reason": reason,
+        "run_id": run_id,
+    }
+    logger.warning(f"[match-diag] {_json.dumps(payload, ensure_ascii=False)}")
+
+
 def match_suppliers(
     product: ProductDTO,
     top_k: int = 20,
@@ -93,7 +108,7 @@ def match_suppliers(
     """Amazon 产品 → 1688 货源列表。
 
     降级链（默认仅走 Playwright；Scrapling 需 settings.enable_scrapling_matcher=True）：
-      Scrapling → Playwright（图搜 + 关键词）→ mock
+      Scrapling → Playwright（关键词；图搜需 settings.enable_image_search=True）→ mock
     匹配验证：
       1. 启发式验证（默认）
       2. LLM 视觉验证（可选，通过 settings.enable_llm_verification 开启）
@@ -106,6 +121,7 @@ def match_suppliers(
 
     _check_cancel(cancel_check, "match start")
 
+    _run_id = run_ref or f"run-{uuid.uuid4().hex[:8]}"
     raw_product = product.raw_data if isinstance(product.raw_data, dict) else {}
     product.raw_data = raw_product
     target_profile = profile_from_product(product)
@@ -211,6 +227,7 @@ def match_suppliers(
             raise
         except Exception as e:
             logger.info(f"[match] 1688 分销严选 API 不可用 ({e})，尝试通用文字 API")
+            _log_degradation("pifatuan_api", "text_search_api", type(e).__name__, _run_id)
 
     # ── Step 2b: 1688 通用文字 API ─────────────────────────
     if (
@@ -229,6 +246,7 @@ def match_suppliers(
             raise
         except Exception as e:
             logger.info(f"[match] 1688 API 不可用 ({e})，尝试 Scrapling")
+            _log_degradation("text_search_api", "scrapling", type(e).__name__, _run_id)
     else:
         logger.debug(f"[match] ASIN={product.asin} 跳过 1688 Open API（默认禁用）")
 
@@ -239,7 +257,7 @@ def match_suppliers(
         if _scrapling is None:
             _scrapling = Alibaba1688ScraplingMatcher(page_wait=5)
         try:
-            if product.main_image_url:
+            if product.main_image_url and _cfg.enable_image_search:
                 suppliers = _scrapling.search_by_image(
                     image_url=product.main_image_url,
                     keywords=enriched_keywords[:2],
@@ -252,12 +270,37 @@ def match_suppliers(
             raise
         except Exception as e:
             logger.warning(f"[match] Scrapling 搜索失败 ({product.asin}): {e}，降级到 Playwright")
+            _log_degradation("scrapling", "playwright", type(e).__name__, _run_id)
+
+    # ── Step 2c-bis: 卖家精灵插件 1688 找货 ─────────────────
+    if not suppliers and _cfg.enable_sellersprite_1688_sourcing:
+        _check_cancel(cancel_check, "sellersprite 1688 sourcing")
+        try:
+            from agent.sellersprite_1688_sourcing import run_sellersprite_1688_sourcing
+            suppliers = run_sellersprite_1688_sourcing(
+                product.asin,
+                cancel_check=cancel_check,
+            )
+            if suppliers:
+                logger.info(f"[match] ASIN={product.asin} 卖家精灵 1688 找货 → {len(suppliers)} 条")
+        except (CancellationRequested, HumanActionRequired):
+            raise
+        except Exception as e:
+            logger.info(f"[match] 卖家精灵 1688 找货不可用 ({product.asin}): {e}")
 
     # ── Step 2d: Playwright 兜底 ───────────────────────────
     circuit_open = circuit_is_open()
     if not suppliers and circuit_open:
-        real_search_blocked = True
         _enqueue_manual_block(product, enriched_keywords, "1688 search cooldown active")
+        raise HumanActionRequired(
+            "CAPTCHA_COOLDOWN",
+            "1688 supplier search is paused after a recent verification block",
+            instructions=(
+                "这是上一次验证码触发的安全冷却，当前 9222 页面可能没有验证码。"
+                "请确认专用 Chrome 中的 1688 页面可正常访问，然后点击 WebUI 的继续任务；"
+                "系统会先保存当前 1688 会话、清除冷却，再重新尝试。"
+            ),
+        )
 
     if not suppliers and not circuit_open:
         _check_cancel(cancel_check, "1688 playwright search")
@@ -269,7 +312,8 @@ def match_suppliers(
                 target_profile is not None
                 and getattr(_cfg, "target_category_exhaustive_queries", True)
             )
-            if product.main_image_url:
+            # 拍立淘图搜暂时停用（settings.enable_image_search=False），统一走关键词搜索
+            if product.main_image_url and _cfg.enable_image_search:
                 suppliers = _call_playwright_search(
                     _playwright.search_by_image,
                     image_url=product.main_image_url,
@@ -288,12 +332,28 @@ def match_suppliers(
             _check_cancel(cancel_check, "1688 playwright search")
         except CancellationRequested:
             raise
+        except HumanActionRequired as e:
+            open_circuit(
+                _cfg.alibaba_block_cooldown_seconds,
+                reason=str(e)[:200],
+            )
+            _enqueue_manual_block(product, enriched_keywords, str(e)[:200])
+            raise
         except Exception as e:
             if "TMD" in str(e) or "验证码" in str(e):
                 real_search_blocked = True
                 open_circuit(_cfg.alibaba_block_cooldown_seconds, reason=str(e)[:200])
                 _enqueue_manual_block(product, enriched_keywords, str(e)[:200])
+                raise HumanActionRequired(
+                    "CAPTCHA",
+                    str(e),
+                    instructions=(
+                        "请在专用 Chrome 中打开 1688，完成登录或滑块验证，"
+                        "然后在 WebUI 保存 1688 cookies 并继续任务。"
+                    ),
+                ) from e
             logger.warning(f"[match] Playwright 搜索失败 ({product.asin}): {e}")
+            _log_degradation("playwright", "mock", type(e).__name__, _run_id)
 
     # ── Step 3: mock 兜底 ──────────────────────────────────
     if not suppliers:
@@ -318,12 +378,20 @@ def match_suppliers(
         int(getattr(_cfg, "target_category_detail_enrich_limit", 10) or 0)
         if target_profile is not None else None
     )
-    suppliers = _enrich_supplier_details(
-        suppliers,
-        _cfg,
-        cancel_check=cancel_check,
-        limit_override=detail_limit,
-    )
+    try:
+        suppliers = _enrich_supplier_details(
+            suppliers,
+            _cfg,
+            cancel_check=cancel_check,
+            limit_override=detail_limit,
+        )
+    except HumanActionRequired as e:
+        open_circuit(
+            _cfg.alibaba_block_cooldown_seconds,
+            reason=str(e)[:200],
+        )
+        _enqueue_manual_block(product, enriched_keywords, str(e)[:200])
+        raise
     _check_cancel(cancel_check, "1688 detail enrichment")
 
     # ── Step 5: 启发式匹配验证 ──────────────────────────────
@@ -362,7 +430,7 @@ def match_suppliers(
                 top_k=int(getattr(_cfg, "target_category_llm_top_k", 5)),
                 cancel_check=cancel_check,
             )
-        except CancellationRequested:
+        except (CancellationRequested, HumanActionRequired):
             raise
         except Exception as exc:
             logger.warning(f"[match] target LLM 验证不可用 ({product.asin}): {exc}")
@@ -536,7 +604,7 @@ def _verify_target_supplier_images(
             if not visual.is_match:
                 supplier.match_quality_score = 0.0
                 supplier.match_verification_method = "llm_rejected"
-        except CancellationRequested:
+        except (CancellationRequested, HumanActionRequired):
             raise
         except Exception as exc:
             code = str(getattr(exc, "code", "provider_failure") or "provider_failure")
@@ -627,6 +695,16 @@ def _enrich_supplier_details(
             enriched += 1
         except CancellationRequested:
             raise
+        except HumanActionRequired as exc:
+            # Detail-page CAPTCHA should not abort the entire match stage.
+            # Search results already provide usable supplier data; skip enrichment.
+            logger.warning(f"[match] 1688 detail enrichment blocked (CAPTCHA), skipping remaining: {exc}")
+            supplier.raw_data["detail_enrichment"] = {
+                "source": "playwright",
+                "offer_id": offer_id,
+                "error": "CAPTCHA_blocked",
+            }
+            break
         except Exception as exc:
             supplier.raw_data["detail_enrichment"] = {
                 "source": "playwright",
@@ -849,7 +927,7 @@ def _title_fallback_keywords(title: str) -> list[str]:
             keywords.insert(0, f"{material_prefix}{category}")
             break
 
-    feature_rules = (
+    feature_rules: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("吸管", ("straw",)),
         ("带盖", ("with lid", "lid")),
         ("折叠", ("folding", "foldable")),
@@ -857,7 +935,7 @@ def _title_fallback_keywords(title: str) -> list[str]:
         ("防水", ("waterproof",)),
         ("可机洗", ("machine washable",)),
     )
-    for label, needles in feature_rules:
+    for label, needles in feature_rules:  # type: ignore[assignment]
         if any(_contains_fallback_term(lowered, needle) for needle in needles):
             keywords.append(label)
 

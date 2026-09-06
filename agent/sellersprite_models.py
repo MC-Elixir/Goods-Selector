@@ -14,7 +14,6 @@ from agent.sellersprite_policy import (
     validate_sellersprite_result_status,
 )
 
-
 _REQUIRED_LOCATOR_NAMES = (
     "panel_open",
     "ready",
@@ -34,6 +33,7 @@ _SUPPORTED_LOCATOR_PREFIXES = frozenset(
 # Optional locators keep older profiles compatible; each is validated only when
 # present.  The competitor_* group drives the «查竞品 / 选市场» export flow.
 _OPTIONAL_LOCATOR_NAMES = (
+    "product_packaging",
     "quota_required",
     "export_overflow",
     "competitor_lookup",
@@ -43,6 +43,12 @@ _OPTIONAL_LOCATOR_NAMES = (
     "competitor_export_menu",
     "competitor_export",
     "competitor_export_overflow",
+    "sourcing_1688_nav",
+    "sourcing_1688_results",
+    "sourcing_1688_card",
+    "sourcing_1688_login",
+    "sourcing_1688_dialog",
+    "sourcing_1688_open_site",
 )
 # The minimum locators required to run one competitor-products export.
 _COMPETITOR_REQUIRED_LOCATORS = (
@@ -126,6 +132,7 @@ class SellerSpriteLocatorProfile:
     export_menu: str
     export: str
     quota_required: str = ""
+    product_packaging: str = ""
     # Responsive extension layouts hide the desktop footer actions behind an
     # explicit overflow button. Empty keeps older locator profiles compatible.
     export_overflow: str = ""
@@ -138,10 +145,37 @@ class SellerSpriteLocatorProfile:
     competitor_export_menu: str = ""
     competitor_export: str = ""
     competitor_export_overflow: str = ""
+    # 1688 找货流程（插件内嵌）。全部可选；配置后启用 pipeline match 降级链中的
+    # 卖家精灵 1688 匹配源。
+    sourcing_1688_nav: str = ""
+    sourcing_1688_results: str = ""
+    sourcing_1688_card: str = ""
+    sourcing_1688_login: str = ""
+    sourcing_1688_dialog: str = ""
+    sourcing_1688_open_site: str = ""
+
+    def has_sourcing_1688_locators(self) -> bool:
+        """True when the minimum locators for 1688 sourcing via extension are present."""
+        return all(
+            getattr(self, name, "")
+            for name in ("sourcing_1688_nav", "sourcing_1688_results", "sourcing_1688_card")
+        )
 
     def has_competitor_locators(self) -> bool:
-        """True when every locator required for a competitor export is present."""
-        return all(getattr(self, name, "") for name in _COMPETITOR_REQUIRED_LOCATORS)
+        """True for either keyword-search or current-list market export mode."""
+        export_ready = all(
+            getattr(self, name, "")
+            for name in ("competitor_results_ready", "competitor_export_menu", "competitor_export")
+        )
+        search_locators = (
+            self.competitor_keyword_input,
+            self.competitor_submit,
+        )
+        # A profile may export the product list already visible in the attached
+        # Amazon tab. In that mode no search field is touched; the keyword is
+        # retained solely as the research label. A half-configured search flow
+        # remains invalid.
+        return export_ready and (all(search_locators) or not any(search_locators))
 
     @classmethod
     def from_json(cls, path: Path) -> "SellerSpriteLocatorProfile":

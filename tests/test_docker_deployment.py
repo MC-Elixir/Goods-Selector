@@ -1,6 +1,6 @@
-from pathlib import Path
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -57,18 +57,39 @@ def test_compose_uses_single_persistent_data_volume_and_local_only_port():
     assert "./data:/app/data" in compose
     assert "127.0.0.1:8765:8765" in compose
     assert 'ALIBABA_ALLOW_MOCK_SUPPLIERS: "false"' in compose
+    assert 'profiles: ["assistant"]' in compose
+    assert "127.0.0.1:8766:8766" in compose
+    assert "SELECTOR_API_BASE_URL: http://amazon-selector:8765" in compose
+    assert "BU_CDP_HTTP: http://host.docker.internal:9222" in compose
+    assert "${BU_CDP_HTTP" not in compose
+    assert "7897" not in compose
+    assert "HTTP_PROXY" not in compose
+
+
+def test_windows_startup_keeps_chrome_private_and_verifies_container_cdp():
+    script = Path("start.ps1").read_text(encoding="utf-8")
+
+    assert '--remote-debugging-address=127.0.0.1' in script
+    assert '"--remote-debugging-address=0.0.0.0",' not in script
+    assert 'http://127.0.0.1:9222/json/version' in script
+    assert 'http://host.docker.internal:9222' in script
+    assert 'from agent.browser_agent import _resolve_cdp_ws' in script
+    assert 'from agent.preflight import _assert_cdp_websocket_reachable' in script
+    assert 'docker compose stop amazon-selector' in script
+    assert 'seller_sprite_browser' in script
+    assert 'do not start a formal run until this check is OK' in script
 
 
 def test_docs_present_docker_as_the_default_webui_runtime():
     readme = Path("README.md").read_text(encoding="utf-8")
-    agents = Path("AGENTS.md").read_text(encoding="utf-8")
+    deployment = Path("docs/DEPLOYMENT.md").read_text(encoding="utf-8")
     claude = Path("CLAUDE.md").read_text(encoding="utf-8")
 
     assert "docker compose up -d --build amazon-selector" in readme
     assert "正式使用默认走 Docker" in readme
     assert "python main.py agent-web" in readme
     assert "仅用于本机调试" in readme
-    assert "docker compose up -d --build amazon-selector" in agents
+    assert "docker compose up -d --build amazon-selector" in deployment
     assert "docker compose up -d --build amazon-selector" in claude
 
 
@@ -124,6 +145,24 @@ def test_entrypoint_routes_main_commands_through_cli(tmp_path):
     assert log.read_text(encoding="utf-8").splitlines() == [
         "python main.py init-db",
         "python main.py run --category Home & Kitchen",
+    ]
+
+
+def test_entrypoint_routes_selector_mcp_through_cli(tmp_path):
+    log = tmp_path / "calls.log"
+    _write_executable(
+        tmp_path / "python",
+        '#!/bin/sh\nprintf "python %s\\n" "$*" >> "$CALL_LOG"\n',
+    )
+    env = _entrypoint_env(tmp_path, log)
+    subprocess.run(
+        ["sh", "docker-entrypoint.sh", "selector-mcp", "--port", "8766"],
+        check=True,
+        env=env,
+    )
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "python main.py init-db",
+        "python main.py selector-mcp --port 8766",
     ]
 
 

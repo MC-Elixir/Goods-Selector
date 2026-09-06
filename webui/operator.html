@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>选品助手 · 人工处理台</title>
+  <link rel="stylesheet" href="/operator.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">AMAZON SELECTOR · HUMAN CHECKPOINT</p>
+        <h1>人工处理台</h1>
+        <p class="lede">这里只处理登录、验证码和任务续跑。选品对话请回到 Hermes 客户端。</p>
+      </div>
+      <div class="hero-actions">
+        <button class="button ghost" id="refreshButton">刷新状态</button>
+        <a class="button secondary" href="/">打开完整控制台</a>
+      </div>
+    </header>
+
+    <section class="status-strip" aria-live="polite">
+      <span class="pulse" id="overallPulse"></span>
+      <div><strong id="overallTitle">正在检查环境</strong><p id="overallDetail">请稍候…</p></div>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="panel-heading">
+          <div><p class="kicker">01 · 登录态</p><h2>专用浏览器</h2></div>
+          <span class="badge" id="browserBadge">检查中</span>
+        </div>
+        <p class="muted" id="browserDetail">正在连接 9222 专用 Chrome…</p>
+        <div class="site-list" id="siteList"></div>
+        <p class="notice">请只使用为本项目单独创建的 Chrome Profile；不要开放 9222 到公网。</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div><p class="kicker">02 · 环境</p><h2>运行条件</h2></div>
+          <span class="badge" id="preflightBadge">检查中</span>
+        </div>
+        <div class="check-list" id="checkList"></div>
+      </section>
+    </div>
+
+    <section class="panel jobs-panel">
+      <div class="panel-heading">
+        <div><p class="kicker">03 · 续跑</p><h2>待人工处理的任务</h2></div>
+        <span class="badge" id="jobsBadge">0 个</span>
+      </div>
+      <div id="jobsList" class="jobs-list"><div class="empty">正在读取任务…</div></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/operator.js" defer></script>
+</body>
+</html>

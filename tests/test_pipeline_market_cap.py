@@ -6,14 +6,14 @@ from types import SimpleNamespace
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
 from db.models import Base, RunLog
 from matchers.alibaba_pailitao import SupplierDTO
 from pipeline.orchestrator import run_pipeline
-from config.settings import settings
 
 
-def test_run_pipeline_caps_seller_sprite_browser_market_calls(monkeypatch, tmp_path):
+def test_positive_market_cap_collects_every_asin(monkeypatch, tmp_path):
     engine = create_engine(
         f"sqlite:///{tmp_path / 'pipeline.db'}",
         future=True,
@@ -77,7 +77,7 @@ def test_run_pipeline_caps_seller_sprite_browser_market_calls(monkeypatch, tmp_p
         "crawlers.amazon_bsr.crawl_best_sellers",
         lambda category, limit, marketplace: products,
     )
-    monkeypatch.setattr("matchers.match_suppliers", lambda product: [supplier])
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", lambda product, **_kwargs: [supplier])
     monkeypatch.setattr(
         "pipeline.orchestrator.predict_profit",
         lambda product, best_supplier: SimpleNamespace(net_profit=10.0, profit_margin=0.4),
@@ -100,10 +100,10 @@ def test_run_pipeline_caps_seller_sprite_browser_market_calls(monkeypatch, tmp_p
 
     with temp_session_scope() as session:
         run = session.get(RunLog, run_id)
-        assert run.api_calls["sellersprite_browser_exports"] == 2
-        assert run.api_calls["mjjl_skipped_cap"] == 3
+        assert run.api_calls["sellersprite_browser_exports"] == 5
+        assert run.api_calls["market_skipped_cap"] == 0
 
-    assert market_calls == [("ASIN0", "US"), ("ASIN1", "US")]
+    assert market_calls == [(f"ASIN{i}", "US") for i in range(5)]
 
 
 def test_run_pipeline_zero_market_cap_does_not_create_seller_sprite_client(monkeypatch, tmp_path):
@@ -139,7 +139,7 @@ def test_run_pipeline_zero_market_cap_does_not_create_seller_sprite_client(monke
         "crawlers.amazon_bsr.crawl_best_sellers",
         lambda category, limit, marketplace: products,
     )
-    monkeypatch.setattr("matchers.match_suppliers", lambda product: [supplier])
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", lambda product, **_kwargs: [supplier])
     monkeypatch.setattr(
         "pipeline.orchestrator.predict_profit",
         lambda product, best_supplier: SimpleNamespace(net_profit=10.0, profit_margin=0.4),

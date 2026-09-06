@@ -7,19 +7,25 @@ const state = {
   results: [],
   manualQueue: [],
   importedSuppliers: [],
+  targetContractReviews: [],
   configStatus: null,
   browserSetup: null,
+  trialFeedbackSummary: null,
   cookieSetupPhase: {},
   selectedBrowserOs: "windows",
   reviewFilter: "all",
   expandedReviews: new Set(),
   selectedAsin: "",
-  activeSection: "run",
+  activeSection: "trial",
+  activeTrialJobId: localStorage.getItem("activeTrialJobId") || "",
   sellerSpriteKeywordRows: [],
   sellerSpriteImportHistory: [],
   lang: localStorage.getItem("agentLang") || "en",
+  notificationEnabled: localStorage.getItem("backgroundNotifications") === "enabled",
+  activeHumanAlert: null,
 };
 
+const DEFAULT_DOCUMENT_TITLE = document.title;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -85,6 +91,12 @@ const I18N = {
     "hero.title": "Amazon Selector Agent",
     "jobs.noActive": "No active jobs",
     "jobs.noActiveHint": "Start an agent run to see progress here.",
+    "notifications.enable": "Enable background alerts",
+    "notifications.enabled": "Background alerts on",
+    "notifications.denied": "Allow notifications in browser settings",
+    "notifications.unsupported": "System alerts unavailable",
+    "notifications.title": "Sourcing task needs attention",
+    "notifications.view": "View",
     "manual.empty": "No blocked sourcing items",
     "manual.ignore": "Ignore",
     "manual.keywords": "Keywords",
@@ -96,7 +108,9 @@ const I18N = {
     "metrics.agent": "Agent",
     "metrics.cookieHealth": "Cookie Health",
     "nav.results": "Results Library",
+    "nav.contractReview": "Contract Review",
     "nav.run": "Run Agent",
+    "nav.trial": "One-click Research",
     "nav.research": "Market Research",
     "nav.settings": "Settings",
     "research.title": "Market Research — Seller Shortlist",
@@ -115,6 +129,76 @@ const I18N = {
     "research.analyze": "Build shortlist",
     "research.runBrowser": "Run browser export",
     "research.history": "Recent research runs",
+    "trial.kicker": "CONTROLLED TRIAL · REAL DATA",
+    "trial.title": "One-click market research and 1688 sourcing",
+    "trial.subtitle": "The job crawls Amazon US first, collects SellerSprite market and 1688 evidence for every ASIN, then produces one Excel workbook.",
+    "trial.idle": "Ready to start",
+    "trial.sourceMode": "Research source",
+    "trial.categoryMode": "Amazon category list",
+    "trial.keywordMode": "Amazon search list",
+    "trial.englishHint": "Use the English query shown on Amazon US.",
+    "trial.limit": "Amazon products to process",
+    "trial.aiReasons": "Generate optional AI research reasons",
+    "trial.contract": "The trial uses real Amazon, SellerSprite, and 1688 data only. Missing login, captcha, or supplier evidence pauses or fails explicitly; mock results are never inserted.",
+    "trial.start": "Start full research",
+    "trial.openListHint": "Confirm the dedicated Chrome is showing the target Amazon list and the SellerSprite table has loaded.",
+    "trial.progressTitle": "Workflow progress",
+    "trial.noJob": "No trial job has been created",
+    "trial.stagePreflight": "Environment and login checks",
+    "trial.stagePreflightHint": "Chrome, cookies, download directory",
+    "trial.stageResearch": "Per-ASIN SellerSprite market evidence",
+    "trial.stageResearchHint": "Every crawled ASIN → reverse-keyword evidence",
+    "trial.stageSourcing": "1688 sourcing and profit scoring",
+    "trial.stageSourcingHint": "Top ASINs → supplier evidence",
+    "trial.stageReport": "Candidate shortlist and delivery",
+    "trial.stageReportHint": "One downloadable Excel workbook",
+    "trial.continue": "Handled — continue job",
+    "trial.deliverables": "Deliverables",
+    "trial.feedbackTitle": "Trial experience",
+    "trial.feedbackHint": "After the job ends, take 20 seconds to tell us what worked and what needs improvement.",
+    "trial.feedbackEase": "Ease of use (1–5)",
+    "trial.feedbackUsefulness": "Report usefulness (1–5)",
+    "trial.feedbackAgain": "Would use again",
+    "trial.feedbackYes": "Yes",
+    "trial.feedbackNo": "No",
+    "trial.feedbackBlocked": "Main blocker",
+    "trial.feedbackNone": "No blocker",
+    "trial.feedbackPreflight": "Login / environment",
+    "trial.feedbackResearch": "Market research",
+    "trial.feedbackSourcing": "1688 sourcing",
+    "trial.feedbackReport": "Understanding the report",
+    "trial.feedbackComment": "Additional feedback (optional)",
+    "trial.feedbackSubmit": "Submit feedback",
+    "trial.feedbackSaved": "Feedback saved. Thank you.",
+    "trial.validationTitle": "Trial acceptance",
+    "trial.validationSubtitle": "Use completed real-job feedback to decide whether to begin the local installer phase.",
+    "trial.validationNoData": "Waiting for real feedback",
+    "trial.validationCollecting": "Collecting evidence",
+    "trial.validationReady": "Ready for installer",
+    "trial.validationImprove": "Improve before packaging",
+    "trial.validationSamples": "Valid responses",
+    "trial.validationCoverage": "Entry modes covered",
+    "trial.validationDelivery": "Two-report delivery rate",
+    "trial.validationEase": "Average ease",
+    "trial.validationUsefulness": "Report usefulness",
+    "trial.validationAgain": "Would use again",
+    "trial.validationNoBlocker": "No main blocker",
+    "trial.validationGates": "Installer entry gates",
+    "trial.validationBlockers": "Blocker distribution",
+    "trial.validationNoDataHint": "No real client feedback yet. Do not begin the installer phase.",
+    "trial.validationCollectingHint": "{count} more completed trial response(s) required before a decision.",
+    "trial.validationReadyHint": "All experience gates passed. The local installer phase may begin.",
+    "trial.validationImproveHint": "The sample is sufficient, but one or more experience gates failed. Improve the workflow and trial again.",
+    "trial.validationEmptyBlockers": "No blocker data yet.",
+    "trial.validationGate.sample_size": "At least 3 completed trial responses",
+    "trial.validationGate.source_mode_count": "Both category and keyword entry modes tested",
+    "trial.validationGate.delivery_rate": "At least 2/3 deliver both report sets",
+    "trial.validationGate.average_ease": "Average ease ≥ 4.0 / 5",
+    "trial.validationGate.average_usefulness": "Report usefulness ≥ 4.0 / 5",
+    "trial.validationGate.would_use_again_rate": "At least 2/3 would use again",
+    "trial.validationGate.no_blocker_rate": "At least 2/3 report no main blocker",
+    "trial.queued": "The full research job is queued. You may keep this page open.",
+    "trial.ready": "All prerequisites detected. Keep the Amazon list open when starting.",
     "preflight.actionRequired": "Action required",
     "preflight.allPassed": "All blocking checks passed. Start a new sourcing run when ready.",
     "preflight.checking": "Checking",
@@ -150,6 +234,10 @@ const I18N = {
     "results.deleteConfirm": "Hide this result from the library? The source export and database history stay intact.",
     "results.subtitle": "Read previous crawl and sourcing outputs from local JSON and Excel exports.",
     "results.title": "Saved Product Selection Results",
+    "contractReview.kicker": "PINNED HUMAN REVIEW QUEUE",
+    "contractReview.title": "Target-contract evidence review",
+    "contractReview.subtitle": "Review the three historical Amazon/1688 cases. Partial decisions are saved, but only completed cases enter evaluation.",
+    "contractReview.complete": "cases reviewed",
     "results.reviewFilter.accepted": "Has accepted supplier",
     "results.reviewFilter.all": "All review states",
     "results.reviewFilter.pending": "Needs supplier review",
@@ -283,7 +371,7 @@ const I18N = {
     "settings.capability.browserAgent": "Browser Assistant",
     "settings.capability.mock": "Mock suppliers",
     "settings.capability.scrapling": "Scrapling matcher",
-    "settings.capability.sellerSprite": "SellerSprite market data",
+    "settings.capability.sellerSprite": "SellerSprite API (optional)",
     "settings.capability.vision": "Vision model",
     "settings.configured": "Configured",
     "settings.disabled": "Disabled",
@@ -292,6 +380,7 @@ const I18N = {
     "settings.promptTitle": "Runtime Prompt",
     "settings.saveSellerSprite": "Save SellerSprite",
     "settings.sellerSpriteBase": "API base",
+    "settings.sellerSpriteOptional": "Optional; market analysis uses browser export, not MJJL_API_KEY",
     "settings.sellerSpriteAsin": "SellerSprite ASIN check",
     "settings.checkAsin": "Check ASIN",
     "settings.checkingAsin": "Checking ASIN",
@@ -323,6 +412,7 @@ const I18N = {
     "settings.visionBase": "Vision API base",
     "settings.visionKey": "Vision API key",
     "settings.visionModel": "Vision model",
+    "settings.visionProvider": "Vision API provider",
     "settings.visionSaved": "Vision model saved",
     "settings.saveVision": "Save vision model",
     "sidebar.agentDefinition": "Agent Definition",
@@ -331,6 +421,7 @@ const I18N = {
     "sidebar.systemStatus": "System Status",
     "status.failed": "failed",
     "status.human_required": "human action",
+    "status.review_required": "review required",
     "status.retry_wait": "retry wait",
     "status.timed_out": "timed out",
     "status.skipped": "skipped",
@@ -418,6 +509,12 @@ const I18N = {
     "hero.title": "Amazon 选品 Agent",
     "jobs.noActive": "暂无运行任务",
     "jobs.noActiveHint": "启动一次 Agent 任务后，可在这里查看进度。",
+    "notifications.enable": "开启后台提醒",
+    "notifications.enabled": "后台提醒已开启",
+    "notifications.denied": "请在浏览器设置中允许通知",
+    "notifications.unsupported": "当前浏览器不支持系统提醒",
+    "notifications.title": "选品任务等待人工处理",
+    "notifications.view": "查看",
     "manual.empty": "暂无阻塞货源任务",
     "manual.ignore": "忽略",
     "manual.keywords": "关键词",
@@ -429,7 +526,9 @@ const I18N = {
     "metrics.agent": "Agent",
     "metrics.cookieHealth": "Cookie 状态",
     "nav.results": "结果库",
+    "nav.contractReview": "合同复核",
     "nav.run": "运行 Agent",
+    "nav.trial": "一键研究",
     "nav.research": "市场研究",
     "nav.settings": "设置",
     "research.title": "市场研究 —— 卖家清单",
@@ -448,6 +547,76 @@ const I18N = {
     "research.analyze": "生成清单",
     "research.runBrowser": "运行浏览器导出",
     "research.history": "最近的研究记录",
+    "trial.kicker": "受控试用 · 真实数据",
+    "trial.title": "一键完成市场研究与 1688 找货",
+    "trial.subtitle": "任务先抓取 Amazon US，再对每个 ASIN 获取卖家精灵市场与 1688 证据，最终生成一个 Excel 工作簿。",
+    "trial.idle": "等待开始",
+    "trial.sourceMode": "研究入口",
+    "trial.categoryMode": "Amazon 类目列表",
+    "trial.keywordMode": "Amazon 搜索列表",
+    "trial.englishHint": "Amazon US 请填写英文检索词。",
+    "trial.limit": "本次处理的 Amazon 商品数",
+    "trial.aiReasons": "生成 AI 研究理由（可选）",
+    "trial.contract": "正式试用只使用真实 Amazon、卖家精灵与 1688 数据；缺少登录、验证码或有效供应商证据时会暂停或明确失败，不会填充 Mock 结果。",
+    "trial.start": "开始完整研究",
+    "trial.openListHint": "请先确认 9222 Chrome 当前显示目标 Amazon 列表，且卖家精灵表格已加载。",
+    "trial.progressTitle": "任务进度",
+    "trial.noJob": "尚未创建试用任务",
+    "trial.stagePreflight": "运行环境与登录检查",
+    "trial.stagePreflightHint": "Chrome、Cookies、下载目录",
+    "trial.stageResearch": "逐 ASIN 卖家精灵市场证据",
+    "trial.stageResearchHint": "每个 Amazon 商品 → 反查关键词证据",
+    "trial.stageSourcing": "1688 找货与利润评分",
+    "trial.stageSourcingHint": "逐 ASIN 卖家精灵 1688 证据",
+    "trial.stageReport": "候选清单与报告交付",
+    "trial.stageReportHint": "下载一个 Excel 工作簿",
+    "trial.continue": "我已处理，继续任务",
+    "trial.deliverables": "可交付文件",
+    "trial.feedbackTitle": "本次试用体验",
+    "trial.feedbackHint": "任务结束后用 20 秒告诉我们哪里顺畅、哪里需要改进。",
+    "trial.feedbackEase": "操作顺畅度（1–5）",
+    "trial.feedbackUsefulness": "报告帮助度（1–5）",
+    "trial.feedbackAgain": "愿意继续使用",
+    "trial.feedbackYes": "是",
+    "trial.feedbackNo": "否",
+    "trial.feedbackBlocked": "主要卡点",
+    "trial.feedbackNone": "没有卡点",
+    "trial.feedbackPreflight": "登录/环境检查",
+    "trial.feedbackResearch": "市场研究",
+    "trial.feedbackSourcing": "1688 找货",
+    "trial.feedbackReport": "报告理解",
+    "trial.feedbackComment": "补充意见（可选）",
+    "trial.feedbackSubmit": "提交体验反馈",
+    "trial.feedbackSaved": "反馈已保存，谢谢。",
+    "trial.validationTitle": "试用验收",
+    "trial.validationSubtitle": "用真实终态任务反馈判断是否进入本地安装包阶段。",
+    "trial.validationNoData": "等待真实反馈",
+    "trial.validationCollecting": "正在收集证据",
+    "trial.validationReady": "可进入安装包",
+    "trial.validationImprove": "先改进再打包",
+    "trial.validationSamples": "有效反馈",
+    "trial.validationCoverage": "入口覆盖",
+    "trial.validationDelivery": "单一 Excel 交付率",
+    "trial.validationEase": "平均顺畅度",
+    "trial.validationUsefulness": "报告帮助度",
+    "trial.validationAgain": "愿意继续使用",
+    "trial.validationNoBlocker": "无主要卡点",
+    "trial.validationGates": "进入安装包门槛",
+    "trial.validationBlockers": "卡点分布",
+    "trial.validationNoDataHint": "尚无甲方真实反馈，暂不进入安装包阶段。",
+    "trial.validationCollectingHint": "还需 {count} 次终态试用反馈，才能做进入安装包判断。",
+    "trial.validationReadyHint": "全部体验门槛已通过，可以进入本地安装包阶段。",
+    "trial.validationImproveHint": "样本已足够，但仍有体验门槛未通过；请先改进流程并再次试用。",
+    "trial.validationEmptyBlockers": "尚无卡点数据。",
+    "trial.validationGate.sample_size": "至少 3 次终态试用反馈",
+    "trial.validationGate.source_mode_count": "类目与关键词两种入口均已试用",
+    "trial.validationGate.delivery_rate": "至少 2/3 完成两组报告交付",
+    "trial.validationGate.average_ease": "平均顺畅度 ≥ 4.0 / 5",
+    "trial.validationGate.average_usefulness": "报告帮助度 ≥ 4.0 / 5",
+    "trial.validationGate.would_use_again_rate": "至少 2/3 愿意继续使用",
+    "trial.validationGate.no_blocker_rate": "至少 2/3 没有主要卡点",
+    "trial.queued": "完整研究任务已排队，可以保持此页面打开。",
+    "trial.ready": "前置条件已检测通过。开始时请保持 Amazon 列表页打开。",
     "preflight.actionRequired": "需要处理",
     "preflight.allPassed": "所有阻塞项已通过。可以开始新的选品任务。",
     "preflight.checking": "检查中",
@@ -483,6 +652,10 @@ const I18N = {
     "results.deleteConfirm": "从结果库隐藏这条记录？原始导出和数据库审计记录不会删除。",
     "results.subtitle": "读取本地 JSON 和 Excel 导出的历史爬取与选品结果。",
     "results.title": "已保存的选品结果",
+    "contractReview.kicker": "固定证据人工复核队列",
+    "contractReview.title": "目标合同证据复核",
+    "contractReview.subtitle": "复核三组历史 Amazon / 1688 案例。部分操作会安全保存，但只有完成复核的案例才进入评估。",
+    "contractReview.complete": "案例已复核",
     "results.reviewFilter.accepted": "有通过供应商",
     "results.reviewFilter.all": "全部审核状态",
     "results.reviewFilter.pending": "待审核供应商",
@@ -616,7 +789,7 @@ const I18N = {
     "settings.capability.browserAgent": "浏览器助手",
     "settings.capability.mock": "Mock 供应商",
     "settings.capability.scrapling": "Scrapling 匹配器",
-    "settings.capability.sellerSprite": "卖家精灵市场数据",
+    "settings.capability.sellerSprite": "卖家精灵 API（可选）",
     "settings.capability.vision": "视觉模型",
     "settings.configured": "已配置",
     "settings.disabled": "已关闭",
@@ -625,6 +798,7 @@ const I18N = {
     "settings.promptTitle": "运行提示词",
     "settings.saveSellerSprite": "保存卖家精灵",
     "settings.sellerSpriteBase": "API 地址",
+    "settings.sellerSpriteOptional": "未启用 API；市场分析走浏览器导出，不需要 MJJL_API_KEY",
     "settings.sellerSpriteAsin": "卖家精灵 ASIN 检查",
     "settings.checkAsin": "检查 ASIN",
     "settings.checkingAsin": "正在检查 ASIN",
@@ -656,6 +830,7 @@ const I18N = {
     "settings.visionBase": "视觉 API 地址",
     "settings.visionKey": "视觉 API Key",
     "settings.visionModel": "视觉模型",
+    "settings.visionProvider": "视觉 API 供应商",
     "settings.visionSaved": "视觉模型已保存",
     "settings.saveVision": "保存视觉模型",
     "sidebar.agentDefinition": "Agent 定义",
@@ -664,6 +839,7 @@ const I18N = {
     "sidebar.systemStatus": "系统状态",
     "status.failed": "失败",
     "status.human_required": "等待人工处理",
+    "status.review_required": "待复核",
     "status.retry_wait": "等待重试",
     "status.timed_out": "已超时",
     "status.skipped": "已跳过",
@@ -702,7 +878,7 @@ const PREFLIGHT_LABELS = {
     exports: "导出目录可写",
     "1688_circuit": "1688 熔断已清除",
     disk: "存储空间可用",
-    seller_sprite: "卖家精灵 API Key 已配置",
+    seller_sprite: "卖家精灵 API（可选，默认走浏览器导出）",
     seller_sprite_browser: "卖家精灵浏览器自动化",
   },
 };
@@ -710,7 +886,9 @@ const PREFLIGHT_LABELS = {
 const JOB_MESSAGE_LABELS = {
   zh: {
     "No candidates passed filters": "无候选通过筛选",
+    "Review report generated": "已生成复核报告",
     "No candidates passed hard filters; no export was generated": "无候选通过硬筛选，未生成正式候选导出",
+    "No candidates passed hard filters; a review report was generated": "无候选通过硬筛选，已生成包含供应商证据与淘汰原因的复核报告",
     "Cancellation requested": "取消中",
     "Cancelled before start": "启动前已取消",
     "Cancelled before pipeline": "进入流水线前已取消",
@@ -720,6 +898,7 @@ const JOB_MESSAGE_LABELS = {
     "Real supplier match evidence required but missing from export": "导出中缺少真实 1688 货源匹配证据",
     "Market data missing": "缺少市场数据",
     "SellerSprite rich market data required but missing from export": "导出中缺少卖家精灵富市场数据",
+    "1688 supplier search is paused after a recent verification block": "上一次 1688 验证触发了安全冷却；当前页面可能没有验证码",
   },
   en: {},
 };
@@ -728,6 +907,7 @@ document.addEventListener("DOMContentLoaded", () => {
   applyLanguage();
   bindNavigation();
   bindActions();
+  bindBackgroundNotifications();
   updateSourceModeFields();
   refreshAll();
   setInterval(refreshJobs, 4000);
@@ -741,14 +921,17 @@ function bindNavigation() {
       button.classList.add("active");
       state.activeSection = button.dataset.section;
       const section = state.activeSection;
+      $("#trialSection").style.display = section === "trial" ? "grid" : "none";
       $("#runSection").style.display = section === "run" ? "grid" : "none";
       $("#resultsSection").style.display = section === "run" || section === "results" ? "grid" : "none";
+      $("#contractReviewSection").style.display = section === "contract-review" ? "block" : "none";
       $("#settingsSection").style.display = section === "settings" ? "block" : "none";
       const researchSection = $("#researchSection");
       if (researchSection) {
         researchSection.style.display = section === "research" ? "block" : "none";
         if (section === "research") refreshResearchHistory();
       }
+      if (section === "contract-review") refreshTargetContractReviews();
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     });
   });
@@ -760,6 +943,12 @@ function bindActions() {
   $("#loadRunsButton").addEventListener("click", refreshRuns);
   $("#reloadResultsButton").addEventListener("click", refreshResults);
   $("#runButton").addEventListener("click", startRun);
+  $("#trialForm").addEventListener("submit", startFullResearch);
+  $("#trialContinueButton").addEventListener("click", continueTrialJob);
+  $("#trialFeedbackForm").addEventListener("submit", submitTrialFeedback);
+  $$("input[name='trial_source_mode']").forEach((input) => {
+    input.addEventListener("change", updateTrialSourceModeFields);
+  });
   $("#resetButton").addEventListener("click", () => {
     $("#runForm").reset();
     updateSourceModeFields();
@@ -787,6 +976,7 @@ function bindActions() {
   });
   $("#sellerSpriteForm").addEventListener("submit", configureSellerSprite);
   $("#visionModelForm").addEventListener("submit", configureVisionModel);
+  $("#visionProviderInput").addEventListener("change", updateVisionProviderHints);
   $("#sellerSpriteAsinForm").addEventListener("submit", checkSellerSpriteAsin);
   $("#alibabaSearchApiForm").addEventListener("submit", configureAlibabaSearchApi);
   $("#alibabaPifatuanForm").addEventListener("submit", checkAlibabaPifatuan);
@@ -817,6 +1007,8 @@ async function refreshAll() {
     refreshManualQueue(),
     refreshImportedSuppliers(),
     refreshSellerSpriteImportHistory(),
+    refreshTrialFeedbackSummary(),
+    refreshTargetContractReviews(),
   ]);
   await refreshResults();
 }
@@ -833,6 +1025,15 @@ async function refreshPreflight() {
   renderPreflight();
 }
 
+async function refreshTrialFeedbackSummary() {
+  try {
+    state.trialFeedbackSummary = await getJson("/api/trial/feedback/summary");
+  } catch (_error) {
+    state.trialFeedbackSummary = null;
+  }
+  renderTrialFeedbackSummary();
+}
+
 async function refreshJobs() {
   const data = await getJson("/api/jobs");
   state.jobs = data.jobs || [];
@@ -846,7 +1047,133 @@ async function refreshJobs() {
     }
   }));
   state.executionNodes = Object.fromEntries(nodeResults);
+  syncHumanActionAlerts();
   renderJobs();
+  renderTrialWorkflow();
+}
+
+function bindBackgroundNotifications() {
+  const button = $("#notificationButton");
+  const dismiss = $("#backgroundAlertDismiss");
+  const view = $("#backgroundAlertView");
+  button?.addEventListener("click", enableBackgroundNotifications);
+  dismiss?.addEventListener("click", () => $("#backgroundAlert")?.classList.add("hidden"));
+  view?.addEventListener("click", focusHumanAction);
+  renderNotificationButton();
+}
+
+function renderNotificationButton() {
+  const button = $("#notificationButton");
+  if (!button) return;
+  if (!("Notification" in window)) {
+    button.textContent = t("notifications.unsupported");
+    button.disabled = true;
+    return;
+  }
+  const enabled = state.notificationEnabled && Notification.permission === "granted";
+  button.classList.toggle("enabled", enabled);
+  button.textContent = Notification.permission === "denied"
+    ? t("notifications.denied")
+    : enabled ? t("notifications.enabled") : t("notifications.enable");
+}
+
+async function enableBackgroundNotifications() {
+  if (!("Notification" in window)) return;
+  const permission = Notification.permission === "default"
+    ? await Notification.requestPermission()
+    : Notification.permission;
+  state.notificationEnabled = permission === "granted";
+  if (state.notificationEnabled) {
+    localStorage.setItem("backgroundNotifications", "enabled");
+    const pending = currentHumanAction();
+    if (pending) showHumanActionAlert(pending.job, pending.node, { forceSystem: true });
+  } else {
+    localStorage.removeItem("backgroundNotifications");
+  }
+  renderNotificationButton();
+}
+
+function currentHumanAction() {
+  for (const job of state.jobs) {
+    if (job.status !== "human_required") continue;
+    const nodes = state.executionNodes[String(job.run_log_id)] || [];
+    return { job, node: nodes.find((item) => item.status === "human_required") || null };
+  }
+  return null;
+}
+
+function syncHumanActionAlerts() {
+  const pending = currentHumanAction();
+  document.title = pending ? `⚠ ${DEFAULT_DOCUMENT_TITLE}` : DEFAULT_DOCUMENT_TITLE;
+  if (!pending) {
+    state.activeHumanAlert = null;
+    return;
+  }
+  const node = pending.node;
+  const key = `${pending.job.id}:${node?.id || "job"}:${node?.updated_at || pending.job.finished_at || ""}`;
+  if (state.activeHumanAlert === key) return;
+  state.activeHumanAlert = key;
+  showHumanActionAlert(pending.job, node);
+}
+
+function humanActionDescription(job, node) {
+  const scope = node?.scope_key || job.config?.keyword || job.config?.category || job.id;
+  const stage = node?.stage || "browser";
+  const code = node?.error_code || "";
+  const detail = node?.human_action_required?.instructions
+    || node?.error_detail
+    || jobMessageLabel(job.error)
+    || jobMessageLabel(job.message);
+  return `${scope} · ${stage}${code ? ` · ${code}` : ""} — ${detail}`;
+}
+
+function showHumanActionAlert(job, node, { forceSystem = false } = {}) {
+  const alert = $("#backgroundAlert");
+  const title = $("#backgroundAlertTitle");
+  const body = $("#backgroundAlertBody");
+  const view = $("#backgroundAlertView");
+  if (alert && title && body) {
+    title.textContent = t("notifications.title");
+    body.textContent = humanActionDescription(job, node);
+    if (view) view.textContent = t("notifications.view");
+    alert.classList.remove("hidden");
+  }
+  if (
+    state.notificationEnabled
+    && "Notification" in window
+    && Notification.permission === "granted"
+    && (document.hidden || forceSystem)
+  ) {
+    const notification = new Notification(t("notifications.title"), {
+      body: humanActionDescription(job, node),
+      tag: `human-required-${job.id}-${node?.id || "job"}`,
+      requireInteraction: true,
+    });
+    notification.onclick = () => {
+      window.focus();
+      focusHumanAction();
+      notification.close();
+    };
+  }
+}
+
+function focusHumanAction() {
+  window.focus();
+  $(".nav-item[data-section='trial']")?.click();
+  $(".trial-progress-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function refresh1688SessionBeforeResume(node) {
+  const errorCode = node?.error_code || node?.human_action_required?.error_code || "";
+  if (!["CAPTCHA", "CAPTCHA_COOLDOWN", "AUTH_REQUIRED"].includes(errorCode)) return;
+  const captured = await postJson("/api/browser-setup", {
+    action: "save_cookies",
+    site: "1688",
+  });
+  if (!captured.ok) {
+    throw new Error(captured.message || "1688 session could not be saved.");
+  }
+  await Promise.all([refreshPreflight(), refreshBrowserSetup()]);
 }
 
 async function refreshRuns() {
@@ -867,6 +1194,18 @@ async function refreshManualQueue() {
   const data = await getJson("/api/manual-queue?status=open");
   state.manualQueue = data.items || [];
   renderManualQueue();
+}
+
+async function refreshTargetContractReviews() {
+  const list = $("#contractReviewList");
+  if (!list) return;
+  try {
+    const data = await getJson("/api/target-contract/reviews");
+    state.targetContractReviews = data.cases || [];
+    renderTargetContractReviews(data);
+  } catch (error) {
+    list.innerHTML = `<p class="muted-text">${escapeHtml(error.message)}</p>`;
+  }
 }
 
 async function refreshImportedSuppliers() {
@@ -914,6 +1253,7 @@ function renderBrowserSetup() {
   }
   renderBrowserLaunchCommand();
   renderSellerSpriteResearchPrerequisite();
+  renderTrialReadiness();
 }
 
 function toggleBrowserSetupGuide() {
@@ -976,7 +1316,11 @@ async function configureSellerSpriteBrowser(event) {
       enabled: Boolean(form.elements.enabled.checked),
     });
     status.className = result.status === "ready" ? "status-ok" : "status-error";
-    status.textContent = result.status === "ready" ? "Browser configuration saved." : "Browser configuration is incomplete.";
+    status.textContent = result.status === "ready"
+      ? "Browser configuration saved."
+      : result.enabled
+        ? "Browser export is enabled. Add a reviewed locator profile before exporting."
+        : "Browser export is disabled.";
     await Promise.all([refreshConfigStatus(), refreshPreflight()]);
   } catch (error) {
     status.className = "status-error";
@@ -1014,6 +1358,7 @@ async function configureVisionModel(event) {
   const status = $("#visionModelConfigStatus");
   try {
     const result = await postJson("/api/config/vision-model", {
+      provider: String(form.get("provider") || ""),
       key: String(form.get("key") || ""),
       model: String(form.get("model") || ""),
       base_url: String(form.get("base_url") || ""),
@@ -1026,6 +1371,37 @@ async function configureVisionModel(event) {
     status.className = "status-error";
     status.textContent = error.message;
   }
+}
+
+function updateVisionProviderHints() {
+  const provider = String($("#visionProviderInput")?.value || "aliyun_token_plan");
+  const hints = {
+    aliyun_token_plan: {
+      base: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      model: "qwen3-vl-plus",
+    },
+    aliyun: {
+      base: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model: "qwen3-vl-plus",
+    },
+    ppio: {
+      base: "https://api.ppio.com/openai",
+      model: "qwen/qwen3.5-plus",
+    },
+  };
+  const selected = hints[provider] || hints.aliyun_token_plan;
+  const baseInput = $("#visionBaseInput");
+  const modelInput = $("#visionModelInput");
+  const knownBases = Object.values(hints).map((item) => item.base);
+  const knownModels = Object.values(hints).map((item) => item.model);
+  if (!baseInput.value.trim() || knownBases.includes(baseInput.value.trim())) {
+    baseInput.value = selected.base;
+  }
+  if (!modelInput.value.trim() || knownModels.includes(modelInput.value.trim())) {
+    modelInput.value = selected.model;
+  }
+  baseInput.placeholder = selected.base;
+  modelInput.placeholder = selected.model;
 }
 
 async function checkSellerSpriteAsin(event) {
@@ -1188,6 +1564,7 @@ function renderSellerSpriteBrowserCapability(browser) {
   if (form) form.elements.enabled.checked = Boolean(browser?.enabled);
   updateSellerSpriteExportAvailability();
   renderSellerSpriteResearchPrerequisite();
+  renderTrialReadiness();
 }
 
 function updateSellerSpriteExportAvailability() {
@@ -1353,6 +1730,158 @@ function renderImportedSuppliers() {
   `).join("");
 }
 
+function renderTargetContractReviews(payload = {}) {
+  const list = $("#contractReviewList");
+  if (!list) return;
+  const cases = state.targetContractReviews || [];
+  const reviewedCount = cases.filter((item) => item.reviewed).length;
+  $("#contractReviewCount").textContent = `${reviewedCount} / ${payload.case_count ?? cases.length}`;
+  if (!cases.length) {
+    list.innerHTML = `<p class="muted-text">No pinned review cases are available.</p>`;
+    return;
+  }
+  list.innerHTML = cases.map((item, index) => targetContractCase(item, index)).join("");
+  list.querySelectorAll("[data-contract-action]").forEach((button) => {
+    button.addEventListener("click", () => submitTargetContractReview(button));
+  });
+}
+
+function targetContractCase(item, index) {
+  const amazon = item.amazon_evidence || {};
+  const artifact = item.artifact || {};
+  const noteId = `contract-note-${index}`;
+  const artifactClass = artifact.sha256_verified ? "verified" : "unavailable";
+  const artifactLabel = artifact.sha256_verified
+    ? "SHA-256 verified"
+    : (artifact.error || "Evidence unavailable");
+  return `
+    <article class="contract-review-case ${item.reviewed ? "reviewed" : ""}" data-case-id="${escapeAttr(item.case_id)}">
+      <header class="contract-case-header">
+        <div>
+          <span class="contract-case-number">Case ${index + 1}</span>
+          <strong>${escapeHtml(item.asin || "-")}</strong>
+          <small>${escapeHtml(item.category_id || "")}</small>
+        </div>
+        <span class="contract-case-status ${item.reviewed ? "reviewed" : "pending"}">
+          ${item.reviewed ? "Reviewed · included in evaluation" : "Pending · excluded from evaluation"}
+        </span>
+      </header>
+      <section class="contract-amazon-card">
+        ${amazon.main_image_url ? `<img src="${escapeAttr(amazon.main_image_url)}" alt="" loading="lazy">` : `<div class="contract-image-placeholder">Amazon</div>`}
+        <div>
+          <span class="contract-source-label">Amazon target</span>
+          <h3>${escapeHtml(amazon.title || item.amazon_title || "-")}</h3>
+          <a href="${escapeAttr(amazon.listing_url || `https://www.amazon.com/dp/${item.asin}`)}" target="_blank" rel="noreferrer">${escapeHtml(item.asin || "Open listing")}</a>
+        </div>
+      </section>
+      <div class="contract-artifact ${artifactClass}">
+        <strong>${escapeHtml(artifactLabel)}</strong>
+        <span>${escapeHtml(artifact.path || item.artifact_path || "")}</span>
+        <code>${escapeHtml((artifact.actual_sha256 || artifact.expected_sha256 || "").slice(0, 16))}${artifact.expected_sha256 ? "…" : ""}</code>
+      </div>
+      <div class="contract-candidate-list">
+        ${(item.candidates || []).map((candidate) => targetContractCandidate(item, candidate, noteId)).join("")}
+      </div>
+      <footer class="contract-case-footer">
+        <label>
+          <span>Review note</span>
+          <textarea id="${escapeAttr(noteId)}" rows="2" maxlength="1000" placeholder="Why does this evidence match or not match?">${escapeHtml(item.review_notes || "")}</textarea>
+        </label>
+        <div>
+          <button class="contract-no-match ${item.no_match === true ? "selected" : ""}" type="button"
+            data-contract-action="no_match" data-case-id="${escapeAttr(item.case_id)}" data-note-id="${escapeAttr(noteId)}">
+            No matching 1688 candidate
+          </button>
+          <small>Use no-match explicitly when every shown candidate is unsuitable.</small>
+        </div>
+      </footer>
+    </article>
+  `;
+}
+
+function targetContractCandidate(item, candidate, noteId) {
+  const evidence = candidate.stored_evidence;
+  const evidencePairs = targetContractEvidencePairs(evidence);
+  return `
+    <section class="contract-candidate-card ${escapeAttr(candidate.decision || "pending")}">
+      <div class="contract-candidate-main">
+        ${candidate.image_url ? `<img src="${escapeAttr(candidate.image_url)}" alt="" loading="lazy">` : `<div class="contract-image-placeholder">1688</div>`}
+        <div>
+          <span class="contract-source-label">1688 candidate · ${escapeHtml(candidate.offer_id)}</span>
+          <h3>${escapeHtml(candidate.title || "-")}</h3>
+          <a href="${escapeAttr(candidate.offer_url)}" target="_blank" rel="noreferrer">Open stored offer</a>
+        </div>
+      </div>
+      <div class="contract-evidence-grid">
+        ${evidencePairs.length
+          ? evidencePairs.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")
+          : `<p class="muted-text">The pinned artifact is unavailable; fixture title and offer ID are shown, but no unverified evidence is substituted.</p>`}
+      </div>
+      ${evidence ? `
+        <details class="contract-raw-evidence">
+          <summary>Stored evidence JSON</summary>
+          <pre>${escapeHtml(JSON.stringify(evidence, null, 2))}</pre>
+        </details>` : ""}
+      <div class="contract-decision-controls" role="group" aria-label="Decision for offer ${escapeAttr(candidate.offer_id)}">
+        <button class="accept ${candidate.decision === "accepted" ? "selected" : ""}" type="button"
+          data-contract-action="accept" data-case-id="${escapeAttr(item.case_id)}"
+          data-offer-id="${escapeAttr(candidate.offer_id)}" data-note-id="${escapeAttr(noteId)}">Accept match</button>
+        <button class="reject ${candidate.decision === "rejected" ? "selected" : ""}" type="button"
+          data-contract-action="reject" data-case-id="${escapeAttr(item.case_id)}"
+          data-offer-id="${escapeAttr(candidate.offer_id)}" data-note-id="${escapeAttr(noteId)}">Reject match</button>
+        <span>${escapeHtml(candidate.decision === "pending" ? "No decision" : candidate.decision)}</span>
+      </div>
+    </section>
+  `;
+}
+
+function targetContractEvidencePairs(evidence) {
+  if (!evidence || typeof evidence !== "object") return [];
+  const raw = evidence.raw_data && typeof evidence.raw_data === "object" ? evidence.raw_data : {};
+  const spec = raw.spec_match && typeof raw.spec_match === "object" ? raw.spec_match : {};
+  const pairs = [
+    ["Supplier", evidence.supplier_name],
+    ["Price", evidence.base_price_cny === null || evidence.base_price_cny === undefined ? null : `¥${evidence.base_price_cny}`],
+    ["MOQ", evidence.moq],
+    ["Monthly sales", evidence.monthly_sales],
+    ["Repeat buyer rate", evidence.repeat_buyer_rate === null || evidence.repeat_buyer_rate === undefined ? null : `${number(evidence.repeat_buyer_rate * 100, 1)}%`],
+    ["Factory", evidence.is_factory === true ? "Yes" : evidence.is_factory === false ? "No" : null],
+    ["Match score", evidence.match_quality_score === null || evidence.match_quality_score === undefined ? null : percent(evidence.match_quality_score)],
+    ["Candidate score", evidence.candidate_score ?? raw.supplier_candidate_score],
+    ["Spec conflicts", Array.isArray(spec.conflicts) ? spec.conflicts.join(", ") : null],
+    ["Spec missing", Array.isArray(spec.missing) ? spec.missing.join(", ") : null],
+  ];
+  return pairs.filter(([, value]) => value !== null && value !== undefined && value !== "");
+}
+
+async function submitTargetContractReview(button) {
+  const notice = $("#contractReviewNotice");
+  const note = document.getElementById(button.dataset.noteId)?.value || "";
+  const buttons = button.closest(".contract-review-case")?.querySelectorAll("button") || [];
+  buttons.forEach((node) => { node.disabled = true; });
+  notice.className = "contract-review-notice";
+  notice.textContent = "Saving review decision…";
+  try {
+    const response = await postJson("/api/target-contract/reviews", {
+      case_id: button.dataset.caseId,
+      action: button.dataset.contractAction,
+      offer_id: button.dataset.offerId || null,
+      note,
+    });
+    const index = state.targetContractReviews.findIndex((item) => item.case_id === response.case.case_id);
+    if (index >= 0) state.targetContractReviews[index] = response.case;
+    notice.className = "contract-review-notice saved";
+    notice.textContent = response.case.reviewed
+      ? "Saved. This completed case is now eligible for target-contract evaluation."
+      : "Saved. This case remains excluded until every candidate is decided with at least one acceptance, or no-match is explicit.";
+    renderTargetContractReviews({ case_count: state.targetContractReviews.length });
+  } catch (error) {
+    buttons.forEach((node) => { node.disabled = false; });
+    notice.className = "contract-review-notice error";
+    notice.textContent = error.message;
+  }
+}
+
 function fillAlibabaSearchApiForm(status) {
   const ns = $("#alibabaNamespaceInput");
   const method = $("#alibabaMethodInput");
@@ -1368,6 +1897,8 @@ function toggleLanguage() {
   state.lang = state.lang === "en" ? "zh" : "en";
   localStorage.setItem("agentLang", state.lang);
   applyLanguage();
+  renderTrialWorkflow();
+  renderTrialFeedbackSummary();
 }
 
 function applyLanguage() {
@@ -1393,7 +1924,12 @@ function applyLanguage() {
   renderManualQueue();
   renderConfigStatus();
   renderBrowserSetup();
+  renderNotificationButton();
   renderSellerSpriteBrowserCapability(state.configStatus?.seller_sprite_browser || {});
+  updateTrialSourceModeFields();
+  renderTrialReadiness();
+  renderTrialWorkflow();
+  renderTargetContractReviews({ case_count: state.targetContractReviews.length });
   renderChatContext();
   renderSellerSpriteKeywordRows(state.sellerSpriteKeywordRows);
 }
@@ -1408,18 +1944,26 @@ function tx(key, fallback) {
 }
 
 function renderCategorySelect() {
-  const select = $("#categorySelect");
-  if (!select || !state.categories.length) return;
-  const current = select.value || "Home & Kitchen";
-  select.innerHTML = state.categories.map((item) => {
-    const label = state.lang === "zh"
-      ? `${item.label_zh} / ${item.canonical}`
-      : `${item.label_en} / ${item.label_zh}`;
-    return `<option value="${escapeAttr(item.canonical)}">${escapeHtml(label)}</option>`;
-  }).join("");
-  select.value = state.categories.some((item) => item.canonical === current)
-    ? current
-    : state.categories[0].canonical;
+  for (const select of [$("#categorySelect"), $("#trialCategorySelect")].filter(Boolean)) {
+    if (!state.categories.length) continue;
+    const current = select.value || "Home & Kitchen";
+    select.innerHTML = state.categories.map((item) => {
+      const label = state.lang === "zh"
+        ? `${item.label_zh} / ${item.canonical}`
+        : `${item.label_en} / ${item.label_zh}`;
+      return `<option value="${escapeAttr(item.canonical)}">${escapeHtml(label)}</option>`;
+    }).join("");
+    select.value = state.categories.some((item) => item.canonical === current)
+      ? current
+      : state.categories[0].canonical;
+  }
+}
+
+function updateTrialSourceModeFields() {
+  const mode = $("#trialForm input[name='trial_source_mode']:checked")?.value || "category";
+  $$("[data-trial-source-field]").forEach((node) => {
+    node.classList.toggle("hidden", node.dataset.trialSourceField !== mode);
+  });
 }
 
 function activeSourceMode() {
@@ -1522,6 +2066,7 @@ function renderPreflight() {
     : state.preflight ? t("preflight.resolveFailed") : t("preflight.initialBody");
   renderSessionSetup();
   updateRunAvailability();
+  renderTrialReadiness();
 }
 
 function renderSessionSetup() {
@@ -1608,6 +2153,368 @@ async function completeCookieSetup(site) {
   }
 }
 
+function renderTrialReadiness() {
+  const checks = state.preflight?.checks || [];
+  const checkReady = (key) => checks.some((item) => item.key === key && item.level === "ok");
+  const readiness = {
+    chrome: Boolean(state.browserSetup?.reachable),
+    sellersprite: state.configStatus?.seller_sprite_browser?.status === "ready"
+      || checkReady("seller_sprite_browser"),
+    amazon: checkReady("amazon_cookies"),
+    "1688": checkReady("1688_cookies"),
+  };
+  Object.entries(readiness).forEach(([key, ready]) => {
+    const node = $(`[data-readiness="${key}"]`);
+    if (!node) return;
+    node.classList.toggle("ready", ready);
+    node.classList.toggle("missing", !ready);
+    node.setAttribute("aria-label", `${node.textContent}: ${ready ? "ready" : "action required"}`);
+  });
+  const running = trialJob() && ["queued", "running", "cancel_requested", "retry_wait"].includes(trialJob().status);
+  const button = $("#trialStartButton");
+  if (button) button.disabled = !Object.values(readiness).every(Boolean) || Boolean(running);
+  const hint = $("#trialHint");
+  if (hint && hint.dataset.queued !== "true") {
+    const missing = Object.entries(readiness).filter(([, ready]) => !ready).map(([key]) => key);
+    hint.textContent = missing.length
+      ? (state.lang === "zh"
+        ? `还需处理：${missing.join("、")}。可在“设置”查看 9222 与浏览器配置。`
+        : `Action required: ${missing.join(", ")}. Open Settings for Chrome and browser configuration.`)
+      : t("trial.ready");
+  }
+}
+
+function trialJob() {
+  const selected = state.jobs.find((job) => job.id === state.activeTrialJobId);
+  const latest = state.jobs.find((job) => job.config?.workflow_mode === "full_research");
+  if (selected) {
+    // Follow retry descendants even when the retry was created by the API or
+    // another browser tab, so the controlled-trial screen never stays pinned
+    // to an obsolete failed attempt.
+    const byId = new Map(state.jobs.map((job) => [job.id, job]));
+    let ancestorId = latest?.retry_of;
+    while (ancestorId) {
+      if (ancestorId === selected.id) {
+        state.activeTrialJobId = latest.id;
+        localStorage.setItem("activeTrialJobId", latest.id);
+        return latest;
+      }
+      ancestorId = byId.get(ancestorId)?.retry_of;
+    }
+    return selected;
+  }
+  if (latest) {
+    state.activeTrialJobId = latest.id;
+    localStorage.setItem("activeTrialJobId", latest.id);
+  }
+  return latest || null;
+}
+
+async function startFullResearch(event) {
+  event.preventDefault();
+  const formElement = event.currentTarget;
+  const form = new FormData(formElement);
+  const sourceMode = String(form.get("trial_source_mode") || "category");
+  const payload = {
+    source_mode: sourceMode,
+    marketplace: "US",
+    limit: Number(form.get("limit") || 10),
+    no_mock: true,
+    generate_ai_reasons: Boolean(form.get("generate_ai_reasons")),
+    require_supplier_evidence: true,
+  };
+  if (sourceMode === "keyword") {
+    payload.keyword = String(form.get("keyword") || "").trim();
+    payload.research_keyword = payload.keyword;
+    payload.niche_label = payload.keyword;
+  } else {
+    payload.category = String(form.get("category") || "").trim();
+    payload.research_keyword = payload.category;
+    payload.niche_label = payload.category;
+  }
+  const button = $("#trialStartButton");
+  const hint = $("#trialHint");
+  button.disabled = true;
+  hint.dataset.queued = "true";
+  hint.textContent = t("trial.queued");
+  try {
+    const response = await postJson("/api/trial/full-research", payload);
+    state.activeTrialJobId = response.job.id;
+    localStorage.setItem("activeTrialJobId", response.job.id);
+    await refreshJobs();
+  } catch (error) {
+    hint.dataset.queued = "false";
+    hint.textContent = error.message;
+    renderTrialReadiness();
+  }
+}
+
+async function continueTrialJob() {
+  const job = trialJob();
+  if (!job) return;
+  const button = $("#trialContinueButton");
+  button.disabled = true;
+  try {
+    if (["failed", "cancelled"].includes(job.status) || !job.run_log_id) {
+      const response = await postJson(`/api/jobs/${encodeURIComponent(job.id)}/retry`, {});
+      state.activeTrialJobId = response.job.id;
+      localStorage.setItem("activeTrialJobId", response.job.id);
+    } else {
+      const nodes = state.executionNodes[String(job.run_log_id)] || [];
+      const node = nodes.find((item) => item.status === "human_required");
+      if (!node) throw new Error("No resumable browser action was found.");
+      await refresh1688SessionBeforeResume(node);
+      await postJson(
+        `/api/jobs/${encodeURIComponent(job.id)}/nodes/${encodeURIComponent(node.id)}/resume`,
+        {
+          reason: "Trial user completed the required browser action",
+          resume_token: node.resume_token,
+        },
+      );
+    }
+    await refreshJobs();
+  } catch (error) {
+    const alert = $("#trialAlert");
+    alert.classList.remove("hidden");
+    alert.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderTrialWorkflow() {
+  const job = trialJob();
+  const badge = $("#trialStatusBadge");
+  const meta = $("#trialJobMeta");
+  const alert = $("#trialAlert");
+  const continueButton = $("#trialContinueButton");
+  const deliverables = $("#trialDeliverables");
+  const feedback = $("#trialFeedbackForm");
+  if (!badge || !meta || !alert || !continueButton || !deliverables || !feedback) return;
+
+  $$("#trialStages li").forEach((item) => {
+    item.classList.remove("active", "complete", "error", "human");
+  });
+  alert.classList.add("hidden");
+  continueButton.classList.add("hidden");
+  deliverables.classList.add("hidden");
+  feedback.classList.add("hidden");
+
+  if (!job) {
+    badge.className = "badge muted";
+    badge.textContent = t("trial.idle");
+    meta.textContent = t("trial.noJob");
+    renderTrialReadiness();
+    return;
+  }
+
+  const source = job.config?.source_mode === "keyword"
+    ? job.config.keyword
+    : job.config?.category;
+  meta.textContent = `${job.id} · ${source || "-"} · ${Number(job.config?.limit || 0)} ASIN`;
+  badge.className = `badge ${job.status === "success" ? "ok" : ["failed", "cancelled"].includes(job.status) ? "err" : "warn"}`;
+  badge.textContent = statusLabel(job.status);
+
+  const events = Array.isArray(job.events) ? job.events : [];
+  const hasResearch = job.research?.status === "SUCCESS";
+  const researchAttempted = Boolean(job.research?.status)
+    || events.some((event) => event.event === "market_research");
+  const pipelineStarted = Boolean(job.run_log_id) || events.some((event) => event.event === "pipeline");
+  const stageNodes = {
+    preflight: $("#trialStages [data-stage='preflight']"),
+    research: $("#trialStages [data-stage='research']"),
+    sourcing: $("#trialStages [data-stage='sourcing']"),
+    report: $("#trialStages [data-stage='report']"),
+  };
+  stageNodes.preflight.classList.add(
+    job.status === "queued" ? "active"
+      : job.status === "failed" && !researchAttempted && !pipelineStarted ? "error"
+        : "complete"
+  );
+  if (hasResearch) stageNodes.research.classList.add("complete");
+  else if (researchAttempted && (job.status === "running" || job.status === "human_required" || job.status === "failed")) {
+    stageNodes.research.classList.add(job.status === "human_required" ? "human" : job.status === "failed" ? "error" : "active");
+  }
+  if (pipelineStarted) {
+    stageNodes.sourcing.classList.add(
+      job.status === "success" ? "complete"
+        : job.status === "human_required" ? "human"
+          : job.status === "review_required" ? "human"
+          : job.status === "failed" || job.status === "cancelled" ? "error"
+            : "active"
+    );
+  }
+  if (job.status === "success" || (job.exports && Object.keys(job.exports).length)) {
+    stageNodes.report.classList.add("complete");
+  }
+
+  if (job.error) {
+    alert.classList.remove("hidden");
+    alert.classList.toggle(
+      "human",
+      job.status === "human_required" || job.status === "review_required",
+    );
+    alert.textContent = jobMessageLabel(job.error);
+  }
+  if (job.status === "human_required" || job.status === "failed" || job.status === "cancelled") {
+    continueButton.textContent = ["failed", "cancelled"].includes(job.status)
+      ? t("actions.retry")
+      : t("trial.continue");
+    continueButton.classList.remove("hidden");
+  }
+
+  const links = trialDownloadLinks(job);
+  if (links) {
+    deliverables.classList.remove("hidden");
+    $("#trialDownloadLinks").innerHTML = links;
+  }
+  if (["success", "failed", "cancelled", "review_required"].includes(job.status)) {
+    feedback.classList.remove("hidden");
+    if (feedback.dataset.jobId !== job.id) {
+      feedback.reset();
+      feedback.dataset.jobId = job.id;
+      $("#trialFeedbackButton").disabled = false;
+      $("#trialFeedbackStatus").textContent = "";
+    }
+  }
+  const hint = $("#trialHint");
+  if (!["queued", "running", "retry_wait"].includes(job.status)) {
+    hint.dataset.queued = "false";
+  }
+  renderTrialReadiness();
+}
+
+async function submitTrialFeedback(event) {
+  event.preventDefault();
+  const job = trialJob();
+  if (!job) return;
+  const form = event.currentTarget;
+  const button = $("#trialFeedbackButton");
+  const status = $("#trialFeedbackStatus");
+  const fields = new FormData(form);
+  button.disabled = true;
+  status.textContent = "";
+  try {
+    await postJson("/api/trial/feedback", {
+      job_id: job.id,
+      job_status: job.status,
+      ease: Number(fields.get("ease")),
+      result_usefulness: Number(fields.get("result_usefulness")),
+      would_use_again: fields.get("would_use_again") === "true",
+      blocked_stage: fields.get("blocked_stage") || "none",
+      comment: String(fields.get("comment") || "").trim(),
+    });
+    status.textContent = t("trial.feedbackSaved");
+    await refreshTrialFeedbackSummary();
+  } catch (error) {
+    status.textContent = error.message;
+    button.disabled = false;
+  }
+}
+
+function renderTrialFeedbackSummary() {
+  const summary = state.trialFeedbackSummary;
+  const badge = $("#trialValidationBadge");
+  const criteria = $("#trialValidationCriteria");
+  const blockers = $("#trialValidationBlockers");
+  const decision = $("#trialValidationDecision");
+  if (!badge || !criteria || !blockers || !decision) return;
+
+  const sampleSize = Number(summary?.sample_size || 0);
+  const minimumSample = Number(summary?.minimum_sample_size || 3);
+  const metrics = summary?.metrics || {};
+  $("#trialValidationSamples").textContent = `${sampleSize} / ${minimumSample}`;
+  $("#trialValidationCoverage").textContent = `${Number(metrics.source_mode_count || 0)} / 2`;
+  $("#trialValidationDelivery").textContent = trialPercent(metrics.delivery_rate);
+  $("#trialValidationEase").textContent = trialRating(metrics.average_ease);
+  $("#trialValidationUsefulness").textContent = trialRating(metrics.average_usefulness);
+  $("#trialValidationAgain").textContent = trialPercent(metrics.would_use_again_rate);
+  $("#trialValidationNoBlocker").textContent = trialPercent(metrics.no_blocker_rate);
+
+  const status = summary?.status || "no_data";
+  const statusView = {
+    no_data: ["muted", "trial.validationNoData"],
+    collecting: ["warn", "trial.validationCollecting"],
+    ready_for_installer: ["ok", "trial.validationReady"],
+    needs_improvement: ["err", "trial.validationImprove"],
+  }[status] || ["muted", "trial.validationNoData"];
+  badge.className = `badge ${statusView[0]}`;
+  badge.textContent = t(statusView[1]);
+
+  const criterionRows = Array.isArray(summary?.criteria) ? summary.criteria : [
+    { key: "sample_size", passed: false },
+    { key: "source_mode_count", passed: false },
+    { key: "delivery_rate", passed: false },
+    { key: "average_ease", passed: false },
+    { key: "average_usefulness", passed: false },
+    { key: "would_use_again_rate", passed: false },
+    { key: "no_blocker_rate", passed: false },
+  ];
+  criteria.innerHTML = criterionRows.map((criterion) => {
+    const pending = status === "no_data" || status === "collecting";
+    const className = criterion.passed ? "pass" : pending ? "pending" : "fail";
+    const icon = criterion.passed ? "✓" : pending ? "…" : "!";
+    return `
+      <div class="${className}">
+        <span>${icon}</span>
+        <strong>${escapeHtml(t(`trial.validationGate.${criterion.key}`))}</strong>
+      </div>
+    `;
+  }).join("");
+
+  const blockerCounts = summary?.blocker_counts || {};
+  const blockerLabels = {
+    none: t("trial.feedbackNone"),
+    preflight: t("trial.feedbackPreflight"),
+    market_research: t("trial.feedbackResearch"),
+    sourcing: t("trial.feedbackSourcing"),
+    report: t("trial.feedbackReport"),
+  };
+  const blockerRows = Object.entries(blockerLabels)
+    .filter(([key]) => Number(blockerCounts[key] || 0) > 0)
+    .map(([key, label]) => `
+      <span class="${key === "none" ? "clear" : ""}">
+        ${escapeHtml(label)} <strong>${Number(blockerCounts[key] || 0)}</strong>
+      </span>
+    `);
+  blockers.innerHTML = blockerRows.length
+    ? blockerRows.join("")
+    : `<small>${escapeHtml(t("trial.validationEmptyBlockers"))}</small>`;
+
+  if (status === "collecting") {
+    decision.textContent = t("trial.validationCollectingHint").replace(
+      "{count}",
+      String(Number(summary?.remaining_trials || 0)),
+    );
+  } else if (status === "ready_for_installer") {
+    decision.textContent = t("trial.validationReadyHint");
+  } else if (status === "needs_improvement") {
+    decision.textContent = t("trial.validationImproveHint");
+  } else {
+    decision.textContent = t("trial.validationNoDataHint");
+  }
+  decision.className = `trial-validation-decision ${status}`;
+}
+
+function trialRating(value) {
+  return value === null || value === undefined ? "— / 5" : `${Number(value).toFixed(1)} / 5`;
+}
+
+function trialPercent(value) {
+  return value === null || value === undefined ? "—" : `${Math.round(Number(value) * 100)}%`;
+}
+
+function trialDownloadLinks(job) {
+  const links = [];
+  const add = (label, path) => {
+    if (!path) return;
+    const filename = String(path).split(/[\\/]/).pop();
+    links.push(`<a class="ghost-button" href="/api/exports/${encodeURIComponent(filename)}">${escapeHtml(label)}</a>`);
+  };
+  add(state.lang === "zh" ? "选品结果 Excel" : "Sourcing workbook", job.exports?.xlsx);
+  return links.join("");
+}
+
 function renderJobs() {
   const list = $("#jobList");
   list.innerHTML = "";
@@ -1666,6 +2573,12 @@ function renderJobs() {
       if (!reason || !reason.trim()) return;
       button.disabled = true;
       try {
+        if (button.dataset.action === "resume") {
+          const job = state.jobs.find((item) => item.id === button.dataset.jobId);
+          const node = (state.executionNodes[String(job?.run_log_id)] || [])
+            .find((item) => String(item.id) === button.dataset.nodeId);
+          await refresh1688SessionBeforeResume(node);
+        }
         await postJson(
           `/api/jobs/${encodeURIComponent(button.dataset.jobId)}/nodes/${encodeURIComponent(button.dataset.nodeId)}/${button.dataset.action}`,
           { reason: reason.trim(), resume_token: button.dataset.resumeToken },
@@ -1694,7 +2607,7 @@ function nodeActionButton(job, node) {
   if (["queued", "running", "cancel_requested"].includes(job.status)) return "";
   const token = escapeAttr(node.resume_token || "");
   if (node.status === "human_required") {
-    return `<button class="link-button node-action" data-job-id="${escapeAttr(job.id)}" data-node-id="${Number(node.id)}" data-resume-token="${token}" data-action="resume">${escapeHtml(t("actions.resume"))}</button>`;
+    return `<button class="link-button node-action" data-job-id="${escapeAttr(job.id)}" data-node-id="${Number(node.id)}" data-resume-token="${token}" data-error-code="${escapeAttr(node.error_code || "")}" data-action="resume">${escapeHtml(t("actions.resume"))}</button>`;
   }
   if (["failed", "timed_out"].includes(node.status)) {
     return `<button class="link-button node-action" data-job-id="${escapeAttr(job.id)}" data-node-id="${Number(node.id)}" data-resume-token="${token}" data-action="retry">${escapeHtml(t("actions.retry"))}</button>`;
@@ -1734,7 +2647,7 @@ function jobActionButtons(job) {
   if (job.status === "queued" || job.status === "running" || job.status === "cancel_requested") {
     return `<button class="link-button job-action" data-action="cancel" data-job-id="${escapeAttr(job.id)}">${escapeHtml(t("actions.cancel"))}</button>`;
   }
-  if (job.status === "failed" || job.status === "cancelled") {
+  if (job.status === "failed" || job.status === "cancelled" || (job.status === "human_required" && !job.run_log_id)) {
     return `<button class="link-button job-action" data-action="retry" data-job-id="${escapeAttr(job.id)}">${escapeHtml(t("actions.retry"))}</button>`;
   }
   return "";
@@ -1827,11 +2740,12 @@ function renderConfigStatus() {
       "settings.capability.sellerSprite",
       Boolean(status.seller_sprite?.configured),
       sellerSpriteDetail(status.seller_sprite),
+      !status.seller_sprite?.configured,
     ),
     capabilityCard(
       "settings.capability.vision",
       Boolean(status.vision?.configured),
-      status.vision?.configured ? status.vision.provider : "PPIO_API_KEY / ANTHROPIC_API_KEY",
+      status.vision?.configured ? status.vision.provider : "ALIYUN_TOKEN_PLAN_API_KEY / ALIYUN_API_KEY / PPIO_API_KEY / ANTHROPIC_API_KEY",
     ),
     capabilityCard(
       "settings.capability.alibaba",
@@ -1858,8 +2772,14 @@ function renderConfigStatus() {
   ];
   grid.innerHTML = cards.join("");
   if (status.vision) {
+    const providerInput = $("#visionProviderInput");
+    const provider = String(status.vision.provider || "").toLowerCase();
+    if (providerInput && ["aliyun_token_plan", "aliyun", "ppio"].includes(provider)) {
+      providerInput.value = provider;
+    }
     $("#visionModelInput").value = status.vision.model || "";
     $("#visionBaseInput").value = status.vision.base_url || "";
+    updateVisionProviderHints();
   }
   updateRunAvailability();
 }
@@ -1903,7 +2823,7 @@ function capabilityCard(labelKey, ok, detail, neutral = false) {
 }
 
 function sellerSpriteDetail(status) {
-  if (!status?.configured) return status?.env || "MJJL_API_KEY";
+  if (!status?.configured) return t("settings.sellerSpriteOptional");
   const cap = Number(status.max_products_per_run ?? 0);
   const keyLength = Number(status.key_length ?? 0);
   const check = status.last_check || {};
@@ -2920,6 +3840,7 @@ function sourceLabel(source) {
     alibaba_text_search: "Text API",
     alibaba_playwright: "Playwright",
     alibaba_scrapling: "Scrapling",
+    sellersprite_1688: "SellerSprite 1688",
     mock: "Mock",
     unknown: "Unknown",
   };

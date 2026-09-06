@@ -17,25 +17,24 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
 import inspect
 import time
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable, Optional
 
 from loguru import logger
 
 from agent.cancellation import CancellationRequested
 from analyzers.profit_model import InsufficientCostEvidence, ProfitBreakdown, predict_profit
-from analyzers.scorer import ScoringEvidenceError, ScoreBreakdown, score_product
+from analyzers.scorer import ScoreBreakdown, ScoringEvidenceError, score_product
+from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
 from db.models import MarketAnalysis, Product, ProfitSnapshot, RunLog, Score, Supplier
 from db.session import session_scope
 from matchers.alibaba_pailitao import SupplierDTO
 from pipeline.filters import rank_candidates
 from reports.exporter import export_excel, export_json, export_markdown
-from config.settings import settings
-
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 CancelCheck = Callable[[], bool]
@@ -497,7 +496,7 @@ def _call_match_suppliers(
         accepts_market_keywords = False
         accepts_run_ref = False
     try:
-        kwargs = {}
+        kwargs: dict = {}
         if accepts_cancel:
             kwargs["cancel_check"] = cancel_check
         if accepts_market_keywords:
@@ -773,6 +772,13 @@ def _rank_suppliers_by_profit(product: ProductDTO, suppliers: list[SupplierDTO])
             raw["supplier_profit_margin"] = round(profit.profit_margin, 4)
             raw["supplier_net_profit"] = round(profit.net_profit, 4)
             raw["supplier_purchase_cost"] = round(profit.purchase_cost, 4)
+            raw["supplier_shipping_cost"] = round(profit.shipping_cost, 4)
+            raw["supplier_fba_fee"] = round(profit.fba_fee, 4)
+            raw["supplier_commission"] = round(profit.commission, 4)
+            raw["supplier_ad_cost"] = round(profit.ad_cost, 4)
+            raw["supplier_return_loss"] = round(profit.return_loss, 4)
+            raw["supplier_exchange_loss"] = round(profit.exchange_loss, 4)
+            raw["supplier_total_cost"] = round(profit.total_cost, 4)
             raw["supplier_profit_score"] = profit_score
         except InsufficientCostEvidence as exc:
             evidence_error = exc
@@ -923,11 +929,11 @@ def _evidence_rejection_reasons(
             return ["missing_purchase_price"]
         if fields & {"weight_kg", "length_cm", "width_cm", "height_cm"}:
             return ["missing_logistics_dimensions"]
-    if error.dimension == "competition":
+    if error.dimension == "competition":  # type: ignore[union-attr]
         return ["missing_market_evidence"]
-    if error.dimension == "logistics":
+    if error.dimension == "logistics":  # type: ignore[union-attr]
         return ["missing_logistics_dimensions"]
-    if error.dimension == "supply":
+    if error.dimension == "supply":  # type: ignore[union-attr]
         reasons = []
         if "purchase_price" in fields:
             reasons.append("missing_purchase_price")
@@ -975,6 +981,7 @@ def run_pipeline(
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
     stage_timeouts: dict[str, float] | None = None,
+    seed_products: list[dict] | None = None,
 ) -> int:
     from pipeline.recoverable import run_recoverable_pipeline
 
@@ -991,6 +998,7 @@ def run_pipeline(
         progress_callback=progress_callback,
         cancel_check=cancel_check,
         stage_timeouts=stage_timeouts,
+        seed_products=seed_products,
     )
 
 

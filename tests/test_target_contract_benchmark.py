@@ -1,11 +1,12 @@
-import json
 import hashlib
+import json
 from pathlib import Path
+
+import pytest
 
 from benchmarks.evaluate import evaluate
 from benchmarks.evaluate_target_contract import evaluate_contract
 from domain.target_categories import compare_target_profiles, profile_from_text
-
 
 FIXTURES = Path(__file__).parents[1] / "benchmarks" / "fixtures"
 
@@ -57,6 +58,8 @@ def test_live_queue_artifacts_are_pinned_and_known_numeric_conflict_is_detected(
     case = by_id["live-umbrella-B0DT4VNHCC"]
 
     artifact = Path(__file__).parents[1] / case["artifact_path"]
+    if not artifact.is_file():
+        pytest.skip("optional ignored live artifact is not present in this checkout")
     assert hashlib.sha256(artifact.read_bytes()).hexdigest() == case["artifact_sha256"]
 
     target = profile_from_text(case["amazon_title"])
@@ -70,3 +73,42 @@ def test_live_queue_artifacts_are_pinned_and_known_numeric_conflict_is_detected(
     assert candidate.numeric["canopy_diameter_cm"] == 85.0
     assert comparison.decision == "reject"
     assert comparison.conflicts == ["canopy_diameter_cm"]
+
+
+def test_target_contract_live_metrics_use_only_explicitly_reviewed_cases():
+    dataset = {
+        "schema_version": "1.0",
+        "dataset_id": "reviewed-live-test",
+        "ground_truth_type": "unreviewed_live_queue",
+        "cases": [
+            {
+                "case_id": "reviewed",
+                "reviewed": True,
+                "category_id": "outdoor_storage",
+                "amazon_title": "120 Gallon Resin Deck Box Outdoor Storage",
+                "candidate_offer_ids": ["1"],
+                "candidate_titles": ["户外储物箱 50 Gallon 树脂"],
+                "correct_offer_ids": [],
+                "no_match": True,
+            },
+            {
+                "case_id": "unreviewed",
+                "reviewed": False,
+                "category_id": "outdoor_storage",
+                "amazon_title": "120 Gallon Resin Deck Box Outdoor Storage",
+                "candidate_offer_ids": ["2"],
+                "candidate_titles": ["户外储物箱 454L 树脂"],
+                "correct_offer_ids": ["2"],
+                "no_match": False,
+            },
+        ],
+    }
+
+    result = evaluate_contract(dataset)
+
+    assert result["case_count"] == 2
+    assert result["reviewed_case_count"] == 1
+    assert result["reviewed_candidate_count"] == 1
+    assert result["decision_accuracy"] == 1.0
+    assert result["human_live_accuracy"] == 1.0
+    assert [item["case_id"] for item in result["predictions"]] == ["reviewed"]

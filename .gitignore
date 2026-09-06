@@ -26,5 +26,6 @@ data/
 # 文档
 docs
 
-.env.example
 .env
+.qoder
+.codex/

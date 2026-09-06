@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 _CONFIG_NAME = "sellersprite_browser_config.json"
 _CONTAINER_DATA_PREFIX = "/app/data/"
 
@@ -73,8 +72,8 @@ def configure_sellersprite_browser(
     locator = _require_container_data_path(locator_profile_path, "locator_profile_path")
     target = _require_container_data_path(download_dir, "download_dir")
     local_profile = project_local_path(project_root, locator)
-    if not local_profile.is_file():
-        raise ValueError("locator_profile_path must reference an existing file under /app/data/")
+    if local_profile.exists() and not local_profile.is_file():
+        raise ValueError("locator_profile_path must reference a file under /app/data/")
     if not host_download_dir or not str(host_download_dir).strip():
         raise ValueError("host_download_dir is required")
     payload = {

@@ -15,12 +15,14 @@ from agent import server
 from agent.sellersprite_models import SellerSpriteContext, SellerSpriteResult
 from agent.server import (
     AgentRequestHandler,
-    _handle_browser_agent_request,
     _config_from_body,
+    _full_research_config_from_body,
+    _handle_browser_agent_request,
     _handle_execution_attempt_query,
-    _json_default,
     _handle_job_action,
+    _json_default,
     _market_data_guard_error,
+    _save_trial_feedback_for_job,
     reviewed_supplier_csv_fields,
 )
 
@@ -264,6 +266,231 @@ def test_config_from_body_includes_market_data_requirement():
     assert config.require_supplier_evidence is True
 
 
+def test_full_research_config_enforces_real_bounded_workflow():
+    config = _full_research_config_from_body({
+        "source_mode": "keyword",
+        "keyword": "patio umbrella",
+        "marketplace": "US",
+        "limit": 8,
+        "generate_ai_reasons": True,
+    })
+
+    assert config.workflow_mode == "full_research"
+    assert config.research_keyword == "patio umbrella"
+    assert config.research_niche_label == "patio umbrella"
+    assert config.no_mock is True
+    assert config.require_supplier_evidence is True
+    assert config.generate_ai_reasons is True
+
+
+def test_full_research_endpoint_starts_one_agent_job(monkeypatch, server_client):
+    from agent.state import AgentJob
+
+    calls = []
+
+    def fake_start(config):
+        calls.append(config)
+        return AgentJob(config=config, id="trialjob0001")
+
+    monkeypatch.setattr(AgentRequestHandler.runtime, "start_run", fake_start)
+    status, payload = server_client.post_json("/api/trial/full-research", {
+        "source_mode": "category",
+        "category": "Home & Kitchen",
+        "marketplace": "US",
+        "limit": 5,
+    })
+
+    assert status == HTTPStatus.ACCEPTED
+    assert payload["job"]["id"] == "trialjob0001"
+    assert payload["job"]["config"]["workflow_mode"] == "full_research"
+    assert len(calls) == 1
+
+
+def test_trial_feedback_endpoint_validates_and_saves(monkeypatch, server_client):
+    calls = []
+
+    def fake_save(payload):
+        calls.append(payload)
+        return {"id": "feedback-1", **payload}
+
+    monkeypatch.setattr(server, "save_trial_feedback", fake_save)
+    monkeypatch.setattr(
+        AgentRequestHandler.runtime,
+        "get_job",
+        lambda job_id: {
+            "id": job_id,
+            "status": "review_required",
+            "config": {
+                "workflow_mode": "full_research",
+                "source_mode": "keyword",
+            },
+            "exports": {
+                "xlsx": "/app/data/exports/result.xlsx",
+            },
+        },
+    )
+    status, payload = server_client.post_json("/api/trial/feedback", {
+        "job_id": "trialjob0001",
+        "job_status": "running",
+        "ease": 4,
+        "result_usefulness": 5,
+        "would_use_again": True,
+        "blocked_stage": "sourcing",
+        "comment": "淘汰原因很清楚",
+    })
+
+    assert status == HTTPStatus.CREATED
+    assert payload["feedback"]["id"] == "feedback-1"
+    assert calls[0]["result_usefulness"] == 5
+    assert calls[0]["job_status"] == "review_required"
+    assert calls[0]["source_mode"] == "keyword"
+    assert calls[0]["workflow_completed"] is True
+    assert calls[0]["deliverables_ready"] is True
+
+
+def test_trial_feedback_requires_only_the_single_workbook(monkeypatch):
+    calls = []
+
+    class Runtime:
+        def get_job(self, job_id):
+            return {
+                "id": job_id,
+                "status": "success",
+                "config": {"workflow_mode": "full_research", "source_mode": "category"},
+                "research": {"exports": {"xlsx": "/legacy/market.xlsx"}},
+                "exports": {"json": "/app/data/exports/result.json"},
+            }
+
+    monkeypatch.setattr(
+        server,
+        "save_trial_feedback",
+        lambda payload: calls.append(payload) or payload,
+    )
+    _save_trial_feedback_for_job(Runtime(), {
+        "job_id": "trialjob0001",
+        "ease": 5,
+        "result_usefulness": 5,
+        "would_use_again": True,
+        "blocked_stage": "none",
+    })
+    assert calls[0]["deliverables_ready"] is False
+
+
+def test_trial_feedback_single_workbook_is_ready_without_legacy_exports(monkeypatch):
+    calls = []
+
+    class Runtime:
+        def get_job(self, job_id):
+            return {
+                "id": job_id,
+                "status": "review_required",
+                "config": {"workflow_mode": "full_research", "source_mode": "keyword"},
+                "research": {},
+                "exports": {"xlsx": "/app/data/exports/result.xlsx"},
+            }
+
+    monkeypatch.setattr(
+        server,
+        "save_trial_feedback",
+        lambda payload: calls.append(payload) or payload,
+    )
+    _save_trial_feedback_for_job(Runtime(), {
+        "job_id": "trialjob0002",
+        "ease": 4,
+        "result_usefulness": 5,
+        "would_use_again": True,
+        "blocked_stage": "none",
+    })
+    assert calls[0]["deliverables_ready"] is True
+
+
+def test_trial_feedback_get_can_filter_by_job(monkeypatch, server_client):
+    calls = []
+
+    def fake_list(**kwargs):
+        calls.append(kwargs)
+        return [{"job_id": kwargs["job_id"], "ease": 4}]
+
+    monkeypatch.setattr(server, "list_trial_feedback", fake_list)
+    status, payload = server_client.get_json(
+        "/api/trial/feedback?job_id=trialjob0001&limit=10"
+    )
+
+    assert status == HTTPStatus.OK
+    assert payload["items"][0]["job_id"] == "trialjob0001"
+    assert calls == [{"job_id": "trialjob0001", "limit": 10}]
+
+
+def test_trial_feedback_summary_endpoint(monkeypatch, server_client):
+    monkeypatch.setattr(
+        server,
+        "summarize_trial_feedback",
+        lambda: {
+            "status": "collecting",
+            "sample_size": 1,
+            "ready_for_installer": False,
+        },
+    )
+
+    status, payload = server_client.get_json("/api/trial/feedback/summary")
+
+    assert status == HTTPStatus.OK
+    assert payload["status"] == "collecting"
+    assert payload["sample_size"] == 1
+
+
+def test_trial_feedback_rejects_unfinished_job(monkeypatch):
+    class Runtime:
+        def get_job(self, job_id):
+            return {
+                "id": job_id,
+                "status": "running",
+                "config": {
+                    "workflow_mode": "full_research",
+                    "source_mode": "keyword",
+                },
+            }
+
+    monkeypatch.setattr(
+        server,
+        "save_trial_feedback",
+        lambda payload: (_ for _ in ()).throw(
+            AssertionError("unfinished feedback must not be stored")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="only accepted after"):
+        _save_trial_feedback_for_job(Runtime(), {
+            "job_id": "trialjob0001",
+            "ease": 5,
+            "result_usefulness": 5,
+            "would_use_again": True,
+            "blocked_stage": "none",
+        })
+
+
+def test_trial_feedback_rejects_standard_agent_job():
+    class Runtime:
+        def get_job(self, job_id):
+            return {
+                "id": job_id,
+                "status": "success",
+                "config": {
+                    "workflow_mode": "standard",
+                    "source_mode": "category",
+                },
+            }
+
+    with pytest.raises(ValueError, match="full research trial"):
+        _save_trial_feedback_for_job(Runtime(), {
+            "job_id": "trialjob0001",
+            "ease": 5,
+            "result_usefulness": 5,
+            "would_use_again": True,
+            "blocked_stage": "none",
+        })
+
+
 def test_keyword_config_rejects_unmapped_chinese_for_amazon_us():
     with pytest.raises(ValueError, match="requires an English query"):
         _config_from_body({
@@ -312,6 +539,48 @@ def test_reviewed_supplier_csv_fields_include_candidate_scores():
     assert "supplier_business_score" in fields
     assert "sourcing_source" in fields
     assert fields.index("candidate_score") > fields.index("visual_similarity")
+
+
+def test_target_contract_review_endpoints_route_to_review_store(
+    monkeypatch, server_client
+):
+    monkeypatch.setattr(
+        server,
+        "list_target_contract_reviews",
+        lambda: {"case_count": 3, "reviewed_case_count": 0, "cases": []},
+    )
+    calls = []
+    monkeypatch.setattr(
+        server,
+        "save_target_contract_review",
+        lambda case_id, action, **kwargs: calls.append(
+            (case_id, action, kwargs)
+        )
+        or {"case_id": case_id, "reviewed": False},
+    )
+
+    status, payload = server_client.get_json("/api/target-contract/reviews")
+    assert status == HTTPStatus.OK
+    assert payload["case_count"] == 3
+
+    status, payload = server_client.post_json(
+        "/api/target-contract/reviews",
+        {
+            "case_id": "case-1",
+            "action": "reject",
+            "offer_id": "101",
+            "note": "wrong size",
+        },
+    )
+    assert status == HTTPStatus.OK
+    assert payload["case"]["case_id"] == "case-1"
+    assert calls == [
+        (
+            "case-1",
+            "reject",
+            {"offer_id": "101", "note": "wrong size"},
+        )
+    ]
 
 
 def test_handle_job_action_cancel_routes_to_runtime():

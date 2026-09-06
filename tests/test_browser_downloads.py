@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 
 from agent.tools.browser_downloads import (
-    DownloadError,
     DownloadedArtifact,
+    DownloadError,
     snapshot_download_dir,
     wait_for_new_download,
 )

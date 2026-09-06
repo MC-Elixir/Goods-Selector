@@ -107,6 +107,19 @@ def test_exclusion_head_seller_by_reviews():
     assert any("头部卖家" in reason for reason in shortlist.excluded_items[0].exclusion_reasons)
 
 
+def test_excluded_seller_keeps_opportunity_score_for_market_ranking():
+    shortlist = build_seller_shortlist([
+        _row(seller="Head", review_count=8000, monthly_sales=500, price=25.0, rating=4.1),
+    ])
+
+    item = shortlist.excluded_items[0]
+    assert item.fit_score > 0
+    assert set(item.fit_factors) == {
+        "demand_proven", "low_competition", "freshness", "differentiation_room",
+    }
+    assert shortlist.quality_summary["scored_count"] == 1
+
+
 def test_exclusion_missing_required_field():
     rows = [_row(seller="Sparse", monthly_sales=None)]
     shortlist = build_seller_shortlist(rows, as_of=AS_OF)
@@ -168,6 +181,20 @@ def test_import_csv_chinese_headers(tmp_path):
     row = imported.competitor_rows[0]
     assert row.seller == "巢艺工坊" and row.brand == "巢艺"
     assert row.monthly_sales == 310 and row.launch_date == "2026-01-15"
+
+
+def test_import_sellersprite_currency_headers(tmp_path):
+    path = _write_csv(
+        tmp_path / "sellersprite.csv",
+        ["品牌", "价格($)", "月销量", "月销售额($)"],
+        [["Market Brand", "31.50", "280", "8820"]],
+    )
+
+    imported = import_competitor_export(path)
+
+    row = imported.competitor_rows[0]
+    assert row.price == 31.5
+    assert row.monthly_revenue == 8820
 
 
 def test_import_numeric_units_and_currency(tmp_path):
@@ -261,6 +288,7 @@ def test_attach_ai_reasons_skips_without_key(monkeypatch):
     from agent import seller_research_service
     from config.settings import settings
 
+    monkeypatch.setattr(settings, "model_api_provider", "ppio")
     monkeypatch.setattr(settings, "ppio_api_key", "")
     shortlist = build_seller_shortlist([_row(seller="Alpha")], as_of=AS_OF)
     status = seller_research_service.attach_ai_reasons(shortlist.items)
@@ -420,6 +448,20 @@ def test_profile_has_competitor_locators():
         export_menu="css=a", export="css=a",
     )
     assert without.has_competitor_locators() is False
+
+
+def test_profile_accepts_current_list_market_export_without_search_controls():
+    profile = SellerSpriteLocatorProfile(
+        panel_open="css=a", ready="css=a", login_required="css=a",
+        permission_required="css=a", captcha="css=a", reverse_keywords="css=a",
+        asin_input="css=a", submit="css=a", results_ready="css=a",
+        export_menu="css=a", export="css=a",
+        competitor_results_ready="css=current_results",
+        competitor_export_menu="css=current_export",
+        competitor_export="css=current_export",
+    )
+
+    assert profile.has_competitor_locators() is True
 
 
 def test_profile_from_json_validates_competitor_locators(tmp_path):

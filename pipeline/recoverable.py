@@ -12,8 +12,8 @@ from analyzers.profit_model import InsufficientCostEvidence, ProfitBreakdown
 from analyzers.scorer import ScoreBreakdown, ScoringEvidenceError
 from config.settings import settings
 from db.models import MarketAnalysis, Product, ProfitSnapshot, RunLog, Score, Supplier
-from execution.coordinator import NodeResult, RecoverableRunCoordinator
 from execution.artifacts import ArtifactFile, ArtifactSetManager
+from execution.coordinator import NodeResult, RecoverableRunCoordinator
 from execution.handlers import (
     dump_market,
     dump_product,
@@ -29,9 +29,64 @@ from execution.handlers import (
 from execution.models import HumanActionRequired, NodeStatus
 from execution.repository import ExecutionRepository
 
-
 RUN_SCOPE_KEY = "run"
 SCHEMA_VERSION = "1.0"
+
+
+def _formal_match_suppliers(product, *, market_keywords=None, cancel_check=None):
+    """Discover only via SellerSprite, then enrich/verify returned offer URLs."""
+    from agent.sellersprite_1688_sourcing import run_sellersprite_1688_sourcing
+    from matchers import _enrich_supplier_details, _title_fallback_keywords
+    from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier
+
+    suppliers = run_sellersprite_1688_sourcing(
+        product.asin,
+        cancel_check=cancel_check,
+        required=True,
+        product=product,
+    )
+    if not suppliers:
+        return []
+    suppliers = _enrich_supplier_details(
+        suppliers,
+        settings,
+        cancel_check=cancel_check,
+    )
+    seller_keywords = [
+        value.strip() for value in (market_keywords or [])
+        if isinstance(value, str) and value.strip()
+    ]
+    keywords = list(dict.fromkeys([*seller_keywords, *_title_fallback_keywords(product.title)]))
+    verified = Alibaba1688Verifier().verify(
+        suppliers=suppliers,
+        product=product,
+        analysis=None,
+        search_keywords=keywords,
+    )
+    for supplier in suppliers:
+        supplier.raw_data["candidate_discovery_source"] = "sellersprite_1688"
+        supplier.raw_data["search_query_plan"] = {
+            "queries": keywords,
+            "market_keywords": seller_keywords,
+            "market_source": "sellersprite_browser_extension",
+        }
+    if settings.enable_llm_verification and verified:
+        verifier = LLMVisualVerifier()
+        for supplier in verified:
+            if cancel_check:
+                cancel_check()
+            visual = verifier.verify_pair(product, supplier)
+            supplier.raw_data["visual_match"] = visual.model_dump(mode="json")
+            product.raw_data["vision_verifications"] = product.raw_data.get("vision_verifications", 0) + 1
+            if not visual.is_match:
+                supplier.match_verification_method = "llm_rejected"
+                supplier.match_quality_score = 0.0
+        verified = [supplier for supplier in verified if supplier.match_verification_method != "llm_rejected"]
+    accepted = {id(supplier) for supplier in verified}
+    product.raw_data["rejected_suppliers"] = dump_suppliers([
+        supplier for supplier in suppliers if id(supplier) not in accepted
+    ])
+    return verified
 
 
 def run_recoverable_pipeline(
@@ -48,10 +103,16 @@ def run_recoverable_pipeline(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     stage_timeouts: dict[str, float] | None = None,
+    seed_products: list[dict[str, Any]] | None = None,
 ) -> int:
     import pipeline.orchestrator as legacy
 
     site, mode, source_query = _validate_source(category, source_mode, keyword, marketplace)
+    if seed_products:
+        raise ValueError(
+            "seed_products is no longer accepted by the formal workflow; "
+            "Amazon crawler discovery is mandatory"
+        )
     config = {
         "schema_version": SCHEMA_VERSION,
         "category": category,
@@ -157,7 +218,9 @@ def _execute(
             config["limit"],
             config["marketplace"],
         )
-        legacy._attach_source_metadata(products, config["source_mode"], config["source_query"])
+        legacy._attach_source_metadata(
+            products, config["source_mode"], config["source_query"]
+        )
         raw_count = len(products)
         products, removed = legacy._dedupe_products_by_asin(products)
         keyword_normalized = None
@@ -204,6 +267,7 @@ def _execute(
         "amazon_source": len(product_payloads),
         "amazon_source_raw": source_output.get("raw_product_count"),
         "amazon_duplicates_removed": source_output.get("duplicates_removed"),
+        "source_origin": f"amazon_crawler:{config['source_mode']}",
     })
     if source_output.get("keyword_normalized"):
         api_calls["keyword_normalized"] = source_output["keyword_normalized"]
@@ -232,12 +296,12 @@ def _execute(
                 "product": payload,
                 "source_dependency": source_dependency,
             },
-            handler=lambda _context, item=payload: {
+            handler=lambda _context, item=payload: {  # type: ignore[misc]
                 "schema_version": SCHEMA_VERSION,
                 "product": item,
             },
             result_writer_factory=write_product,
-            success_validator=lambda node, item=payload: _ingest_result_valid(legacy, node, item),
+            success_validator=lambda node, item=payload: _ingest_result_valid(legacy, node, item),  # type: ignore[misc]
         )
         if result.status == NodeStatus.SUCCEEDED.value:
             products.append(load_product(result.output_snapshot["product"]))
@@ -271,8 +335,6 @@ def _execute(
         return run_id
 
     # Supplier matching, independently recoverable per ASIN.
-    from matchers import match_suppliers
-
     matched = 0
     match_timeout = _timeout(timeouts, "match")
     previous_allow_mock = settings.alibaba_allow_mock_suppliers
@@ -283,6 +345,11 @@ def _execute(
             market_keywords = _market_search_keywords(records_by_asin[asin].market)
             match_input = {
                 "schema_version": SCHEMA_VERSION,
+                "verification_contract": "formal-v2",
+                "packaging_contract": "sellersprite-package-v1",
+                "llm_verification": bool(settings.enable_llm_verification),
+                "vision_provider": settings.vision_provider,
+                "vision_model": settings.openai_compatible_vision_model,
                 "product": dump_product(product),
                 "no_mock": not bool(settings.alibaba_allow_mock_suppliers),
                 "ingest_dependency": _node_dependency(
@@ -295,12 +362,13 @@ def _execute(
             }
 
             def match_handler(_context, item=product, hints=market_keywords):
-                suppliers = legacy._call_match_suppliers(
-                    match_suppliers,
+                # Formal candidate discovery has one auditable source.  Other
+                # matchers remain available for diagnostics, but are never an
+                # automatic fallback from this workflow.
+                suppliers = _formal_match_suppliers(
                     item,
-                    cancel_check,
                     market_keywords=hints,
-                    run_ref=f"run:{run_id}",
+                    cancel_check=_context.check_interruption,
                 )
                 return {
                     "schema_version": SCHEMA_VERSION,
@@ -314,7 +382,9 @@ def _execute(
 
                 def writer(session, _node):
                     product_row = legacy._upsert_product(session, restored_product)
-                    for supplier in restored_suppliers:
+                    for supplier in [*restored_suppliers, *load_suppliers(
+                        restored_product.raw_data.get("rejected_suppliers")
+                    )]:
                         legacy._upsert_supplier(session, product_row.id, supplier)
                     evidence = (
                         restored_product.raw_data.get("sourcing_evidence")
@@ -340,13 +410,7 @@ def _execute(
                     "message": f"Matching suppliers for {asin} ({index}/{len(products)})",
                 },
             )
-            if result.status == NodeStatus.SUCCEEDED.value:
-                restored_product = load_product(result.output_snapshot["product"])
-                suppliers = load_suppliers(result.output_snapshot.get("suppliers"))
-                records_by_asin[asin].product = restored_product
-                records_by_asin[asin].suppliers = suppliers
-                matched += len(suppliers)
-            elif isinstance(result.exception, TimeoutError) and len(products) == 1:
+            if result.status == NodeStatus.TIMED_OUT.value and len(products) == 1:
                 _update_run(
                     legacy,
                     run_id,
@@ -355,10 +419,38 @@ def _execute(
                     api_calls=api_calls,
                 )
                 raise legacy.PipelineTimeout(f"match stage timed out: {result.error_detail}")
+            if result.status == NodeStatus.SUCCEEDED.value:
+                restored_product = load_product(result.output_snapshot["product"])
+                suppliers = load_suppliers(result.output_snapshot.get("suppliers"))
+                records_by_asin[asin].product = restored_product
+                records_by_asin[asin].suppliers = suppliers
+                matched += len(suppliers)
+            elif result.status == NodeStatus.TIMED_OUT.value and len(products) == 1:
+                _update_run(
+                    legacy,
+                    run_id,
+                    status="failed",
+                    error_message=f"match stage timed out: {result.error_detail}",
+                    api_calls=api_calls,
+                )
+                raise legacy.PipelineTimeout(f"match stage timed out: {result.error_detail}")
+            elif result.status in {
+                NodeStatus.HUMAN_REQUIRED.value,
+                NodeStatus.RETRY_WAIT.value,
+                NodeStatus.CANCELLED.value,
+                NodeStatus.TIMED_OUT.value,
+            }:
+                # These outcomes require external state, backoff, cancellation,
+                # or explicit retry. Stop the ASIN loop at the first barrier so
+                # one 1688 block cannot be repeated across the whole batch.
+                break
     finally:
         settings.alibaba_allow_mock_suppliers = previous_allow_mock
     api_calls["supplier_match_attempts"] = len(products)
-    api_calls["vision_analyzer"] = len(products)
+    api_calls["vision_analyzer"] = sum(
+        int(record.product.raw_data.get("vision_verifications", 0))
+        for record in records_by_asin.values()
+    )
     _update_run(legacy, run_id, api_calls=api_calls, suppliers_matched=matched)
     if _stage_waiting(repository, run_id, "match"):
         repository.update_run_status(run_id, export_required=False)
@@ -373,7 +465,7 @@ def _execute(
             continue
         profit_input = {
             "schema_version": SCHEMA_VERSION,
-            "product": dump_product(product),
+            "product": dump_product(record.product),
             "suppliers": dump_suppliers(record.suppliers),
             "profit_params": _file_fingerprint_payload("config/profit_params.yaml"),
             "match_dependency": _node_dependency(
@@ -441,7 +533,7 @@ def _execute(
         record = records_by_asin[product.asin]
         score_input = {
             "schema_version": SCHEMA_VERSION,
-            "product": dump_product(product),
+            "product": dump_product(record.product),
             "suppliers": dump_suppliers(record.suppliers),
             "profit": dump_profit(record.profit),
             "market": dump_market(record.market),
@@ -542,12 +634,15 @@ def _execute(
         candidates_after_filter=len(candidates),
     )
 
-    export_records = candidates
-    if config["export"] and not export_records and config["export_review_on_empty"]:
-        restored_records = [
-            _load_record(payload, legacy) for payload in filter_output.get("records") or []
-        ]
-        export_records = legacy._review_fallback_records(restored_records, top_n=config["top_n"])
+    # One workbook contains both accepted candidates and rejected/pending
+    # evidence.  Keep candidate order first, followed by every other product.
+    restored_records = [
+        _load_record(payload, legacy) for payload in filter_output.get("records") or []
+    ]
+    candidate_asins = {record.product.asin for record in candidates}
+    export_records = [*candidates, *(
+        record for record in restored_records if record.product.asin not in candidate_asins
+    )]
 
     export_input = {
         "schema_version": SCHEMA_VERSION,
@@ -580,7 +675,6 @@ def _execute(
             base_name = f"candidates_run_{run_id}_g{context.generation}"
             excel_temp = legacy.export_excel(restored, staging_dir / f"{base_name}.xlsx")
             json_temp = legacy.export_json(restored, staging_dir / f"{base_name}.json")
-            markdown_temps = legacy.export_markdown(restored, staging_reports)
             files = [
                 ArtifactFile(
                     logical_name="excel",
@@ -595,15 +689,6 @@ def _execute(
                     final_path=settings.export_dir / f"{base_name}.json",
                 ),
             ]
-            files.extend(
-                ArtifactFile(
-                    logical_name=f"markdown:{path.stem}",
-                    artifact_type="markdown",
-                    temporary_path=path,
-                    final_path=settings.export_dir / "reports" / f"{base_name}_{path.name}",
-                )
-                for path in markdown_temps
-            )
             manifests = artifact_manager.publish(
                 context=context,
                 artifact_set_id=artifact_set_id,
@@ -639,7 +724,11 @@ def _run_sellersprite_market_stage(
     timeouts: dict[str, Any],
 ) -> None:
     """Collect browser-extension keyword evidence before supplier search."""
-    market_cap = max(int(settings.mjjl_max_products_per_run or 0), 0)
+    configured_market_cap = max(int(settings.mjjl_max_products_per_run or 0), 0)
+    # A positive legacy cap enables the browser stage, but the formal workflow
+    # collects evidence for every Amazon product. Explicit zero remains an
+    # offline/diagnostic switch used by unit tests and maintenance commands.
+    market_cap = len(products) if configured_market_cap > 0 else 0
     skipped_cap = max(len(products) - market_cap, 0)
     if skipped_cap:
         api_calls["mjjl_skipped_cap"] = skipped_cap
@@ -654,12 +743,15 @@ def _run_sellersprite_market_stage(
     except Exception as exc:
         logger.info(f"SellerSprite browser dependency unavailable: {exc}")
 
-    market_source = "sellersprite_browser_extension" if browser_dependencies else "unavailable"
-    api_calls["market_source"] = market_source
+
+    browser_market_source = "sellersprite_browser_extension" if browser_dependencies else "unavailable"
+    api_calls["market_source"] = browser_market_source
     api_calls["market_skipped_cap"] = skipped_cap
     browser_sourcing_run_id = str(uuid5(NAMESPACE_URL, f"amazon-selector:sourcing-run:{run_id}"))
 
     for index, product in enumerate(products, 1):
+        existing_market = _market_from_seller_research(product, config)
+        market_source = "seller_research_export" if existing_market else browser_market_source
         market_input = {
             "schema_version": SCHEMA_VERSION,
             "product": dump_product(product),
@@ -667,6 +759,34 @@ def _run_sellersprite_market_stage(
             "source_query": config["source_query"],
             "market_source": market_source,
         }
+        if existing_market is not None:
+            result = coordinator.run_node(
+                scope_type="asin", scope_key=product.asin, stage="market",
+                input_snapshot=market_input,
+                handler=lambda _context, item=product, market=existing_market: {  # type: ignore[misc]
+                    "schema_version": SCHEMA_VERSION,
+                    "product": dump_product(item),
+                    "market": dump_market(market),
+                },
+                timeout_seconds=_timeout(timeouts, "market"),
+                result_writer_factory=lambda output: _market_writer(legacy, output),
+                success_validator=lambda node: _snapshot_result_valid(
+                    legacy, node, MarketAnalysis, "market"
+                ),
+                progress_payload={
+                    "index": index,
+                    "total": len(products),
+                    "message": f"Reusing SellerSprite research evidence for {product.asin} ({index}/{len(products)})",
+                },
+            )
+            if result.status == NodeStatus.SUCCEEDED.value:
+                records_by_asin[product.asin].market = load_market(
+                    result.output_snapshot.get("market")
+                )
+                api_calls["seller_research_market_reused"] = (
+                    api_calls.get("seller_research_market_reused", 0) + 1
+                )
+            continue
         if index > market_cap:
             coordinator.skip_node(
                 scope_type="asin", scope_key=product.asin, stage="market",
@@ -674,11 +794,20 @@ def _run_sellersprite_market_stage(
             )
             continue
         if browser_dependencies is None:
-            coordinator.skip_node(
+            def unavailable_market(_context, asin: str = product.asin) -> dict[str, Any]:
+                raise HumanActionRequired(
+                    "EXTENSION_UNAVAILABLE",
+                    f"SellerSprite market evidence unavailable for {asin}",
+                    instructions="请在专用 Chrome 中启用并登录卖家精灵插件，确认反查关键词导出可用，然后继续任务。",
+                )
+
+            result = coordinator.run_node(
                 scope_type="asin", scope_key=product.asin, stage="market",
                 input_snapshot=market_input,
-                reason="SellerSprite browser extension unavailable",
+                handler=unavailable_market,
             )
+            if result.status == NodeStatus.HUMAN_REQUIRED.value:
+                break
             continue
 
         def market_handler(_context, item=product):
@@ -686,6 +815,7 @@ def _run_sellersprite_market_stage(
             from agent.tools.sellersprite_browser import SellerSpriteWorkflowError
             from analyzers.sellersprite_browser_market import market_from_reverse_keyword_result
 
+            browser_dependencies.is_cancelled = _context.check_interruption
             browser_result = run_reverse_keyword_export(
                 item.asin,
                 sourcing_run_id=browser_sourcing_run_id,
@@ -741,6 +871,45 @@ def _run_sellersprite_market_stage(
             # or CAPTCHA require the user/browser to change state. Do not
             # consume more ASINs while that prerequisite is unresolved.
             break
+
+
+def _market_from_seller_research(product, config: dict[str, Any]):
+    """Reuse real market metrics already carried by a SellerSprite shortlist."""
+    raw = product.raw_data if isinstance(getattr(product, "raw_data", None), dict) else {}
+    monthly_sales = raw.get("research_monthly_sales")
+    monthly_revenue = raw.get("research_monthly_revenue")
+    fit_score = raw.get("research_fit_score")
+    if monthly_sales is None and monthly_revenue is None and fit_score is None:
+        return None
+
+    from analyzers.maijiajingling import MarketAnalysisDTO
+
+    source_query = str(raw.get("source_query") or config.get("source_query") or "").strip()
+    return MarketAnalysisDTO(
+        asin=product.asin,
+        marketplace=config["marketplace"],
+        brand=product.brand,
+        seller_name=raw.get("research_seller"),
+        title=product.title,
+        est_monthly_sales=int(monthly_sales) if monthly_sales is not None else None,
+        price=product.price,
+        currency="USD" if product.price is not None else None,
+        rating=product.rating,
+        review_count=product.review_count,
+        main_keyword=source_query or None,
+        opportunity_score=float(fit_score) if fit_score is not None else None,
+        raw_data={
+            "source_provider": "sellersprite",
+            "source_type": "seller_research_export",
+            "source_query": source_query or None,
+            "research_run_id": raw.get("research_run_id"),
+            "monthly_sales": monthly_sales,
+            "monthly_revenue": monthly_revenue,
+            "fit_score": fit_score,
+            "fit_category": raw.get("research_fit_category"),
+            "fit_reasons": list(raw.get("research_fit_reasons") or []),
+        },
+    )
 
 
 def _market_search_keywords(market) -> list[str]:
@@ -1042,6 +1211,8 @@ def _stage_waiting(repository, run_id: int, stage: str) -> bool:
             NodeStatus.PENDING.value,
             NodeStatus.RUNNING.value,
             NodeStatus.RETRY_WAIT.value,
+            NodeStatus.HUMAN_REQUIRED.value,
+            NodeStatus.CANCELLED.value,
         }
         for node in repository.list_nodes(run_id)
     )
@@ -1061,8 +1232,8 @@ def _node_dependency(repository, run_id, scope_key, stage, scope_type="asin"):
 
 
 def _file_fingerprint_payload(relative_path: str) -> dict[str, Any]:
-    from pathlib import Path
     from hashlib import sha256
+    from pathlib import Path
 
     path = Path(__file__).resolve().parent.parent / relative_path
     if not path.exists():

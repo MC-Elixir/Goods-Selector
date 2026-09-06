@@ -5,7 +5,6 @@ from pathlib import Path
 
 from benchmarks.evaluate import evaluate
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

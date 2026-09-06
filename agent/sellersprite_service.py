@@ -1,19 +1,19 @@
 """Bounded orchestration for one SellerSprite reverse-keyword export."""
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 from math import isfinite
-import os
 from pathlib import Path
-import re
 from time import monotonic, sleep
 from typing import Any, Callable
 from uuid import UUID
 
 from agent.run_events import record_run_event
+from agent.sellersprite_browser_config import load_sellersprite_browser_config, project_local_path
 from agent.sellersprite_models import SellerSpriteContext, SellerSpriteLocatorProfile, SellerSpriteResult
 from agent.sellersprite_policy import normalize_sellersprite_error_code
-from agent.sellersprite_browser_config import load_sellersprite_browser_config, project_local_path
 from agent.tools.sellersprite_browser import PlaywrightSellerSpriteSession, SellerSpriteWorkflowError
 from agent.tools.sellersprite_importer import (
     ImportedSellerSpriteExport,
@@ -21,7 +21,6 @@ from agent.tools.sellersprite_importer import (
     import_sellersprite_export,
 )
 from config.settings import PROJECT_ROOT, settings
-
 
 _HUMAN_OUTCOME_CODES = frozenset(
     {"EXTENSION_UNAVAILABLE", "SELLERSPRITE_LOGIN_REQUIRED", "SELLERSPRITE_PERMISSION_REQUIRED", "SELLERSPRITE_QUOTA_EXCEEDED", "CAPTCHA"}
@@ -92,20 +91,30 @@ class SellerSpriteDependencies:
         host_download_dir = str(
             getattr(browser_config, "host_download_dir", "") or ""
         ).strip()
-        if distro and host_download_dir not in {"", "configured"}:
-            raw_download_dir = host_download_dir
         self.download_dir = Path(
             project_local_path(PROJECT_ROOT, raw_download_dir)
             if raw_download_dir.startswith("/app/data/")
             else raw_download_dir
         )
         if self.browser_download_dir is None:
-            if distro and raw_download_dir.startswith("/mnt/"):
+            if host_download_dir not in {"", "configured"}:
+                self.browser_download_dir = _host_download_path_for_chrome(
+                    host_download_dir,
+                    distro=distro,
+                )
+            elif distro and (wsl_download_dir := os.getenv("SELLERSPRITE_BROWSER_WSL_DOWNLOAD_DIR", "").strip()):
+                self.browser_download_dir = _wsl_path_to_windows_share(
+                    wsl_download_dir,
+                    distro=distro,
+                )
+            elif distro and raw_download_dir.startswith("/mnt/"):
                 self.browser_download_dir = _wsl_mounted_path_to_windows(raw_download_dir)
             elif distro and raw_download_dir.startswith("/app/data/"):
-                windows_path = str(self.download_dir).replace("/", "\\")
-                self.browser_download_dir = (
-                    f"\\\\wsl.localhost\\{distro}{windows_path}"
+                # Compatibility fallback for non-Docker WSL runs where the
+                # process path and the host-visible path are identical.
+                self.browser_download_dir = _wsl_path_to_windows_share(
+                    str(self.download_dir),
+                    distro=distro,
                 )
             else:
                 self.browser_download_dir = self.download_dir
@@ -215,6 +224,8 @@ def run_reverse_keyword_export(
             )
         except SellerSpriteWorkflowError as exc:
             error_code = exc.error_code
+        except TimeoutError:
+            raise
         except Exception:
             error_code = "INTERNAL"
 
@@ -343,3 +354,18 @@ def _wsl_mounted_path_to_windows(value: str) -> str:
     drive = parts[2].upper()
     suffix = "\\".join(parts[3:])
     return f"{drive}:\\{suffix}"
+
+
+def _host_download_path_for_chrome(value: str, *, distro: str) -> str:
+    """Translate an explicit host path without changing the container observer."""
+    return _wsl_path_to_windows_share(value, distro=distro) if distro else value
+
+
+def _wsl_path_to_windows_share(value: str, *, distro: str) -> str:
+    """Map a WSL-visible directory to the UNC path Chrome on Windows can use."""
+    raw = str(value or "").strip()
+    if raw.startswith("/mnt/"):
+        return _wsl_mounted_path_to_windows(raw)
+    if raw.startswith("/") and distro:
+        return f"\\\\wsl.localhost\\{distro}{raw.replace('/', '\\')}"
+    return raw

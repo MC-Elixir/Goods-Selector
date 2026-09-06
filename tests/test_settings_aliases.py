@@ -34,3 +34,33 @@ def test_log_dir_can_be_overridden_by_env(monkeypatch, tmp_path):
     settings = Settings(_env_file=None)
 
     assert settings.log_dir == override
+
+
+def test_aliyun_token_plan_has_priority_and_resolves_openai_compatible_config(monkeypatch):
+    monkeypatch.setenv("ALIYUN_TOKEN_PLAN_API_KEY", "sk-sp-token-plan")
+    monkeypatch.setenv("ALIYUN_TOKEN_PLAN_API_BASE", "https://token-plan.example/compatible-mode/v1")
+    monkeypatch.setenv("ALIYUN_TOKEN_PLAN_VISION_MODEL", "qwen-vl-plan")
+    monkeypatch.setenv("ALIYUN_TOKEN_PLAN_TEXT_MODEL", "qwen-text-plan")
+    monkeypatch.setenv("ALIYUN_API_KEY", "aliyun-payg")
+    monkeypatch.setenv("PPIO_API_KEY", "ppio-fallback")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.vision_provider == "aliyun_token_plan"
+    assert settings.openai_compatible_api_key == "sk-sp-token-plan"
+    assert settings.openai_compatible_api_base == "https://token-plan.example/compatible-mode/v1"
+    assert settings.openai_compatible_vision_model == "qwen-vl-plan"
+    assert settings.openai_compatible_text_model == "qwen-text-plan"
+
+
+def test_dashscope_api_key_alias_selects_aliyun(monkeypatch):
+    monkeypatch.delenv("ALIYUN_API_KEY", raising=False)
+    monkeypatch.delenv("ALIYUN_TOKEN_PLAN_API_KEY", raising=False)
+    monkeypatch.delenv("PPIO_API_KEY", raising=False)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.vision_provider == "aliyun"
+    assert settings.openai_compatible_api_key == "dashscope-key"
+    assert settings.openai_compatible_api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"

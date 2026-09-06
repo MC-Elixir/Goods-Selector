@@ -18,6 +18,8 @@ from agent.seller_sprite_diagnostics import (
 )
 from agent.sellersprite_browser_config import (
     configure_sellersprite_browser as _persist_sellersprite_browser_config,
+)
+from agent.sellersprite_browser_config import (
     load_sellersprite_browser_config,
 )
 from config.settings import PROJECT_ROOT, settings
@@ -26,7 +28,7 @@ from config.settings import PROJECT_ROOT, settings
 def get_config_status() -> dict[str, Any]:
     """Return capability readiness without exposing secrets."""
     seller_sprite_configured = bool(settings.mjjl_api_key)
-    vision_configured = bool(settings.ppio_api_key or settings.anthropic_api_key)
+    vision_configured = settings.vision_provider != "none"
     alibaba_open_configured = bool(
         settings.alibaba_app_key
         and settings.alibaba_app_secret
@@ -47,9 +49,21 @@ def get_config_status() -> dict[str, Any]:
         "vision": {
             "configured": vision_configured,
             "provider": settings.vision_provider if vision_configured else "none",
-            "model": settings.ppio_model if settings.ppio_api_key else settings.anthropic_model if settings.anthropic_api_key else "",
-            "base_url": settings.ppio_api_base if settings.ppio_api_key else "",
-            "key_length": len(settings.ppio_api_key or settings.anthropic_api_key or ""),
+            "model": (
+                settings.anthropic_model
+                if settings.vision_provider == "anthropic"
+                else settings.openai_compatible_vision_model
+            ) if vision_configured else "",
+            "base_url": (
+                ""
+                if settings.vision_provider == "anthropic"
+                else settings.openai_compatible_api_base
+            ) if vision_configured else "",
+            "key_length": len(
+                settings.anthropic_api_key
+                if settings.vision_provider == "anthropic"
+                else settings.openai_compatible_api_key
+            ),
             "llm_verification_enabled": bool(settings.enable_llm_verification),
         },
         "alibaba_open": {
@@ -133,35 +147,75 @@ def configure_seller_sprite(api_key: str, base_url: str | None = None) -> dict[s
     }
 
 
-def configure_vision_model(api_key: str, model: str, base_url: str | None = None) -> dict[str, Any]:
-    """Persist PPIO-compatible vision settings without returning the secret."""
-    key = (api_key or "").strip() or settings.ppio_api_key
+def configure_vision_model(
+    api_key: str,
+    model: str,
+    base_url: str | None = None,
+    provider: str | None = None,
+) -> dict[str, Any]:
+    """Persist an OpenAI-compatible vision provider without returning secrets."""
+    selected_provider = _normalize_openai_provider(provider, base_url)
+    fields = {
+        "aliyun_token_plan": (
+            "ALIYUN_TOKEN_PLAN_API_KEY", "ALIYUN_TOKEN_PLAN_VISION_MODEL",
+            "ALIYUN_TOKEN_PLAN_API_BASE", "aliyun_token_plan_api_key",
+            "aliyun_token_plan_vision_model", "aliyun_token_plan_api_base",
+        ),
+        "aliyun": (
+            "ALIYUN_API_KEY", "ALIYUN_VISION_MODEL", "ALIYUN_API_BASE",
+            "aliyun_api_key", "aliyun_vision_model", "aliyun_api_base",
+        ),
+        "ppio": (
+            "PPIO_API_KEY", "PPIO_MODEL", "PPIO_API_BASE",
+            "ppio_api_key", "ppio_model", "ppio_api_base",
+        ),
+    }[selected_provider]
+    key_env, model_env, base_env, key_attr, model_attr, base_attr = fields
+    key = (api_key or "").strip() or str(getattr(settings, key_attr) or "")
     selected_model = (model or "").strip()
-    base = (base_url or "").strip() or settings.ppio_api_base
+    base = (base_url or "").strip() or str(getattr(settings, base_attr) or "")
     if not key:
         raise ValueError("Vision API key is required")
     if not selected_model:
         raise ValueError("Vision model is required")
     if not base:
         raise ValueError("Vision API base URL is required")
+    if selected_provider == "aliyun_token_plan" and "token-plan" not in base.lower():
+        raise ValueError("Aliyun Token Plan must use its token-plan Base URL")
+    if selected_provider == "aliyun" and "token-plan" in base.lower():
+        raise ValueError("Aliyun pay-as-you-go cannot use a Token Plan Base URL")
 
     changed = set_env_values(PROJECT_ROOT / ".env", {
-        "PPIO_API_KEY": key,
-        "PPIO_MODEL": selected_model,
-        "PPIO_API_BASE": base,
+        "MODEL_API_PROVIDER": selected_provider,
+        key_env: key,
+        model_env: selected_model,
+        base_env: base,
     })
-    settings.ppio_api_key = key
-    settings.ppio_model = selected_model
-    settings.ppio_api_base = base
+    settings.model_api_provider = selected_provider
+    setattr(settings, key_attr, key)
+    setattr(settings, model_attr, selected_model)
+    setattr(settings, base_attr, base)
     return {
         "configured": True,
-        "provider": "ppio",
+        "provider": selected_provider,
         "model": selected_model,
         "base_url": base,
         "key_length": len(key),
         "updated": changed,
         "status": get_config_status()["vision"],
     }
+
+
+def _normalize_openai_provider(provider: str | None, base_url: str | None) -> str:
+    value = str(provider or "").strip().lower().replace("-", "_")
+    aliases = {"tokenplan": "aliyun_token_plan", "token_plan": "aliyun_token_plan"}
+    value = aliases.get(value, value)
+    if not value:
+        base = str(base_url or "").lower()
+        value = "aliyun_token_plan" if "token-plan" in base else "aliyun" if "aliyuncs.com" in base else "ppio"
+    if value not in {"aliyun_token_plan", "aliyun", "ppio"}:
+        raise ValueError("Vision provider must be aliyun_token_plan, aliyun, or ppio")
+    return value
 
 
 def configure_alibaba_supplier_search(

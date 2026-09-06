@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine, text
@@ -11,9 +11,9 @@ from crawlers.amazon_bsr import ProductDTO
 from db.migrate import run_migrations
 from db.models import Base
 from domain.target_categories import (
-    understanding_from_target_profile,
     profile_from_product,
     profile_from_text,
+    understanding_from_target_profile,
 )
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.query_planner import generate_query_plan
@@ -233,6 +233,7 @@ def test_formal_matcher_executes_full_plan_and_returns_only_strict_keep(monkeypa
     monkeypatch.setattr(matchers, "Alibaba1688PlaywrightMatcher", FakePlaywright)
     monkeypatch.setattr(settings, "enable_alibaba_open_api_matcher", False)
     monkeypatch.setattr(settings, "enable_scrapling_matcher", False)
+    monkeypatch.setattr(settings, "enable_sellersprite_1688_sourcing", False)
     monkeypatch.setattr(settings, "alibaba_allow_mock_suppliers", False)
     monkeypatch.setattr(settings, "enable_llm_verification", False)
 

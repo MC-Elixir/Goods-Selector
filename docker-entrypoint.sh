@@ -9,7 +9,7 @@ mkdir -p "$DATA_DIR/cache" "$DATA_DIR/exports" "$DATA_DIR/images" "$DATA_DIR/log
 python main.py init-db || echo "[entrypoint] init-db failed, continuing" >&2
 
 case "$1" in
-  init-db|run|smoke-run|seller-sprite-check|seller-sprite-asin-check|seller-sprite-configure|alibaba-pifatuan-check|agent-web)
+  init-db|run|smoke-run|seller-sprite-check|seller-sprite-asin-check|seller-sprite-configure|alibaba-pifatuan-check|agent-web|selector-mcp)
     exec python main.py "$@"
     ;;
   *)

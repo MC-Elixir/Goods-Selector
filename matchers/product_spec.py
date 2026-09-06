@@ -5,7 +5,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-
 MATERIAL_ALIASES = {
     "不锈钢": ("不锈钢", "304", "316", "stainless steel"),
     "硅胶": ("硅胶", "silicone"),
@@ -38,7 +37,11 @@ CATEGORY_ALIASES = {
     "户外储物": ("户外储物", "庭院储物", "deck box", "outdoor storage", "storage shed", "outdoor cabinet", "storage bench"),
     "户外取暖器": ("户外取暖器", "露台取暖器", "patio heater", "outdoor heater", "propane heater"),
     "户外家具套装": ("户外家具", "庭院家具", "户外桌椅", "outdoor furniture set", "patio furniture", "conversation set", "outdoor dining set"),
-    "户外遮阳": ("遮阳伞", "沙滩伞", "遮阳帆", "patio umbrella", "market umbrella", "cantilever umbrella", "beach umbrella", "shade sail"),
+    "户外遮阳": (
+        "遮阳伞", "庭院伞", "中柱伞", "太阳伞", "沙滩伞", "遮阳帆",
+        "patio umbrella", "market umbrella", "table umbrella", "cantilever umbrella",
+        "beach umbrella", "shade sail",
+    ),
 }
 
 COLOR_ALIASES = {
@@ -299,10 +302,14 @@ def _find_alias(raw: str, normalized: str, aliases: dict[str, tuple[str, ...]]) 
 
 def _infer_category(text: str) -> Optional[str]:
     lowered = text.lower()
+    if "umbrella" in lowered and any(
+        context in lowered for context in ("patio", "outdoor", "garden", "table", "market")
+    ):
+        return "户外遮阳"
     rules = (
         ("户外取暖器", ("patio heater", "outdoor heater", "propane heater", "露台取暖器", "户外取暖器", "燃气取暖器")),
         ("户外家具套装", ("patio furniture", "outdoor furniture set", "outdoor conversation set", "outdoor dining set", "户外家具", "庭院家具", "户外桌椅")),
-        ("户外遮阳", ("patio umbrella", "market umbrella", "cantilever umbrella", "offset umbrella", "beach umbrella", "shade sail", "遮阳伞", "沙滩伞", "遮阳帆")),
+        ("户外遮阳", ("patio umbrella", "market umbrella", "table umbrella", "cantilever umbrella", "offset umbrella", "beach umbrella", "shade sail", "遮阳伞", "庭院伞", "中柱伞", "太阳伞", "沙滩伞", "遮阳帆")),
         ("户外储物", ("outdoor storage", "deck box", "storage shed", "outdoor cabinet", "storage bench", "户外储物", "庭院储物", "储物棚")),
         ("灭蚁用品", ("ant killer", "ant bait", "ant trap", "bait station", "灭蚁", "蚂蚁药", "蚂蚁诱饵")),
         ("驱蚊用品", ("mosquito repellent", "mosquito killer", "mosquito trap", "驱蚊", "灭蚊", "蚊香")),

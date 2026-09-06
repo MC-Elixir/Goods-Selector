@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import time
@@ -12,8 +13,8 @@ from urllib.parse import urlparse
 from agent.alibaba_diagnostics import load_alibaba_open_diagnostic
 from agent.browser_agent import _resolve_cdp_ws
 from agent.seller_sprite_diagnostics import load_seller_sprite_diagnostic
-from agent.sellersprite_models import SellerSpriteLocatorProfile
 from agent.sellersprite_browser_config import load_sellersprite_browser_config, project_local_path
+from agent.sellersprite_models import SellerSpriteLocatorProfile
 from config.settings import DATA_DIR, PROJECT_ROOT, settings
 
 
@@ -22,6 +23,7 @@ def run_preflight() -> dict[str, Any]:
         _check_ppio(),
         _check_seller_sprite(),
         check_seller_sprite_browser(),
+        _check_1688_browser_session(),
         _check_alibaba_open(),
         _check_amazon_cookies(),
         _check_1688_cookies(),
@@ -42,9 +44,14 @@ def run_preflight() -> dict[str, Any]:
 
 
 def _check_ppio() -> dict[str, Any]:
-    if settings.ppio_api_key or settings.anthropic_api_key:
-        return _ok("vision", "Vision model key configured", "PPIO" if settings.ppio_api_key else "Anthropic")
-    return _err("vision", "Vision model key missing", "Set PPIO_API_KEY or ANTHROPIC_API_KEY")
+    provider = settings.vision_provider
+    if provider != "none":
+        return _ok("vision", "Vision model key configured", provider)
+    return _err(
+        "vision",
+        "Vision model key missing",
+        "Set ALIYUN_TOKEN_PLAN_API_KEY, ALIYUN_API_KEY, PPIO_API_KEY, or ANTHROPIC_API_KEY",
+    )
 
 
 def _check_seller_sprite() -> dict[str, Any]:
@@ -67,7 +74,11 @@ def _check_seller_sprite() -> dict[str, Any]:
             "SellerSprite API key configured but unverified",
             "Run SellerSprite ASIN check before requiring market data",
         )
-    return _warn("seller_sprite", "SellerSprite API key missing", "Set MJJL_API_KEY")
+    return _ok(
+        "seller_sprite",
+        "SellerSprite API skipped",
+        "Market analysis uses browser export; MJJL_API_KEY is optional",
+    )
 
 
 def _check_seller_sprite_browser() -> dict[str, Any]:
@@ -90,19 +101,40 @@ def _check_seller_sprite_browser() -> dict[str, Any]:
             SellerSpriteLocatorProfile.from_json(project_local_path(PROJECT_ROOT, profile_path))
         else:
             SellerSpriteLocatorProfile.from_json(Path(profile_path))
-    except Exception:
-        return _warn(key, "SellerSprite browser locator profile unavailable", "Configure a valid locator profile")
+    except Exception as exc:
+        return _warn(
+            key,
+            "SellerSprite browser locator profile unavailable",
+            _diagnostic_detail(
+                "Set SELLERSPRITE_BROWSER_LOCATOR_PROFILE_PATH to a reviewed JSON file under /app/data/",
+                exc,
+            ),
+        )
 
     try:
         _assert_sellersprite_download_dir_writable(browser_config.download_dir)
-    except Exception:
-        return _warn(key, "SellerSprite browser download directory unavailable", "Configure a writable container download directory")
+    except Exception as exc:
+        return _warn(
+            key,
+            "SellerSprite browser download directory unavailable",
+            _diagnostic_detail(
+                "Set SELLERSPRITE_BROWSER_DOWNLOAD_DIR to a writable directory under /app/data/",
+                exc,
+            ),
+        )
 
     try:
         cdp_ws = _resolve_cdp_ws()
         _assert_cdp_websocket_reachable(cdp_ws)
-    except Exception:
-        return _warn(key, "SellerSprite browser Chrome connection unavailable", "Start Chrome remote debugging and configure CDP")
+    except Exception as exc:
+        return _warn(
+            key,
+            "SellerSprite browser Chrome connection unavailable",
+            _diagnostic_detail(
+                "Run .\\start.ps1; Docker must use BU_CDP_HTTP=http://host.docker.internal:9222",
+                exc,
+            ),
+        )
 
     return _ok(
         key,
@@ -112,8 +144,73 @@ def _check_seller_sprite_browser() -> dict[str, Any]:
 
 
 def check_seller_sprite_browser() -> dict[str, Any]:
-    """Public browser readiness result used by market-data gates."""
-    return _check_seller_sprite_browser()
+    """Formal readiness: config, both extension flows and a visible session."""
+    check = _check_seller_sprite_browser()
+    if check["level"] != "ok":
+        return {**check, "level": "error"}
+    try:
+        from agent.sellersprite_service import SellerSpriteDependencies
+
+        deps = SellerSpriteDependencies()
+        if deps.profile is None or not deps.profile.has_sourcing_1688_locators():
+            raise ValueError("Reviewed 1688 sourcing locators are missing")
+        if os.name != "nt" and "host.docker.internal" in str(settings.bu_cdp_http):
+            from pathlib import PureWindowsPath
+
+            if not PureWindowsPath(str(deps.browser_download_dir)).is_absolute():
+                raise ValueError("Set SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR to the mounted Windows folder and recreate Compose")
+        _probe_sellersprite_session(deps)
+    except Exception as exc:
+        return _err("seller_sprite_browser", "SellerSprite action required", _diagnostic_detail(
+            "Open an Amazon product in dedicated Chrome; enable and log in to SellerSprite", exc,
+        ))
+    return _ok("seller_sprite_browser", "SellerSprite browser ready", "Both locator groups and visible plugin session verified")
+
+
+def _probe_sellersprite_session(deps) -> None:
+    """Read visible state only: no navigation, export or quota consumption."""
+    with deps.session_factory() as session:
+        pages = [page for context in session._browser.contexts for page in context.pages]
+        for page in pages:
+            if urlparse(page.url).hostname not in {"amazon.com", "www.amazon.com"}:
+                continue
+            session._page = page
+            session._raise_if_human_terminal()
+            if session._is_visible("ready"):
+                return
+        raise ValueError("No visible, logged-in SellerSprite panel found on an Amazon page")
+
+
+def _check_1688_browser_session() -> dict[str, Any]:
+    """Block runs when the configured 1688 CDP session is unavailable.
+
+    Stored cookies remain a valid fallback when no CDP endpoint is configured.
+    Once an endpoint is configured, however, the matcher deliberately uses that
+    dedicated human session; silently continuing without it produces supplier-
+    evidence gaps that a formal no-mock run cannot use.
+    """
+    key = "1688_browser"
+    configured = bool(
+        (os.environ.get("BU_CDP_HTTP") or "").strip()
+        or (os.environ.get("BU_CDP_WS") or "").strip()
+        or (settings.bu_cdp_http or "").strip()
+        or (settings.bu_cdp_ws or "").strip()
+    )
+    if not configured:
+        return _ok(key, "1688 dedicated Chrome not configured", "Using stored-cookie fallback")
+    try:
+        cdp_ws = _resolve_cdp_ws()
+        _assert_cdp_websocket_reachable(cdp_ws)
+    except Exception as exc:
+        return _err(
+            key,
+            "1688 dedicated Chrome unavailable",
+            _diagnostic_detail(
+                "Run .\\start.ps1 and verify Chrome at 127.0.0.1:9222; Docker must use host.docker.internal:9222",
+                exc,
+            ),
+        )
+    return _ok(key, "1688 dedicated Chrome ready", "Chrome CDP session is reachable")
 
 
 def _assert_sellersprite_download_dir_writable(raw_path: str | None = None) -> None:
@@ -125,6 +222,14 @@ def _assert_sellersprite_download_dir_writable(raw_path: str | None = None) -> N
     probe = path / ".sellersprite_write_probe"
     probe.write_text("ok", encoding="utf-8")
     probe.unlink(missing_ok=True)
+
+
+def _diagnostic_detail(action: str, exc: Exception, *, max_reason_length: int = 240) -> str:
+    """Return an actionable, bounded one-line reason safe for preflight UI."""
+    reason = " ".join(str(exc).split()) or exc.__class__.__name__
+    if len(reason) > max_reason_length:
+        reason = reason[: max_reason_length - 3] + "..."
+    return f"{action}. Reason: {reason}"
 
 
 def _is_safe_cdp_websocket(value: object) -> bool:

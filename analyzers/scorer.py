@@ -24,7 +24,6 @@ import yaml
 from loguru import logger
 
 from analyzers.profit_model import normalize_positive_number, normalize_price_tier
-
 from config.settings import CONFIG_DIR
 
 _BRAND_BLACKLIST = {
@@ -628,7 +627,7 @@ def score_product(
 
     d_score = score_demand(
         bsr_rank=getattr(product, "bsr_rank", None),
-        monthly_sales=estimated_monthly_sales,
+        monthly_sales=estimated_monthly_sales,  # type: ignore[arg-type]
         curve=curves["demand"],
         opportunity_score=getattr(ma, "opportunity_score", None),
         daily_revenue_top100=None,   # 由卖家精灵扩展字段补充
@@ -706,7 +705,7 @@ def score_product(
         config=config,
         product_title=getattr(product, "title", None),
         product_category=getattr(product, "category", None),
-        monthly_sales=estimated_monthly_sales,
+        monthly_sales=estimated_monthly_sales,  # type: ignore[arg-type]
         selling_price=getattr(product, "price", None),
         top_supplier_match_quality=_supplier_number(top_supplier, "match_quality_score") if top_supplier else None,
         top_supplier_spec_score=_first_number(top_spec.get("score")) if top_spec else None,

@@ -18,6 +18,16 @@ def test_seller_sprite_preflight_warns_when_configured_but_unverified(monkeypatc
     assert "unverified" in check["label"]
 
 
+def test_vision_preflight_accepts_aliyun_token_plan(monkeypatch):
+    monkeypatch.setattr(settings, "model_api_provider", "aliyun_token_plan")
+    monkeypatch.setattr(settings, "aliyun_token_plan_api_key", "sk-sp-test")
+
+    check = preflight._check_ppio()
+
+    assert check["level"] == "ok"
+    assert check["detail"] == "aliyun_token_plan"
+
+
 def test_seller_sprite_preflight_warns_on_failed_diagnostic(monkeypatch):
     monkeypatch.setattr(settings, "mjjl_api_key", "secret-value")
     monkeypatch.setattr(preflight, "load_seller_sprite_diagnostic", lambda: {
@@ -31,6 +41,43 @@ def test_seller_sprite_preflight_warns_on_failed_diagnostic(monkeypatch):
     assert check["level"] == "warning"
     assert check["label"] == "SellerSprite ASIN check failed"
     assert check["detail"] == "未授权"
+
+
+def test_seller_sprite_preflight_skips_when_api_key_missing(monkeypatch):
+    monkeypatch.setattr(settings, "mjjl_api_key", "")
+
+    check = preflight._check_seller_sprite()
+
+    assert check["key"] == "seller_sprite"
+    assert check["level"] == "ok"
+    assert "skipped" in check["label"].lower()
+    assert "optional" in check["detail"].lower()
+
+
+def test_missing_mjjl_does_not_block_preflight_ready(monkeypatch):
+    monkeypatch.setattr(settings, "mjjl_api_key", "")
+    monkeypatch.setattr(settings, "ppio_api_key", "vision-key")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+
+    def ok(key: str) -> dict:
+        return preflight._ok(key, "ok", "")
+
+    monkeypatch.setattr(preflight, "check_seller_sprite_browser", lambda: ok("seller_sprite_browser"))
+    monkeypatch.setattr(preflight, "_check_1688_browser_session", lambda: ok("1688_browser"))
+    monkeypatch.setattr(preflight, "_check_alibaba_open", lambda: ok("alibaba_open"))
+    monkeypatch.setattr(preflight, "_check_amazon_cookies", lambda: ok("amazon_cookies"))
+    monkeypatch.setattr(preflight, "_check_1688_cookies", lambda: ok("1688_cookies"))
+    monkeypatch.setattr(preflight, "_check_database", lambda: ok("database"))
+    monkeypatch.setattr(preflight, "_check_exports_dir", lambda: ok("exports"))
+    monkeypatch.setattr(preflight, "_check_1688_circuit", lambda: ok("1688_circuit"))
+    monkeypatch.setattr(preflight, "_check_disk_space", lambda: ok("disk"))
+
+    result = preflight.run_preflight()
+    sprite = next(item for item in result["checks"] if item["key"] == "seller_sprite")
+
+    assert sprite["level"] == "ok"
+    assert result["ready"] is True
+    assert result["blocking_count"] == 0
 
 
 def test_seller_sprite_preflight_ok_after_successful_diagnostic(monkeypatch):
@@ -146,7 +193,47 @@ def test_seller_sprite_browser_preflight_warns_when_raw_cdp_websocket_is_unreach
     assert check["key"] == "seller_sprite_browser"
     assert check["level"] == "warning"
     assert "connection unavailable" in check["label"].lower()
+    assert "start.ps1" in check["detail"]
+    assert "host.docker.internal:9222" in check["detail"]
+    assert "unreachable" in check["detail"]
     assert attempted == [(("stale.example.invalid", 9222), 2.0)]
+
+
+def test_1688_browser_session_blocks_when_configured_cdp_is_unreachable(monkeypatch):
+    monkeypatch.setattr(settings, "bu_cdp_http", "http://host.docker.internal:9222")
+    monkeypatch.setattr(preflight, "_resolve_cdp_ws", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
+
+    check = preflight._check_1688_browser_session()
+
+    assert check["key"] == "1688_browser"
+    assert check["level"] == "error"
+    assert "unavailable" in check["label"].lower()
+    assert "start.ps1" in check["detail"]
+    assert "host.docker.internal:9222" in check["detail"]
+    assert "offline" in check["detail"]
+
+
+def test_preflight_diagnostic_detail_is_single_line_and_bounded():
+    detail = preflight._diagnostic_detail("Retry the check", RuntimeError("first\n" + "x" * 400))
+
+    assert "\n" not in detail
+    assert detail.startswith("Retry the check. Reason: first ")
+    assert len(detail) < 300
+
+
+def test_1688_browser_session_is_ready_when_configured_cdp_is_reachable(monkeypatch):
+    monkeypatch.setattr(settings, "bu_cdp_http", "http://host.docker.internal:9222")
+    monkeypatch.setattr(preflight, "_resolve_cdp_ws", lambda: "ws://host.docker.internal:9222/devtools/browser/id")
+    monkeypatch.setattr(preflight, "_assert_cdp_websocket_reachable", lambda _value: None)
+
+    check = preflight._check_1688_browser_session()
+
+    assert check == {
+        "key": "1688_browser",
+        "label": "1688 dedicated Chrome ready",
+        "detail": "Chrome CDP session is reachable",
+        "level": "ok",
+    }
 
 
 def test_alibaba_open_preflight_ok_after_successful_diagnostic(monkeypatch):

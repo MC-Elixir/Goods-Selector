@@ -42,6 +42,12 @@ class FakeLocator:
         if callback:
             callback()
 
+    def hover(self, **_kwargs) -> None:
+        self.page.hovered.append(self.name)
+        callback = self.page.on_hover.get(self.name)
+        if callback:
+            callback()
+
     def fill(self, value: str, **_kwargs) -> None:
         self.page.filled[self.name] = value
 
@@ -55,14 +61,17 @@ class FakePage:
         self.visible_markers = visible_markers
         self.goto_calls: list[str] = []
         self.clicked: list[str] = []
+        self.hovered: list[str] = []
         self.filled: dict[str, str] = {}
         self.on_click: dict[str, object] = {}
+        self.on_hover: dict[str, object] = {}
         self.on_goto: object | None = None
         self.timeout_calls: list[int] = []
         self.url = f"https://www.amazon.com/dp/{asin}"
 
     def goto(self, url: str, **_kwargs) -> None:
         self.goto_calls.append(url)
+        self.url = url
         if self.on_goto:
             self.on_goto()
 
@@ -102,8 +111,9 @@ class FakeObserver:
 
 
 class FakeBrowser:
-    def __init__(self, page: FakePage) -> None:
-        self.contexts = [type("Context", (), {"pages": [page]})()]
+    def __init__(self, page: FakePage | list[FakePage]) -> None:
+        pages = page if isinstance(page, list) else [page]
+        self.contexts = [type("Context", (), {"pages": pages})()]
         self.closed = False
 
     def close(self) -> None:
@@ -120,7 +130,8 @@ class FakePlaywright:
         self.connected_to: str | None = None
         self.stopped = False
 
-    def connect_over_cdp(self, url: str) -> FakeBrowser:
+    def connect_over_cdp(self, url: str, *, timeout: float) -> FakeBrowser:
+        assert 0 < timeout <= 120_000
         self.connected_to = url
         return self.browser
 
@@ -130,6 +141,7 @@ class FakePlaywright:
 
 def test_adapter_opens_only_us_asin_page_and_checks_redirected_asin(tmp_path):
     page = FakePage(asin="B00Q7OAN50", visible_markers={"ready"})
+    page.url = "https://www.amazon.com/"
     session = PlaywrightSellerSpriteSession(
         profile=valid_profile(),
         download_dir=tmp_path,
@@ -140,14 +152,33 @@ def test_adapter_opens_only_us_asin_page_and_checks_redirected_asin(tmp_path):
 
     assert page.goto_calls == ["https://www.amazon.com/dp/B00Q7OAN50"]
 
-    page.url = "https://www.amazon.com/dp/B000000000"
+    def redirect_to_other_asin() -> None:
+        page.url = "https://www.amazon.com/dp/B000000000"
+
+    page.url = "https://www.amazon.com/"
+    page.on_goto = redirect_to_other_asin
     with pytest.raises(SellerSpriteWorkflowError, match="ASIN_MISMATCH"):
         session.open_amazon_product("B00Q7OAN50")
+
+
+def test_open_amazon_product_skips_reload_when_already_on_asin(tmp_path):
+    page = FakePage(asin="B00Q7OAN50", visible_markers={"ready"})
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        page=page,
+    )
+
+    session.open_amazon_product("B00Q7OAN50")
+
+    assert page.goto_calls == []
+    assert page.timeout_calls == []
 
 
 def test_adapter_cancellation_after_navigation_prevents_followup_wait(tmp_path):
     cancelled = False
     page = FakePage(asin="B00Q7OAN50", visible_markers={"ready"})
+    page.url = "https://www.amazon.com/"
 
     def cancel_after_goto() -> None:
         nonlocal cancelled
@@ -183,7 +214,47 @@ def test_adapter_attaches_only_through_injected_cdp_resolver(tmp_path):
         assert attached.page is page
 
     assert playwright.connected_to == "ws://host.docker.internal:9222/devtools/browser/1"
-    assert browser.closed and playwright.stopped
+    assert browser.closed is False
+    assert playwright.stopped
+
+
+def test_adapter_prefers_amazon_page_over_first_chrome_internal_tab(tmp_path):
+    settings_page = FakePage(asin="B00Q7OAN50", visible_markers=set())
+    settings_page.url = "chrome://settings/downloads"
+    amazon_page = FakePage(asin="B00Q7OAN50", visible_markers={"ready"})
+    alibaba_page = FakePage(asin="B00Q7OAN50", visible_markers=set())
+    alibaba_page.url = "https://work.1688.com/"
+    browser = FakeBrowser([settings_page, amazon_page, alibaba_page])
+    playwright = FakePlaywright(browser)
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        playwright_factory=lambda: playwright,
+        cdp_resolver=lambda: "ws://host.docker.internal:9222/devtools/browser/1",
+    )
+
+    with session as attached:
+        assert attached.page is amazon_page
+
+
+def test_adapter_rejects_attached_chrome_without_amazon_page(tmp_path):
+    settings_page = FakePage(asin="B00Q7OAN50", visible_markers=set())
+    settings_page.url = "chrome://settings/downloads"
+    alibaba_page = FakePage(asin="B00Q7OAN50", visible_markers=set())
+    alibaba_page.url = "https://work.1688.com/"
+    browser = FakeBrowser([settings_page, alibaba_page])
+    playwright = FakePlaywright(browser)
+    session = PlaywrightSellerSpriteSession(
+        profile=valid_profile(),
+        download_dir=tmp_path,
+        playwright_factory=lambda: playwright,
+        cdp_resolver=lambda: "ws://host.docker.internal:9222/devtools/browser/1",
+    )
+
+    with pytest.raises(SellerSpriteWorkflowError, match="EXTENSION_UNAVAILABLE"):
+        session.__enter__()
+
+    assert playwright.stopped
 
 
 def test_adapter_stops_for_human_terminal_state_without_clicking(tmp_path):
@@ -338,6 +409,73 @@ def test_adapter_sets_temporary_cdp_download_policy_before_snapshot_and_export(t
     assert browser.cdp_session.detached is True
     assert observer.snapshots == [tmp_path]
     assert page.clicked[-1] == "export"
+
+
+def test_competitor_export_uses_reviewed_overflow_hover_at_compact_viewport(tmp_path):
+    artifact = object()
+    observer = FakeObserver(artifact)
+    profile = replace(
+        valid_profile(),
+        competitor_results_ready="css=competitor_results_ready",
+        competitor_export_menu="css=competitor_export",
+        competitor_export="css=competitor_export",
+        competitor_export_overflow="css=competitor_export_overflow",
+    )
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"competitor_results_ready", "competitor_export_overflow"},
+    )
+    page.on_hover["competitor_export_overflow"] = lambda: page.visible_markers.add(
+        "competitor_export"
+    )
+    session = PlaywrightSellerSpriteSession(
+        profile=profile,
+        download_dir=tmp_path,
+        page=page,
+        download_observer=observer,
+    )
+
+    assert session.export_competitor_products("current-amazon-list") is artifact
+
+    assert page.hovered == ["competitor_export_overflow"]
+    assert page.clicked == ["competitor_export"]
+    assert observer.snapshots == [tmp_path]
+
+
+def test_competitor_export_expands_compact_sellersprite_panel_before_waiting_for_table(tmp_path):
+    artifact = object()
+    observer = FakeObserver(artifact)
+    profile = replace(
+        valid_profile(),
+        competitor_results_ready="css=competitor_results_ready",
+        competitor_export_menu="css=competitor_export",
+        competitor_export="css=competitor_export",
+    )
+    page = FakePage(
+        asin="B00Q7OAN50",
+        visible_markers={"panel_open"},
+    )
+
+    def expand_panel():
+        page.visible_markers.update({
+            "ready",
+            "competitor_results_ready",
+            "competitor_export",
+        })
+
+    page.on_click["panel_open"] = expand_panel
+    session = PlaywrightSellerSpriteSession(
+        profile=profile,
+        download_dir=tmp_path,
+        page=page,
+        download_observer=observer,
+    )
+
+    assert session.export_competitor_products("current-amazon-list") is artifact
+
+    assert page.clicked == ["panel_open", "competitor_export"]
+    assert page.timeout_calls == [1000]
+    assert observer.snapshots == [tmp_path]
 
 
 def test_adapter_stops_for_configured_quota_state_before_any_export_click(tmp_path):

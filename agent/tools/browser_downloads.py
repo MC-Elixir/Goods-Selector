@@ -16,7 +16,6 @@ from typing import Callable
 
 from agent.sellersprite_policy import normalize_sellersprite_error_code
 
-
 ALLOWED_EXPORT_SUFFIXES = frozenset({".csv", ".xlsx", ".xls"})
 _TEMPORARY_DOWNLOAD_SUFFIXES = (".crdownload", ".part", ".partial", ".tmp")
 _POLL_INTERVAL_SECONDS = 0.25

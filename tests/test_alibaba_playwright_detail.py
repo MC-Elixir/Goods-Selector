@@ -1,9 +1,14 @@
 import pytest
 
-from matchers._alibaba_playwright_search import enrich_offer_details, _parse_offer
+from matchers._alibaba_playwright_search import _parse_offer, enrich_offer_details
 from matchers.alibaba_detail import BlockedOfferPage
 from matchers.alibaba_pailitao import SupplierDTO
-from matchers.alibaba_playwright import _enrich_supplier_from_detail_html
+from matchers.alibaba_playwright import (
+    _CdpContextProxy,
+    _ContextManager,
+    _enrich_supplier_from_detail_html,
+    _visible_human_block,
+)
 
 
 def test_enrich_supplier_from_detail_html_updates_playwright_supplier():
@@ -184,3 +189,72 @@ def test_search_card_missing_moq_remains_none():
     assert offer is not None
     assert offer["offer_id"] == "12345678"
     assert offer["moq"] is None
+
+
+class _VisibleBody:
+    def __init__(self, text):
+        self.text = text
+
+    def inner_text(self, **kwargs):
+        return self.text
+
+
+class _VisiblePage:
+    def __init__(self, url, text="", title="", frames=()):
+        self.url = url
+        self._text = text
+        self._title = title
+        self.frames = [type("Frame", (), {"url": frame_url}) for frame_url in frames]
+        self.closed = False
+
+    def title(self):
+        return self._title
+
+    def locator(self, selector):
+        assert selector == "body"
+        return _VisibleBody(self._text)
+
+    def is_closed(self):
+        return self.closed
+
+
+def test_visible_captcha_blocks_even_when_offer_json_could_be_present():
+    page = _VisiblePage(
+        "https://detail.1688.com/offer/123.html",
+        text='请拖动滑块完成验证码 {"offerId":"123","price":"130.0"}',
+    )
+
+    assert _visible_human_block(page) == (
+        "CAPTCHA",
+        "1688 页面显示验证码或人机验证",
+    )
+
+
+def test_captcha_iframe_is_a_visible_human_block():
+    page = _VisiblePage(
+        "https://detail.1688.com/offer/123.html",
+        frames=("https://captcha.example/verify",),
+    )
+
+    assert _visible_human_block(page)[0] == "CAPTCHA"
+
+
+def test_cdp_proxy_reuses_1688_tab_and_context_manager_never_closes_it():
+    unrelated = _VisiblePage("https://example.com/")
+    homepage = _VisiblePage("https://www.1688.com/")
+    detail = _VisiblePage("https://detail.1688.com/offer/123.html")
+    context = type(
+        "Context",
+        (),
+        {
+            "pages": [unrelated, homepage, detail],
+            "new_page": lambda self: _VisiblePage("about:blank"),
+        },
+    )()
+    proxy = _CdpContextProxy(context)
+    playwright = type("Playwright", (), {"stop": lambda self: None})()
+
+    assert proxy.pages == [detail]
+    with _ContextManager(proxy, playwright, close_context=False):
+        pass
+    assert detail.closed is False

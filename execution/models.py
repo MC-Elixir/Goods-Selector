@@ -120,6 +120,12 @@ class StageContext:
             from agent.cancellation import CancellationRequested
             raise CancellationRequested("execution cancelled")
 
+    def check_interruption(self) -> bool:
+        """Propagate the node budget through cooperative browser/network loops."""
+        self.raise_if_deadline_exceeded()
+        self.raise_if_cancelled()
+        return False
+
     def raise_if_deadline_exceeded(self, now: datetime | None = None) -> None:
         if self.deadline is not None and (now or datetime.utcnow()) >= self.deadline:
             raise TimeoutError("execution deadline exceeded")

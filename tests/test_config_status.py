@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import json
 
-import agent.config_status as config_status_module
 import pytest
+
+import agent.config_status as config_status_module
 from agent.config_status import (
     check_alibaba_pifatuan,
     check_seller_sprite_asin,
@@ -18,6 +19,7 @@ from config.settings import settings
 
 
 def test_config_status_reports_capabilities_without_secrets(monkeypatch):
+    monkeypatch.setattr(settings, "model_api_provider", "ppio")
     monkeypatch.setattr(settings, "mjjl_api_key", "seller-secret")
     monkeypatch.setattr(settings, "mjjl_api_base", "https://api.sellersprite.com/v1")
     monkeypatch.setattr(settings, "mjjl_max_products_per_run", 2)
@@ -67,6 +69,9 @@ def test_config_status_reports_capabilities_without_secrets(monkeypatch):
 
 
 def test_config_status_reports_missing_alibaba_parts(monkeypatch):
+    monkeypatch.setattr(settings, "model_api_provider", "auto")
+    monkeypatch.setattr(settings, "aliyun_token_plan_api_key", "")
+    monkeypatch.setattr(settings, "aliyun_api_key", "")
     monkeypatch.setattr(settings, "mjjl_api_key", "")
     monkeypatch.setattr(settings, "ppio_api_key", "")
     monkeypatch.setattr(settings, "anthropic_api_key", "")
@@ -163,6 +168,27 @@ def test_browser_configuration_persists_only_project_local_safe_state(monkeypatc
     assert "C:/Users/dell/Downloads" not in str(result)
 
 
+def test_browser_configuration_saves_enabled_state_before_locator_profile_exists(monkeypatch, tmp_path):
+    monkeypatch.setattr(config_status_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(config_status_module, "check_seller_sprite_browser", lambda: {
+        "key": "seller_sprite_browser",
+        "label": "SellerSprite browser locator profile unavailable",
+        "detail": "Configure a valid locator profile",
+        "level": "warning",
+    })
+
+    result = config_status_module.configure_sellersprite_browser(
+        locator_profile_path="/app/data/sellersprite_live_locators.json",
+        download_dir="/app/data/imports/sellersprite",
+        host_download_dir="Chrome-managed",
+        enabled=True,
+    )
+
+    stored = json.loads((tmp_path / "data" / "sellersprite_browser_config.json").read_text(encoding="utf-8"))
+    assert stored["enabled"] is True
+    assert result["status"] == "unavailable"
+
+
 def test_browser_configuration_rejects_paths_escaping_the_data_volume(monkeypatch, tmp_path):
     monkeypatch.setattr(config_status_module, "PROJECT_ROOT", tmp_path)
 
@@ -199,6 +225,7 @@ def test_configure_vision_model_writes_env_without_returning_secret(monkeypatch,
     monkeypatch.setattr(settings, "ppio_api_key", "")
     monkeypatch.setattr(settings, "ppio_api_base", "https://api.ppio.com/openai")
     monkeypatch.setattr(settings, "ppio_model", "old-model")
+    monkeypatch.setattr(settings, "model_api_provider", "auto")
 
     result = configure_vision_model("vision-secret", "qwen/qwen2.5-vl-72b-instruct", "https://vision.example/v1")
 
@@ -211,6 +238,41 @@ def test_configure_vision_model_writes_env_without_returning_secret(monkeypatch,
     assert "PPIO_API_KEY=vision-secret" in text
     assert "PPIO_MODEL=qwen/qwen2.5-vl-72b-instruct" in text
     assert settings.ppio_model == "qwen/qwen2.5-vl-72b-instruct"
+
+
+def test_configure_vision_model_supports_aliyun_token_plan(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text("LOG_LEVEL=INFO\n", encoding="utf-8")
+    monkeypatch.setattr("agent.config_status.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(settings, "aliyun_token_plan_api_key", "")
+    monkeypatch.setattr(settings, "model_api_provider", "auto")
+
+    result = configure_vision_model(
+        "sk-sp-vision-secret",
+        "qwen3-vl-plus",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        provider="tokenplan",
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert result["provider"] == "aliyun_token_plan"
+    assert "sk-sp-vision-secret" not in str(result)
+    assert "MODEL_API_PROVIDER=aliyun_token_plan" in text
+    assert "ALIYUN_TOKEN_PLAN_API_KEY=sk-sp-vision-secret" in text
+    assert "ALIYUN_TOKEN_PLAN_VISION_MODEL=qwen3-vl-plus" in text
+
+
+def test_configure_vision_model_rejects_mixed_aliyun_plan_endpoint(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.config_status.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(settings, "model_api_provider", "auto")
+
+    with pytest.raises(ValueError, match="token-plan Base URL"):
+        configure_vision_model(
+            "sk-sp-secret",
+            "qwen3-vl-plus",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            provider="aliyun_token_plan",
+        )
 
 
 def test_configure_alibaba_supplier_search_writes_env(monkeypatch, tmp_path):

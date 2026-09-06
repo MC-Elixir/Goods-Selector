@@ -14,7 +14,6 @@ from agent.sellersprite_models import SellerSpriteResult
 from agent.sellersprite_policy import validate_sellersprite_asin
 from agent.sellersprite_service import SellerSpriteDependencies, run_reverse_keyword_export
 
-
 MAX_BATCH_SIZE = 20
 _STOP_CODES = frozenset({
     "NEEDS_HUMAN",

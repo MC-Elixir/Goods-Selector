@@ -160,7 +160,7 @@ class ArtifactSetManager:
     @staticmethod
     def _sha256(path: Path) -> str:
         digest = sha256()
-        with path.open("rb") as handle:
+        with path.open("r+b") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
@@ -182,6 +182,10 @@ class ArtifactSetManager:
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
+        if os.name == "nt":
+            # Windows does not support POSIX directory fsync. File data is
+            # flushed above; formal publication runs in the Linux container.
+            return
         descriptor = os.open(path, os.O_RDONLY)
         try:
             os.fsync(descriptor)

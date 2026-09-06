@@ -10,11 +10,9 @@ from typing import Any, Callable
 from sqlalchemy import text
 
 from agent.provenance import trusted_evidence_value
-from matchers.alibaba_detail import BlockedOfferPage
 from matchers.match_evidence import build_match_evidence
 from matchers.query_planner import generate_query_plan, rewrite_low_relevance_queries
-from schemas.sourcing import MatchEvidence, RecommendationEvidence, RecommendationStatus
-
+from schemas.sourcing import AmazonProductUnderstanding, MatchEvidence, RecommendationEvidence, RecommendationStatus
 
 TERMINAL_BLOCK_CODES = {"AUTH_REQUIRED", "CAPTCHA"}
 STABLE_SEARCH_ERROR_CODES = {
@@ -257,7 +255,7 @@ def _recommend(product: Any, result: SourcingSliceResult, market: dict[str, Any]
 
 
 def _persist(result: SourcingSliceResult, engine: Any) -> None:
-    asin = result.understanding.asin
+    asin = result.understanding.asin  # type: ignore[attr-defined]
     with engine.begin() as conn:
         scope = {"run_ref": result.run_ref, "asin": asin}
         conn.execute(text("DELETE FROM query_attempts WHERE run_ref=:run_ref AND asin=:asin"), scope)
@@ -320,9 +318,9 @@ def serialize_sourcing_result(result: SourcingSliceResult) -> dict[str, Any]:
     return {
         "schema_version": "target-sourcing-evidence-v1",
         "run_ref": result.run_ref,
-        "asin": result.understanding.asin,
+        "asin": result.understanding.asin,  # type: ignore[attr-defined]
         "iterations": result.iterations,
-        "understanding": result.understanding.model_dump(mode="json"),
+        "understanding": result.understanding.model_dump(mode="json"),  # type: ignore[attr-defined]
         "query_attempts": list(result.query_attempts),
         "evaluated_matches": [item.model_dump(mode="json") for item in result.evaluated_matches],
         "accepted_offer_ids": [
@@ -703,7 +701,7 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
                     return result
                 hit_rates[query.query_id] = 0.0
                 continue
-            real_by_id = {}
+            real_by_id: dict = {}
             for supplier in hits:
                 if not allow_mock and _is_mock(supplier):
                     mock_excluded = True
@@ -734,11 +732,11 @@ def run_sourcing_slice(product: Any, deps: SourcingSliceDependencies, run_ref: s
                         if code not in {"TIMEOUT", "RATE_LIMITED"}:
                             break
                 if enriched is None:
-                    exc = last_exc or RuntimeError("missing detail result")
-                    code = _error_code(exc)
+                    exc = last_exc or RuntimeError("missing detail result")  # type: ignore[misc]
+                    code = _error_code(exc)  # type: ignore[misc]
                     if code in NON_RETRYABLE_CODES:
                         if code in TERMINAL_BLOCK_CODES:
-                            result.recommendation = _blocked_recommendation(product, "detail", exc)
+                            result.recommendation = _blocked_recommendation(product, "detail", exc)  # type: ignore[misc]
                             if deps.engine is not None:
                                 _persist(result, deps.engine)
                             return result

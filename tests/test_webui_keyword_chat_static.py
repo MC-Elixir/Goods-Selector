@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -37,6 +36,29 @@ def test_webui_exposes_job_cancel_and_retry_actions():
     assert "job-action" in app
 
 
+def test_webui_exposes_controlled_one_click_research_workflow():
+    index = (ROOT / "webui" / "index.html").read_text(encoding="utf-8")
+    app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "webui" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'data-section="trial"' in index
+    assert 'id="trialForm"' in index
+    assert 'id="trialStages"' in index
+    assert 'id="trialContinueButton"' in index
+    assert 'id="trialFeedbackForm"' in index
+    assert 'id="trialValidationPanel"' in index
+    assert "/api/trial/full-research" in app
+    assert "/api/trial/feedback/summary" in app
+    assert "startFullResearch" in app
+    assert "continueTrialJob" in app
+    assert "renderTrialFeedbackSummary" in app
+    assert "job.research?.exports?.xlsx" not in app
+    assert "job.exports?.xlsx" in app
+    assert ".trial-workspace" in styles
+    assert ".trial-stages" in styles
+    assert ".trial-validation-panel" in styles
+
+
 def test_webui_exposes_recoverable_node_status_and_operations():
     app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "webui" / "styles.css").read_text(encoding="utf-8")
@@ -58,6 +80,16 @@ def test_webui_renders_recent_job_events():
     assert ".job-events" in styles
 
 
+def test_webui_treats_sellersprite_api_as_optional():
+    app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
+
+    assert "settings.sellerSpriteOptional" in app
+    assert "!status.seller_sprite?.configured" in app
+    assert "SellerSprite API (optional)" in app
+    assert "卖家精灵 API（可选）" in app
+    assert "market analysis uses browser export" in app
+
+
 def test_webui_exposes_browser_assistant_panel():
     index = (ROOT / "webui" / "index.html").read_text(encoding="utf-8")
     app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
@@ -75,6 +107,12 @@ def test_webui_exposes_visual_model_and_result_delete_controls():
     app = (ROOT / "webui" / "app.js").read_text(encoding="utf-8")
 
     assert 'id="visionModelForm"' in index
+    assert 'name="provider"' in index
+    assert 'value="aliyun_token_plan"' in index
+    assert 'value="aliyun"' in index
     assert 'name="model"' in index
     assert "/api/config/vision-model" in app
+    assert "updateVisionProviderHints" in app
+    assert 'providerInput.value = provider' in app
+    assert "knownBases.includes" in app
     assert "hide-result" in app

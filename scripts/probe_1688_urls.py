@@ -94,7 +94,7 @@ def main():
                 print(f"  命中产品卡片: {product_count}")
                 print(f"  被拦截: {'❌ 是' if blocked else '✅ 否'}")
                 if not blocked and product_count > 0:
-                    print(f"  >>> 这个 URL 可用！")
+                    print("  >>> 这个 URL 可用！")
             except Exception as e:
                 print(f"  异常: {e}")
 

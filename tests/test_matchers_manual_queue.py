@@ -1,6 +1,9 @@
+import pytest
+
+import matchers
 from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
-import matchers
+from execution.models import HumanActionRequired
 from matchers.alibaba_pailitao import SupplierDTO
 
 
@@ -79,18 +82,23 @@ def test_bedding_fallback_does_not_turn_solid_into_lid_or_kitchen_query():
 def test_match_suppliers_enqueues_when_circuit_is_open(monkeypatch):
     _common_no_network(monkeypatch)
     enqueued = []
+    reset_calls = []
     monkeypatch.setattr(matchers, "circuit_is_open", lambda: True)
+    monkeypatch.setattr(matchers, "reset_circuit", lambda: reset_calls.append(True))
     monkeypatch.setattr(
         matchers,
         "enqueue_sourcing_block",
         lambda *args, **kwargs: enqueued.append((args, kwargs)),
     )
 
-    suppliers = matchers.match_suppliers(_product(), top_k=3)
+    with pytest.raises(HumanActionRequired) as exc_info:
+        matchers.match_suppliers(_product(), top_k=3)
 
-    assert suppliers == []
+    assert exc_info.value.error_code == "CAPTCHA_COOLDOWN"
+    assert "当前 9222 页面可能没有验证码" in exc_info.value.instructions
     assert enqueued
     assert enqueued[0][1]["reason"] == "1688 search cooldown active"
+    assert not reset_calls
 
 
 def test_match_suppliers_enqueues_on_tmd_block(monkeypatch):
@@ -114,9 +122,10 @@ def test_match_suppliers_enqueues_on_tmd_block(monkeypatch):
     )
     monkeypatch.setattr(matchers, "Alibaba1688PlaywrightMatcher", FakePlaywright)
 
-    suppliers = matchers.match_suppliers(_product(), top_k=3)
+    with pytest.raises(HumanActionRequired) as exc_info:
+        matchers.match_suppliers(_product(), top_k=3)
 
-    assert suppliers == []
+    assert exc_info.value.error_code == "CAPTCHA"
     assert opened
     assert enqueued
     assert "TMD" in enqueued[0][1]["reason"]
@@ -415,3 +424,37 @@ def test_invalid_detail_is_neither_applied_nor_cached(monkeypatch):
     assert result[0].moq is None
     assert "detail" not in result[0].raw_data
     assert saved == []
+
+
+def test_detail_captcha_stops_batch_and_enqueues_handoff(monkeypatch):
+    _common_no_network(monkeypatch)
+    supplier = SupplierDTO(
+        alibaba_offer_id="780485617590",
+        supplier_name="Blocked Factory",
+        title_cn="304不锈钢水杯",
+        offer_url="https://detail.1688.com/offer/780485617590.html",
+        raw_data={"source": "alibaba_import"},
+    )
+    enqueued = []
+
+    class CaptchaPlaywright:
+        def enrich_supplier_detail(self, _candidate):
+            raise HumanActionRequired("CAPTCHA", "detail slider required")
+
+    monkeypatch.setattr(matchers, "find_imported_suppliers", lambda *args, **kwargs: [supplier])
+    monkeypatch.setattr(settings, "alibaba_detail_enrich_limit", 1, raising=False)
+    monkeypatch.setattr(matchers, "Alibaba1688PlaywrightMatcher", lambda *args, **kwargs: CaptchaPlaywright())
+    monkeypatch.setattr(matchers, "load_cached_offer_detail", lambda *args, **kwargs: {})
+    monkeypatch.setattr(matchers, "open_circuit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        matchers,
+        "enqueue_sourcing_block",
+        lambda *args, **kwargs: enqueued.append((args, kwargs)),
+    )
+
+    # Detail CAPTCHA no longer aborts the match stage; it skips enrichment gracefully.
+    results = matchers.match_suppliers(_product(), top_k=3)
+    assert len(results) >= 1
+    # The supplier should still be returned but with CAPTCHA_blocked enrichment marker.
+    blocked = [s for s in results if s.raw_data.get("detail_enrichment", {}).get("error") == "CAPTCHA_blocked"]
+    assert blocked

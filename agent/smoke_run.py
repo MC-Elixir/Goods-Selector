@@ -1,9 +1,9 @@
 """Controlled small sourcing run used for live end-to-end validation."""
 from __future__ import annotations
 
-import time
 import signal
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from typing import Any

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 
-
 ASIN_RE = re.compile(r"^[A-Z0-9]{10}$")
 SAFE_SELLERSPRITE_ERROR_CODES = frozenset(
     {

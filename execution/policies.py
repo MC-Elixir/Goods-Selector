@@ -73,7 +73,7 @@ def classify_error(exc: BaseException) -> ClassifiedError:
     if (
         isinstance(exc, (ConnectionError, OSError))
         and not isinstance(exc, (PermissionError, FileNotFoundError))
-        or error_code in {"RATE_LIMIT", "TOO_MANY_REQUESTS", "HTTP_429"}
+        or error_code in {"RATE_LIMIT", "TOO_MANY_REQUESTS", "HTTP_429", "EXPORT_FAILED", "TEMPORARILY_UNAVAILABLE"}
         or "rate limit" in combined
         or "temporarily unavailable" in combined
     ):

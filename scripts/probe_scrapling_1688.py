@@ -82,7 +82,7 @@ def test_stealth_with_cookies():
         n_cards = len(cards) if hasattr(cards, "__len__") else 0
         print(f"      产品链接数: {n_cards}")
         if n_cards > 0:
-            print(f"      ✅ 成功！")
+            print("      ✅ 成功！")
             for c in cards[:2]:
                 href = c.attrib.get("href", "")
                 print(f"        - {href[:90]}")

@@ -8,19 +8,19 @@ import os
 import re
 import uuid
 from datetime import date, datetime
-from io import StringIO
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from io import StringIO
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from agent.categories import canonical_category, list_categories
 from agent.browser_agent import run_browser_task
 from agent.browser_setup import (
     capture_browser_cookies,
     get_browser_setup_status,
     open_login_page,
 )
+from agent.categories import canonical_category, list_categories
 from agent.chat_tools import answer_chat
 from agent.config_status import (
     check_alibaba_pifatuan,
@@ -34,20 +34,29 @@ from agent.config_status import (
 from agent.history import hide_result, list_accepted_supplier_shortlist, list_export_runs, list_results, set_saved
 from agent.manual_queue import list_manual_queue, update_manual_item
 from agent.review_decisions import set_supplier_review
-from agent.runner import AGENT_SYSTEM_PROMPT, AgentRuntime
 from agent.run_events import list_run_events
+from agent.runner import AGENT_SYSTEM_PROMPT, AgentRuntime
 from agent.seller_research_service import run_competitor_export, run_seller_research_from_file
-from agent.state import AgentRunConfig
 from agent.seller_sprite_diagnostics import seller_sprite_market_data_guard
+from agent.sellersprite_batch import run_reverse_keyword_batch
 from agent.sellersprite_models import SellerSpriteResult
 from agent.sellersprite_policy import validate_sellersprite_asin
 from agent.sellersprite_service import run_reverse_keyword_export
-from agent.sellersprite_batch import run_reverse_keyword_batch
-from db.sellersprite_repository import list_sellersprite_imports
-from db.seller_research_repository import get_seller_research_run, list_seller_research_runs
-from db.session import engine as db_engine
+from agent.state import AgentRunConfig
+from agent.target_contract_review import (
+    list_target_contract_reviews,
+    save_target_contract_review,
+)
+from agent.trial_feedback import (
+    list_trial_feedback,
+    save_trial_feedback,
+    summarize_trial_feedback,
+)
 from config.settings import settings
 from crawlers.amazon_search import keyword_preview, normalize_keyword
+from db.seller_research_repository import get_seller_research_run, list_seller_research_runs
+from db.sellersprite_repository import list_sellersprite_imports
+from db.session import engine as db_engine
 from execution.models import LeaseLost
 from matchers.imported_suppliers import import_alibaba_supplier_payload, list_imported_suppliers
 
@@ -89,6 +98,19 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             return self._json(keyword_preview(keyword))
         if parsed.path == "/api/jobs":
             return self._json({"jobs": self.runtime.list_jobs()})
+        if parsed.path == "/api/trial/feedback/summary":
+            return self._json(summarize_trial_feedback())
+        if parsed.path == "/api/trial/feedback":
+            qs = parse_qs(parsed.query)
+            job_id = str((qs.get("job_id") or [""])[0]).strip() or None
+            raw_limit = (qs.get("limit") or [100])[0]
+            try:
+                limit = int(raw_limit)
+            except (TypeError, ValueError):
+                return self._json({"error": "limit must be an integer"}, HTTPStatus.BAD_REQUEST)
+            return self._json({
+                "items": list_trial_feedback(job_id=job_id, limit=limit)
+            })
         run_nodes_match = re.fullmatch(r"/api/runs/(\d+)/nodes", parsed.path)
         if run_nodes_match:
             return self._json({
@@ -131,6 +153,8 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             status = (qs.get("status") or [None])[0]
             return self._json(list_manual_queue(status=status))
+        if parsed.path == "/api/target-contract/reviews":
+            return self._json(list_target_contract_reviews())
         if parsed.path == "/api/imported-suppliers":
             qs = parse_qs(parsed.query)
             limit = int((qs.get("limit") or [200])[0] or 200)
@@ -157,6 +181,9 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
             return self._json({"system_prompt": AGENT_SYSTEM_PROMPT})
         if parsed.path.startswith("/api/exports/"):
             return self._send_export(parsed.path.removeprefix("/api/exports/"))
+        if parsed.path in {"/operator", "/operator/"}:
+            self.path = "/operator.html"
+            return super().do_GET()
         if parsed.path == "/":
             self.path = "/index.html"
         return super().do_GET()
@@ -165,13 +192,36 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             body = self._read_json_body()
+            if parsed.path == "/api/trial/full-research":
+                config = _full_research_config_from_body(body)
+                job = self.runtime.start_run(config)
+                return self._json({"job": job.to_dict()}, HTTPStatus.ACCEPTED)
+            if parsed.path == "/api/trial/feedback":
+                return self._json(
+                    {"feedback": _save_trial_feedback_for_job(self.runtime, body)},
+                    HTTPStatus.CREATED,
+                )
             if parsed.path == "/api/run":
                 config = _config_from_body(body)
                 market_guard_error = _market_data_guard_error(config)
                 if market_guard_error:
                     return self._json({"error": market_guard_error}, HTTPStatus.BAD_REQUEST)
-                job = self.runtime.start_run(config)
+                request_id = body.get("request_id")
+                job = (
+                    self.runtime.start_run(config, request_id=request_id)
+                    if request_id is not None else self.runtime.start_run(config)
+                )
                 return self._json({"job": job.to_dict()}, HTTPStatus.ACCEPTED)
+            operator_resume_match = re.fullmatch(
+                r"/api/operator/jobs/([A-Za-z0-9_-]{6,64})/resume", parsed.path
+            )
+            if operator_resume_match:
+                payload = _resume_human_job(
+                    self.runtime,
+                    operator_resume_match.group(1),
+                    reason=str(body.get("reason") or "用户已完成人工验证").strip(),
+                )
+                return self._json(payload, HTTPStatus.ACCEPTED)
             if parsed.path.startswith("/api/jobs/"):
                 status, payload = _handle_job_action(parsed.path, self.runtime, body)
                 return self._json(payload, status)
@@ -225,6 +275,7 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                     str(body.get("key") or ""),
                     str(body.get("model") or ""),
                     base_url=body.get("base_url"),
+                    provider=body.get("provider"),
                 )
                 return self._json(result)
             if parsed.path == "/api/config/seller-sprite/asin-check":
@@ -279,6 +330,14 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                     note=body.get("note"),
                 )
                 return self._json(result)
+            if parsed.path == "/api/target-contract/reviews":
+                case = save_target_contract_review(
+                    str(body.get("case_id") or ""),
+                    str(body.get("action") or ""),
+                    offer_id=body.get("offer_id"),
+                    note=body.get("note"),
+                )
+                return self._json({"case": case})
         except KeyError:
             return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except LeaseLost as exc:
@@ -403,6 +462,80 @@ def _handle_job_action(
         job = runtime.retry_job(job_id)
         return HTTPStatus.ACCEPTED, {"job": job.to_dict()}
     return HTTPStatus.NOT_FOUND, {"error": "not found"}
+
+
+def _resume_human_job(runtime: AgentRuntime, job_id: str, *, reason: str) -> dict:
+    """Resume the first human gate without exposing its token to the browser."""
+    job = runtime.get_job(job_id)
+    if not job:
+        raise KeyError(job_id)
+    if not reason:
+        raise ValueError("reason is required")
+    run_id = job.get("run_log_id")
+    if not run_id:
+        if job.get("status") != "human_required":
+            raise ValueError("job has no human action to resume")
+        return {"job": runtime.retry_job(job_id).to_dict(), "resumed": True}
+    node = next(
+        (
+            item for item in runtime.execution_nodes(int(run_id))
+            if isinstance(item, dict) and item.get("human_action_required")
+        ),
+        None,
+    )
+    if not node:
+        raise ValueError("job has no human action to resume")
+    resume_token = str(node.get("resume_token") or "")
+    if not resume_token:
+        raise ValueError("human action is missing its internal resume token")
+    result = runtime.operate_node(
+        job_id,
+        int(node["id"]),
+        "resume",
+        reason=reason,
+        resume_token=resume_token,
+    )
+    result_node = result.get("node") or {}
+    safe_node = {
+        key: result_node.get(key)
+        for key in (
+            "id", "status", "stage", "scope_type", "scope_key",
+            "error_code", "human_action_required",
+        )
+        if key in result_node
+    }
+    return {"job": result.get("job"), "node": safe_node, "resumed": True}
+
+
+def _save_trial_feedback_for_job(
+    runtime: AgentRuntime,
+    body: dict,
+) -> dict:
+    job_id = str(body.get("job_id") or "").strip()
+    if not job_id:
+        raise ValueError("job_id is required")
+    job = runtime.get_job(job_id)
+    if not job:
+        raise KeyError(job_id)
+    job_status = str(job.get("status") or "")
+    if job_status not in {"success", "failed", "cancelled", "review_required"}:
+        raise ValueError("feedback is only accepted after the trial job has ended")
+    config = job.get("config") or {}
+    if config.get("workflow_mode") != "full_research":
+        raise ValueError("feedback is only accepted for a full research trial")
+    source_mode = str(config.get("source_mode") or "")
+    sourcing_exports = job.get("exports") or {}
+    # The formal workflow has one user-facing deliverable. JSON is a backend
+    # sidecar and the legacy research workbook is no longer produced.
+    workbook_path = sourcing_exports.get("xlsx")
+    deliverables_ready = bool(workbook_path and str(workbook_path).strip())
+    normalized = dict(body)
+    normalized["job_id"] = job_id
+    normalized["job_status"] = job_status
+    normalized["source_mode"] = source_mode
+    normalized["workflow_completed"] = job_status in {"success", "review_required"}
+    normalized["deliverables_ready"] = bool(deliverables_ready)
+    return save_trial_feedback(normalized)
 
 
 def _handle_execution_attempt_query(
@@ -688,6 +821,38 @@ def _config_from_body(body: dict) -> AgentRunConfig:
         require_market_data=bool(body.get("require_market_data", False)),
         require_supplier_evidence=bool(body.get("require_supplier_evidence", False)),
     )
+
+
+def _full_research_config_from_body(body: dict) -> AgentRunConfig:
+    """Validate the bounded one-click workflow exposed to trial users."""
+    config = _config_from_body({
+        **body,
+        "no_mock": True,
+        "require_market_data": False,
+        "require_supplier_evidence": body.get("require_supplier_evidence", True),
+    })
+    if config.limit > 20:
+        raise ValueError("controlled trial limit must be between 1 and 20")
+    research_keyword = str(
+        body.get("research_keyword")
+        or body.get("keyword")
+        or body.get("category")
+        or ""
+    ).strip()
+    if not research_keyword:
+        raise ValueError("research_keyword is required")
+    config.workflow_mode = "full_research"
+    config.research_keyword = research_keyword
+    config.research_niche_label = str(
+        body.get("niche_label") or research_keyword
+    ).strip()
+    config.research_category = _optional_target_category(
+        body.get("research_category")
+    )
+    config.generate_ai_reasons = _bool_default(
+        body.get("generate_ai_reasons"), False
+    )
+    return config
 
 
 def _dev_allow_mock_suppliers() -> bool:

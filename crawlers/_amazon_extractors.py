@@ -20,15 +20,14 @@ Amazon 字段提取器（共享，2026 版）
 """
 from __future__ import annotations
 
-import re
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from agent.provenance import evidence
 from crawlers._amazon_page import PageLike
 from schemas.sourcing import EvidenceStatus, FieldEvidence
-
 
 # ============================================================
 # BSR 列表页：去重 ASIN

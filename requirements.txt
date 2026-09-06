@@ -16,6 +16,7 @@ alembic>=1.13.0
 requests>=2.31.0
 httpx>=0.26.0
 tenacity>=8.2.0          # 重试装饰器
+mcp==1.28.0              # 稳定版 MCP SDK；v2 仍处于预发布阶段
 
 # Amazon 数据源（三选一，按需安装）
 # playwright install chromium  # 爬虫后端（无需 API Key）
@@ -53,3 +54,7 @@ pytest>=7.4.0
 pytest-cov>=4.1.0
 pytest-mock>=3.12.0
 responses>=0.24.0        # mock requests
+
+# 代码质量
+ruff>=0.5.0
+mypy>=1.10.0

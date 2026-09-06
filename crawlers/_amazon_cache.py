@@ -20,7 +20,6 @@ from diskcache import Cache
 
 from config.settings import settings
 
-
 # 缓存目录：data/cache/amazon/
 # 模块级可变变量，测试时可整体替换
 _cache_root: Path = settings.cache_dir / "amazon"

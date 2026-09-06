@@ -4,14 +4,14 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-from pathlib import Path
 import shutil
 import socket
 import subprocess
-from dataclasses import dataclass
-from typing import Any, Protocol
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Protocol
 from urllib.parse import urlparse, urlunparse
 
 from config.settings import settings
@@ -233,7 +233,11 @@ def _cdp_websocket_netloc(cdp_http: str) -> str:
     # Docker reaches Windows through host.docker.internal. WSL2 mirrored
     # networking reaches the same Windows listener through loopback; resolving
     # host.docker.internal there can yield an unreachable virtual-adapter IP.
-    if host.lower() == "host.docker.internal" and _running_in_wsl():
+    if (
+        host.lower() == "host.docker.internal"
+        and _running_in_wsl()
+        and not _running_in_container()
+    ):
         return f"127.0.0.1:{port}"
     try:
         candidates = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
@@ -254,6 +258,22 @@ def _running_in_wsl() -> bool:
     except OSError:
         return False
     return "microsoft" in release.casefold() or "wsl" in release.casefold()
+
+
+def _running_in_container() -> bool:
+    """Return whether this process is in a container rather than plain WSL.
+
+    Docker Desktop containers on a WSL2 host expose the WSL kernel release as
+    well.  They must still use ``host.docker.internal`` to reach Windows; using
+    their own 127.0.0.1 points back at the container and loses the CDP session.
+    """
+    if Path("/.dockerenv").exists():
+        return True
+    try:
+        cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return any(marker in cgroup for marker in ("docker", "containerd", "kubepods"))
 
 
 def _build_task(

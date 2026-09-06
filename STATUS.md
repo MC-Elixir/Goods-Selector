@@ -17,8 +17,7 @@ strict keep precision、hard reject recall 和 rejection reason accuracy 均为 
 **Recoverable execution**: 7 阶段业务入口保持兼容，但调用层现已具备 run/ASIN 节点、
 attempt、输入指纹、租约与 fencing、自动退避恢复、人工继续、幂等业务结果和原子
 artifact set。SQLite 是恢复事实来源；CLI 使用 `resume-run --run-id`，WebUI 可查看并
-操作节点。设计与验收矩阵见
-`docs/superpowers/specs/2026-07-15-asin-recoverable-execution-design.md`。
+操作节点。
 
 **Current verification**: 2026-07-17 的 run #58 generation 2 完成 3 个 Amazon 商品，
 SellerSprite 浏览器导出 3/3、1688 实时搜索 3/3、mock=0。TERRO 结果全部为灭蚁/诱饵
@@ -169,14 +168,38 @@ DB:       RunLog id=2 落库
 
 价格见卖家精灵开放平台 **API 价格页**（按接口计费）。
 
-**低成本备选**：仅做 MVP 小批量人工验证时，官方 **MCP Basic**（月付 ¥99、1000 次/月）可作为人工核验工具；但要接入现有代码的 Stage 4，仍以 API 为直接路径（MCP 价格见卖家精灵 **MCP 价格页**）。
+**2026-08-11 修订：优先走 MCP，不再默认买 4 个 REST 接口。** 上面这条"以 API 为直接路径"的旧结论没有把 REST 的按接口定价算进去，实际成本差两个数量级：
 
-**拿到 key 后**：写 `.env` 的 `MJJL_API_KEY=` → `python -c "from analyzers.maijiajingling import MaijiajinglingClient; print(MaijiajinglingClient().get_visits())"` 验额度 → `python main.py run --category "Home & Kitchen" --limit 3` 端到端，确认 `market_analyses` 表有数据、demand/competition 维度真正进分。
+| 方案 | 月付 | 年付 | 覆盖工具 |
+|---|---|---|---|
+| REST 上述 4 接口 | ¥9,963 | ¥99,630 | 仅这 4 个 |
+| MCP Basic | ¥99（1000 次/月） | ¥990（4000 次/月） | 全部 45 个 |
+| MCP Max | ¥599（10000 次/月） | ¥2,990（15000 次/月） | 全部 45 个 |
+
+REST 单接口配额（2 万–5 万次/月）对本项目严重过剩：按 `mjjl_max_products_per_run=3` 计，一次 run 仅 12 次调用（3 产品 × 4 接口），MCP 年付 Basic 即可支撑约 330 次 run/月。MCP 套餐还包含浏览器路径正在抓的 `traffic_keyword`（REST 单买 ¥6,880/月）。
+
+MCP 计费口径与 REST 相同：一次工具调用记一次，40 次/分钟。注意 `analyze_market()` 带 `stop_after_attempt(2)` 重试，失败重试会额外消耗配额。
+
+**待验证的风险**：MCP 页面宣传"Token 消耗直降 90%+"，返回内容可能被裁剪。若裁掉的恰好是 `analyzers/scorer.py` 依赖的字段，Stage 4 会静默降级。买 Basic 月付（¥99）后用下面这条命令验：
+
+```bash
+python -m scripts.verify_sellersprite_mcp B08GHW4TBS
+```
+
+脚本默认只走 MCP，输出 `equivalent` / `degraded` / `unusable` 结论并列出缺失字段（`unusable` 时退出码为 1）。确需与 REST 逐字段对账再加 `--compare-rest`。REST 侧"每个服务仅可提交一次试用申请"，**验证 MCP 之前不要消耗 REST 试用名额**。
+
+**拿到 key 后**：写 `.env` 的 `MJJL_API_KEY=`，MCP 通道再加 `MJJL_TRANSPORT=mcp` → `python main.py run --category "Home & Kitchen" --limit 3` 端到端，确认 `market_analyses` 表有数据、demand/competition 维度真正进分。REST 通道可用 `python -c "from analyzers.maijiajingling import MaijiajinglingClient; print(MaijiajinglingClient().get_visits())"` 验额度；MCP 网关没有额度工具，余量只能到开放平台后台查看。
 
 **0.2.1 代码已就位**（无需等 key 即已写入，待 key 到位自动激活）：
 - `analyzers/maijiajingling.py` — `analyze_market()` 第 4 步接 `keyword_research()`，新增 `_extract_keyword_metrics()` 归一化 `searchVolume` / `monthlySearches` / `keywordDifficulty` / `opportunityScore` 等字段名，无显式机会指数时用搜索量+购买率+竞争度保守估算
 - `analyzers/scorer.py` — `score_demand()` 的 `monthly_sales` 改用 `est_monthly_sales`（真实/预估销量），`search_volume_monthly` 单独传入；`apply_hard_filters()` 的 `monthly_sales` 同步改为只看销量——修正此前"月销量 vs 月搜索量混用"导致硬筛语义不准的问题
 - `pipeline/orchestrator.py` — `MaijiajinglingClient` 改 `with` 上下文管理，自动关连接
+
+**MCP 通道代码已就位（2026-08-11）**：
+- `analyzers/sellersprite_mcp.py` — 新增。把 REST 端点翻译成 MCP 工具调用（`resolve_tool_call`）、把 `CallToolResult` 归一化回 `{code, message, data}` 信封（`parse_tool_result`），并提供与 `httpx.Client` 同形的 `SellerSpriteMcpTransport`。调用是纯 RPC，**不经过任何大模型**，无 token 消耗。会话通过后台线程上的常驻 event loop 复用，避免每次调用重新握手。
+- `analyzers/maijiajingling.py` — `__init__` 按 `MJJL_TRANSPORT` 选择 `_client`；`get_visits()` 在 MCP 下返回 `code=UNSUPPORTED` 而非报错。DTO 解析层未改动。
+- `config/settings.py` — 新增 `mjjl_transport` / `mjjl_mcp_url` / `mjjl_mcp_timeout_seconds`，默认仍为 `rest`。
+- `tests/test_sellersprite_mcp.py` — 44 个离线用例，覆盖路由、响应归一化、官方错误码映射、事件循环桥接、会话复用与重连，以及 `analyze_market()` 走 MCP 的端到端编排。
 
 ---
 

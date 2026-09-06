@@ -6,11 +6,59 @@ services:
     environment:
       # Formal deployment: never emit mock suppliers, regardless of .env.
       ALIBABA_ALLOW_MOCK_SUPPLIERS: "false"
+      # Chrome runs on the WSL/Windows host while exports are observed through
+      # this mounted data directory. Keep the host-visible path ephemeral.
+      WSL_DISTRO_NAME: ${WSL_DISTRO_NAME:-}
+      SELLERSPRITE_BROWSER_WSL_DOWNLOAD_DIR: ${PWD}/data/imports/sellersprite
+      # Docker Desktop resolves this host alias. start.ps1 verifies the endpoint
+      # from inside this container before declaring startup successful.
+      # This value is intentionally fixed for the container. A .env value of
+      # 127.0.0.1 would point back at the container rather than Windows.
+      BU_CDP_HTTP: http://host.docker.internal:9222
+      SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR: ${SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR:-}
     volumes:
       - ./data:/app/data
+      # When configured, mount Chrome's native Windows download folder at the
+      # same container path the importer observes. This avoids unreliable
+      # browser downloads to the WSL network share.
+      - ${SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR:-./data/imports/sellersprite}:/app/data/imports/sellersprite
     ports:
       - "127.0.0.1:8765:8765"   # local-only; drop "127.0.0.1:" prefix to expose remotely
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["agent-web", "--host", "0.0.0.0", "--port", "8765"]
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  selector-mcp:
+    profiles: ["assistant"]
+    build: .
+    image: amazon-selector:dev
+    env_file: .env
+    environment:
+      ALIBABA_ALLOW_MOCK_SUPPLIERS: "false"
+      SELECTOR_API_BASE_URL: http://amazon-selector:8765
+      SELECTOR_PUBLIC_BASE_URL: http://127.0.0.1:8765
+      SELECTOR_IDEMPOTENCY_PATH: /app/data/mcp_idempotency.json
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8766:8766"
+    depends_on:
+      - amazon-selector
+    command: ["selector-mcp", "--host", "0.0.0.0", "--port", "8766"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8766), 2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

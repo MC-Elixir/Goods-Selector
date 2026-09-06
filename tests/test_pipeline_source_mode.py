@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from types import SimpleNamespace
 
 import pytest
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
 from crawlers.amazon_search import AmazonSearchFailure, SearchPageDiagnostic
-from config.settings import settings
 from db.models import Base, ExecutionNode, RunLog
 from pipeline.orchestrator import run_pipeline
 
@@ -136,6 +136,47 @@ def test_category_source_mode_keeps_existing_bsr_crawler(monkeypatch, tmp_path):
         assert run.category == "Home & Kitchen"
         assert run.api_calls["source_mode"] == "category"
         assert run.api_calls["source_query"] == "Home & Kitchen"
+
+
+def test_formal_pipeline_rejects_seed_products(monkeypatch, tmp_path):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'research-seed.db'}",
+        future=True,
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+
+    @contextmanager
+    def temp_session_scope():
+        with session_local.begin() as session:
+            yield session
+
+    def fail_crawler(*args, **kwargs):
+        raise AssertionError("a scored research seed must not crawl Amazon again")
+
+    monkeypatch.setattr("pipeline.orchestrator.session_scope", temp_session_scope)
+    monkeypatch.setattr(settings, "mjjl_max_products_per_run", 0)
+    monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", fail_crawler)
+    monkeypatch.setattr("crawlers.amazon_search.search_amazon_products", fail_crawler)
+    monkeypatch.setattr("matchers.match_suppliers", lambda product: [])
+    monkeypatch.setattr("pipeline.orchestrator.rank_candidates", lambda records, top_n: [])
+
+    with pytest.raises(ValueError, match="Amazon crawler discovery is mandatory"):
+        run_pipeline(
+        category="Home & Kitchen",
+        source_mode="category",
+        limit=1,
+        marketplace="US",
+        export=False,
+        seed_products=[{
+            "asin": "B000000777",
+            "marketplace": "US",
+            "title": "Scored research candidate",
+            "price": 39.99,
+            "raw_data": {"research_fit_score": 91.0},
+        }],
+        )
 
 
 def test_keyword_captcha_becomes_human_required_with_sanitized_diagnostics(monkeypatch, tmp_path):

@@ -226,7 +226,7 @@ def build_seller_shortlist(
             eligible.append(item)
 
     eligible.sort(key=lambda entry: (entry.fit_score, entry.monthly_sales or 0), reverse=True)
-    excluded.sort(key=lambda entry: (entry.monthly_sales or 0), reverse=True)
+    excluded.sort(key=lambda entry: (entry.fit_score, entry.monthly_sales or 0), reverse=True)
 
     quality_summary = {
         "source_row_count": len(rows),
@@ -234,6 +234,8 @@ def build_seller_shortlist(
         "eligible_count": len(eligible),
         "excluded_count": len(excluded),
         "category_counts": _category_counts(eligible),
+        "scored_count": len(eligible) + len(excluded),
+        "score_summary": _score_summary([*eligible, *excluded]),
         "resolved_category": config.get("resolved_category"),
     }
     return SellerShortlist(
@@ -314,14 +316,10 @@ def _classify_and_score(
         fit_reasons=[],
     )
 
-    exclusion_reasons = _exclusion_reasons(item, config, brand_shares)
-    if exclusion_reasons:
-        item.excluded = True
-        item.exclusion_reasons = exclusion_reasons
-        item.fit_category = "excluded"
-        item.fit_category_label = "不适合参考"
-        return item
-
+    # The opportunity score is calculated for every aggregate, including
+    # records that fail a hard admission rule.  That keeps a high-demand
+    # product visible in the market-research ranking while its exclusion
+    # reason still prevents it from being presented as a recommended entry.
     category_key, label, reasons = _match_category(item, product_count, launch_months, config)
     score, factors = compute_fit_score(item, product_count, launch_months, config)
     item.fit_category = category_key
@@ -329,6 +327,14 @@ def _classify_and_score(
     item.fit_reasons = reasons
     item.fit_score = score
     item.fit_factors = factors
+
+    exclusion_reasons = _exclusion_reasons(item, config, brand_shares)
+    if exclusion_reasons:
+        item.excluded = True
+        item.exclusion_reasons = exclusion_reasons
+        item.fit_category = "excluded"
+        item.fit_category_label = "不适合参考"
+        return item
     return item
 
 
@@ -551,6 +557,21 @@ def _category_counts(items: list[SellerResearchItem]) -> dict[str, int]:
     for item in items:
         counts[item.fit_category] = counts.get(item.fit_category, 0) + 1
     return counts
+
+
+def _score_summary(items: list[SellerResearchItem]) -> dict[str, float | int | None]:
+    """Return a compact, non-misleading summary of all opportunity scores."""
+    scores = sorted(item.fit_score for item in items)
+    if not scores:
+        return {"average": None, "median": None, "max": None, "min": None}
+    midpoint = len(scores) // 2
+    median = scores[midpoint] if len(scores) % 2 else round((scores[midpoint - 1] + scores[midpoint]) / 2, 1)
+    return {
+        "average": round(sum(scores) / len(scores), 1),
+        "median": median,
+        "max": scores[-1],
+        "min": scores[0],
+    }
 
 
 def _field_label(field_name: str) -> str:

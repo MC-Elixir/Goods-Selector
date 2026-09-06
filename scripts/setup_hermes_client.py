@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Prepare the local single-client Hermes profile without printing secrets."""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ENV = PROJECT_ROOT / ".env"
+PROFILE_SOURCE = PROJECT_ROOT / "deployment" / "hermes" / "amazon-selector-profile"
+PROFILE_NAME = "amazon-selector-client"
+MIN_HERMES_VERSION = (0, 20, 0)
+MAX_HERMES_VERSION = (0, 21, 0)
+RUNTIME_DEFAULTS = {
+    "DATABASE_URL": "sqlite:///data/amazon_selector.db",
+    "ALIBABA_ALLOW_MOCK_SUPPLIERS": "false",
+    "ENABLE_SCRAPLING_MATCHER": "false",
+    "LOG_DIR": "data/logs",
+    "BU_CDP_HTTP": "http://host.docker.internal:9222",
+}
+
+
+def _read_env(path: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return result
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        result[key.strip()] = value.strip().strip('"').strip("'")
+    return result
+
+
+def _update_env(path: Path, values: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+    remaining = dict(values)
+    output: list[str] = []
+    for line in lines:
+        if "=" not in line or line.lstrip().startswith("#"):
+            output.append(line)
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in remaining:
+            output.append(f"{key}={remaining.pop(key)}")
+        else:
+            output.append(line)
+    if remaining:
+        if output and output[-1].strip():
+            output.append("")
+        output.append("# Hermes / Selector MCP（由 setup_hermes_client.py 管理）")
+        output.extend(f"{key}={value}" for key, value in remaining.items())
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    os.chmod(path, 0o600)
+
+
+def _absent_or_blank(current: dict[str, str], key: str) -> bool:
+    return not str(current.get(key) or "").strip()
+
+
+def _resolve_openai_model_env(current: dict[str, str]) -> dict[str, str]:
+    requested = str(current.get("MODEL_API_PROVIDER") or "auto").strip().lower().replace("-", "_")
+    candidates = {
+        "aliyun_token_plan": (
+            "ALIYUN_TOKEN_PLAN_API_KEY", "ALIYUN_TOKEN_PLAN_API_BASE",
+            "ALIYUN_TOKEN_PLAN_TEXT_MODEL",
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "qwen-plus",
+        ),
+        "aliyun": (
+            "ALIYUN_API_KEY", "ALIYUN_API_BASE", "ALIYUN_TEXT_MODEL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus",
+        ),
+        "ppio": (
+            "PPIO_API_KEY", "PPIO_API_BASE", "PPIO_TEXT_MODEL",
+            "https://api.ppio.com/openai", "minimax/minimax-m3",
+        ),
+    }
+    order = [requested] if requested in candidates else ["aliyun_token_plan", "aliyun", "ppio"]
+    for provider in order:
+        key_name, base_name, model_name, default_base, default_model = candidates[provider]
+        key = str(current.get(key_name) or "").strip()
+        if key:
+            return {
+                "provider": provider,
+                "key": key,
+                "base_url": str(current.get(base_name) or default_base).strip(),
+                "model": str(current.get(model_name) or default_model).strip(),
+            }
+    return {"provider": "none", "key": "", "base_url": "", "model": ""}
+
+
+def prepare_project_env() -> dict[str, str]:
+    current = _read_env(PROJECT_ENV)
+    model_api = _resolve_openai_model_env(current)
+    if model_api["provider"] == "none" and _absent_or_blank(current, "ANTHROPIC_API_KEY"):
+        raise SystemExit(
+            "请在 .env 填写 ALIYUN_TOKEN_PLAN_API_KEY、ALIYUN_API_KEY、PPIO_API_KEY 或 ANTHROPIC_API_KEY。"
+        )
+    token = current.get("SELECTOR_MCP_TOKEN") or secrets.token_urlsafe(32)
+    if len(token) < 24:
+        raise SystemExit("现有 SELECTOR_MCP_TOKEN 少于 24 位，请删除后重新运行或换用强随机值。")
+    runtime = {
+        key: current[key] if not _absent_or_blank(current, key) else default
+        for key, default in RUNTIME_DEFAULTS.items()
+    }
+    values = {
+        "SELECTOR_MCP_TOKEN": token,
+        "SELECTOR_HERMES_MODEL": current.get("SELECTOR_HERMES_MODEL") or model_api["model"],
+        "SELECTOR_HERMES_MODEL_BASE_URL": current.get("SELECTOR_HERMES_MODEL_BASE_URL") or model_api["base_url"],
+        "SELECTOR_HERMES_MODEL_API_KEY": current.get("SELECTOR_HERMES_MODEL_API_KEY") or model_api["key"],
+    }
+    _update_env(PROJECT_ENV, {**runtime, **values})
+    return values
+
+
+def _hermes_version(hermes: str) -> tuple[int, int, int]:
+    result = subprocess.run(
+        [hermes, "version"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    match = re.search(r"\bv?(\d+)\.(\d+)\.(\d+)\b", result.stdout)
+    if not match:
+        raise SystemExit("无法识别 Hermes 版本；请安装兼容的 0.20.x 版本后重试。")
+    return tuple(int(part) for part in match.groups())
+
+
+def ensure_compatible_hermes(hermes: str) -> None:
+    version = _hermes_version(hermes)
+    if not MIN_HERMES_VERSION <= version < MAX_HERMES_VERSION:
+        raise SystemExit(
+            "Hermes 版本不兼容：需要 >=0.20.0,<0.21.0，"
+            f"当前为 {'.'.join(map(str, version))}。"
+        )
+
+
+def install_profile(values: dict[str, str]) -> Path:
+    hermes = shutil.which("hermes")
+    if not hermes:
+        raise SystemExit(
+            "未找到 hermes 命令。请先按 Hermes Agent 官方文档安装兼容的 0.20.x 版本，再重新运行。"
+        )
+    ensure_compatible_hermes(hermes)
+    profile_dir = Path.home() / ".hermes" / "profiles" / PROFILE_NAME
+    if profile_dir.exists():
+        command = [
+            hermes, "profile", "update", PROFILE_NAME, "--force-config", "--yes",
+        ]
+    else:
+        command = [
+            hermes, "profile", "install", str(PROFILE_SOURCE), "--name", PROFILE_NAME,
+            "--alias", "--yes",
+        ]
+    subprocess.run(command, cwd=PROJECT_ROOT, check=True)
+    profile_env = profile_dir / ".env"
+    _update_env(profile_env, values)
+    return profile_env
+
+
+def start_services() -> None:
+    subprocess.run(
+        ["docker", "compose", "--profile", "assistant", "up", "-d", "--build", "amazon-selector", "selector-mcp"],
+        cwd=PROJECT_ROOT,
+        check=True,
+    )
+    wait_for_mcp_ready()
+
+
+def wait_for_mcp_ready(*, url: str = "http://127.0.0.1:8766/mcp", timeout_seconds: int = 90) -> None:
+    """Block until MCP answers (401 unauthenticated is healthy), avoiding Hermes race."""
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "未开始探测"
+    while time.monotonic() < deadline:
+        try:
+            request = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(request, timeout=3) as response:
+                status = getattr(response, "status", 200)
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+        except Exception as exc:  # noqa: BLE001 - probe must keep retrying on any connect failure
+            last_error = str(exc)
+            time.sleep(1)
+            continue
+        # Ready when the process is up and auth gate is active (or openly serving).
+        if status in {200, 401, 405, 406}:
+            print(f"MCP 已就绪（HTTP {status}）。")
+            return
+        last_error = f"HTTP {status}"
+        time.sleep(1)
+    raise SystemExit(f"等待 MCP 就绪超时（{timeout_seconds}s）：{last_error}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="配置 Amazon Selector 的 Hermes 单客户入口")
+    parser.add_argument("--install-profile", action="store_true", help="安装/更新 Hermes profile")
+    parser.add_argument("--start", action="store_true", help="构建并启动 WebUI 与 MCP 服务")
+    args = parser.parse_args()
+
+    values = prepare_project_env()
+    print("已准备项目配置；MCP 密钥已安全写入 .env（未显示）。")
+    if not values["SELECTOR_HERMES_MODEL_API_KEY"] and (args.install_profile or args.start):
+        raise SystemExit("尚未配置 Hermes 文本模型密钥，请配置阿里云、Token Plan、PPIO 或 SELECTOR_HERMES_MODEL_API_KEY。")
+    if args.install_profile:
+        profile_env = install_profile(values)
+        print(f"Hermes profile 已安装：{PROFILE_NAME}（环境文件：{profile_env}）")
+    if args.start:
+        start_services()
+        print(
+            "服务已启动：操作页 http://127.0.0.1:8765/operator，"
+            "一键研究 http://127.0.0.1:8765，MCP http://127.0.0.1:8766/mcp"
+        )
+    if not args.install_profile and not args.start:
+        print("下一步：加 --install-profile --start 完成安装和启动。")
+
+
+if __name__ == "__main__":
+    main()

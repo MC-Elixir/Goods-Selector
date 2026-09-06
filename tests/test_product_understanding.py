@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+import traceback
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-import traceback
 
 import pytest
 
+from matchers import vision_analyzer as vision_analyzer_module
 from matchers.product_understanding import (
     ProductUnderstandingError,
     product_image_urls,
     understand_amazon_product,
 )
 from matchers.vision_analyzer import VisionAnalyzer
-from matchers import vision_analyzer as vision_analyzer_module
 
 
 class FakeAnalyzer:

@@ -1,17 +1,16 @@
 """1688 offer detail parsing and supplier enrichment."""
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
-from typing import Any, TypedDict
 from html import unescape
+from typing import Any, TypedDict
 
 from domain.target_categories import profile_from_text
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.product_spec import spec_from_text
-
 
 _PRICE_TIER_RE = re.compile(r"(\d{1,6})\s*(?:件|个|只|pcs?|起)\s*(?:[¥￥]\s*)?(\d+(?:\.\d+)?)", re.I)
 _MOQ_RE = re.compile(r"(?:起订量|起批量|最小起订|MOQ|min(?:imum)?\s*order)\D{0,12}(\d{1,6})", re.I)
@@ -102,7 +101,7 @@ def parse_1688_offer_detail(raw: str | dict[str, Any]) -> dict[str, Any]:
     customization = _first_present(data, "supportCustom", "customization", "isCustomized")
     package_quantity = spec.pack_count
     if category_profile and category_profile.numeric.get("piece_count") is not None:
-        package_quantity = int(category_profile.numeric["piece_count"])
+        package_quantity = int(category_profile.numeric["piece_count"])  # type: ignore[arg-type]
     product_type = None
     function = None
     if category_profile:
@@ -260,7 +259,7 @@ def apply_1688_detail_to_supplier(supplier: SupplierDTO, raw: str | dict[str, An
                 "patio_umbrellas_shade": "户外遮阳",
             }[profile.category_id])
             if profile.numeric.get("piece_count") is not None:
-                detail.setdefault("package_quantity", int(profile.numeric["piece_count"]))
+                detail.setdefault("package_quantity", int(profile.numeric["piece_count"]))  # type: ignore[arg-type]
     if not isinstance(detail.get("factory_evidence"), dict):
         detail["factory_evidence"] = {
             key: detail.get(key)
@@ -311,7 +310,10 @@ def _factory_flag(value: Any) -> bool | None:
 
 
 def _raise_if_blocked(html: str) -> None:
-    lowered = (html or "").lower()
+    # Normal offer pages can bundle anti-bot JavaScript containing words such
+    # as "captcha" even when no verification UI is shown. Only visible page
+    # text is authoritative for a human-action handoff.
+    lowered = _html_text(html or "").lower()
     for error_code, markers in _BLOCK_MARKERS:
         matches = [marker for marker in markers if marker.lower() in lowered]
         if matches:

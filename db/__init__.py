@@ -1,2 +1,2 @@
 """Database package."""
-from db.session import SessionLocal, session_scope, engine  # noqa: F401
+from db.session import SessionLocal, engine, session_scope  # noqa: F401

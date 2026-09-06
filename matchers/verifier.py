@@ -24,12 +24,12 @@ from dataclasses import asdict
 from typing import Optional
 
 from loguru import logger
+from pydantic import ValidationError
 
 from agent.cancellation import CancelCheck, CancellationRequested, raise_if_cancelled
 from domain.target_categories import compare_target_profiles, profile_from_product, profile_from_supplier
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.product_spec import compare_specs, spec_from_product, spec_from_supplier
-from pydantic import ValidationError
 from schemas.sourcing import VisionMatchResult
 
 VISION_MATCH_PROMPT_VERSION = "supplier-visual-match-v1"
@@ -48,6 +48,7 @@ class VisionVerificationError(RuntimeError):
 
     def __init__(self, code: str):
         self.code = code
+        self.error_code = code.upper()
         super().__init__(code)
 
 
@@ -206,7 +207,7 @@ class Alibaba1688Verifier:
     def _attribute_score(self, supplier, analysis):
         if analysis is None:
             return SCORE_DEFAULT
-        checks = 0; passed = 0
+        checks = 0; passed = 0.0
         if analysis.material:
             checks += 1
             if supplier.material and _material_match(analysis.material, supplier.material):
@@ -306,16 +307,16 @@ class LLMVisualVerifier:
         from config.settings import settings
         resolved = settings.vision_provider if provider == "auto" else provider
         self._provider = resolved if resolved != "none" else "ppio"
-        if self._provider not in {"ppio", "anthropic"}:
+        if self._provider not in {"ppio", "aliyun", "aliyun_token_plan", "anthropic"}:
             raise ValueError("未知视觉验证 provider")
         if self._provider == "anthropic":
             self._api_key = api_key or settings.anthropic_api_key
             self._api_base = api_base
             self._model = model or settings.anthropic_model
         else:
-            self._api_key = api_key or settings.ppio_api_key
-            self._api_base = api_base or settings.ppio_api_base
-            self._model = model or settings.ppio_model or "qwen/qwen2.5-vl-72b-instruct"
+            self._api_key = api_key or settings.openai_compatible_api_key
+            self._api_base = api_base or settings.openai_compatible_api_base
+            self._model = model or settings.openai_compatible_vision_model or "qwen3-vl-plus"
         self._provider_client = provider_client or _ConfiguredVisionClient(self)
         if provider_client is None and not self._api_key:
             raise ValueError("视觉验证 API key 未配置")
@@ -449,10 +450,16 @@ class LLMVisualVerifier:
         }, ensure_ascii=False, sort_keys=True, default=str)
 
     def _call_task_b(self, images, prompt) -> dict:
+        from config.settings import settings
+
+        client = None
         try:
-            if self._provider == "ppio":
+            if self._provider in {"ppio", "aliyun", "aliyun_token_plan"}:
                 import openai
-                client = openai.OpenAI(api_key=self._api_key, base_url=self._api_base)
+                client = openai.OpenAI(
+                    api_key=self._api_key, base_url=self._api_base,
+                    timeout=settings.llm_request_timeout_seconds, max_retries=0,
+                )
                 content = []
                 for side in ("amazon", "supplier"):
                     content.append({"type": "text", "text": f"{side} 图片："})
@@ -461,19 +468,21 @@ class LLMVisualVerifier:
                 content.append({"type": "text", "text": prompt})
                 response = client.chat.completions.create(
                     model=self._model, max_tokens=1536,
-                    messages=[{"role": "user", "content": content}],
+                    messages=[{"role": "user", "content": content}],  # type: ignore[list-item,misc]
                 )
                 text = response.choices[0].message.content
             else:
                 import anthropic
-                client = anthropic.Anthropic(api_key=self._api_key)
+                client = anthropic.Anthropic(  # type: ignore[assignment]
+                    api_key=self._api_key, timeout=settings.llm_request_timeout_seconds, max_retries=0,
+                )
                 content = []
                 for side in ("amazon", "supplier"):
                     content.append({"type": "text", "text": f"{side} 图片："})
                     content.extend(self._anthropic_task_image_block(image, media_type)
                                    for image, media_type in images[side])
                 content.append({"type": "text", "text": prompt})
-                response = client.messages.create(
+                response = client.messages.create(  # type: ignore[attr-defined]
                     model=self._model, max_tokens=1536,
                     messages=[{"role": "user", "content": content}],
                 )
@@ -484,8 +493,22 @@ class LLMVisualVerifier:
             return parsed
         except (VisionVerificationError,):
             raise
-        except Exception:
-            raise VisionVerificationError("provider_failure") from None
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            name = type(exc).__name__.lower()
+            code = "provider_failure"
+            if status in {401, 403}:
+                code = "auth_required"
+            elif status == 429:
+                code = "rate_limit"
+            elif "timeout" in name:
+                code = "timeout"
+            elif "connection" in name or (isinstance(status, int) and status >= 500):
+                code = "temporarily_unavailable"
+            raise VisionVerificationError(code) from None
+        finally:
+            if client is not None:
+                client.close()
 
     @staticmethod
     def _openai_task_image_block(image: bytes, media_type: str) -> dict:

@@ -1,10 +1,12 @@
 # Amazon Selector
 
-Amazon Best Seller 选品自动化系统。给定一个 Amazon 类目 → 爬取 BSR 榜单产品 → 视觉识别 + 1688 爬虫匹配货源 → 利润预测 → 6 维度评分 → 硬性筛选 → 排名 → 导出候选选品池（Excel / Markdown / JSON）。
+Amazon US 选品自动化系统。正式流程固定为：Amazon 类目/关键词爬虫 → 每 ASIN
+卖家精灵市场证据 → 卖家精灵插件“1688 找货” → 利润与评分 → 单个 Excel 工作簿。
+插件不可用、未登录、无权限、额度不足或验证码会暂停并要求人工处理，不会静默切换
+1688 Open API、Scrapling、普通 Playwright、导入数据或 mock。
 
 当前兼容入口仍是 7 阶段 deterministic pipeline；Phase 3 的 `--mode agent`
-有限状态循环尚未实现。最新的 Phase 1–2 验证结果及外部数据阻塞见
-[审计报告](docs/audits/2026-07-10-phase1-phase2-results.md)。
+有限状态循环尚未实现。
 
 ## 四类户外产品精准寻源
 
@@ -35,7 +37,7 @@ cd amazon_selector
 pip install -r requirements.txt
 playwright install chromium          # Amazon / 1688 爬虫需要
 
-# 2. 配置环境变量（参考 .env 已有的模板，至少填 PPIO_API_KEY 用于视觉识别）
+# 2. 配置环境变量（至少配置一种阿里云 Token Plan、百炼、PPIO 或 Anthropic 模型 API）
 #    首次跑前需登录拿 cookies（见下"登录"小节）
 
 # 3. 初始化数据库（SQLite，自动应用版本化迁移）
@@ -61,10 +63,90 @@ docker compose up -d --build amazon-selector
 # 打开 http://127.0.0.1:8765
 ```
 
+Windows 日常使用可直接运行项目根目录的 `start.ps1`：它检查/启动仅监听本机的
+9222 专用 Chrome，从容器内验证 `host.docker.internal:9222` 的实际 CDP 路径，再启动
+唯一必需服务并打开 WebUI。CDP 失败会停止服务；SellerSprite 未就绪会保留 WebUI 供
+配置并给出可操作警告。Hermes 与 MCP sidecar 均为可选能力。
+
 `python main.py agent-web` 仅用于本机调试备用，不建议作为日常启动方式，否则很容易和 Docker 同时开出两套服务。
+
+### 单甲方自然语言入口（Hermes）
+
+本项目为单个甲方提供了一个受控 Hermes 入口。结论是：当前阶段不重新开发 Agent
+壳，也不接飞书，采用 **Hermes 0.20.x + 本项目专用 MCP sidecar + 极简人工处理页**。
+现有 pipeline、SQLite 和导出逻辑不变，Hermes 只负责对话和调用 19 个经过白名单审查
+的选品工具。
+
+甲方本机最小前置：
+
+1. 已安装 Docker 与 Hermes 0.20.x
+2. 在项目 `.env` 配置阿里云 Token Plan、阿里云百炼、PPIO 或 Anthropic 模型密钥
+3. 安装后在 9222 专用 Chrome 登录卖家精灵插件，并在 WebUI 完成 Amazon / 1688 登录
+
+不需要 `MJJL_API_KEY`、`KEEPA_API_KEY`、`RAINFOREST_API_KEY`。Amazon 默认走爬虫；
+卖家精灵市场分析走浏览器导出。`SELECTOR_MCP_TOKEN` 由脚本自动生成，不会打印。
+
+```bash
+# 前提：已经按 Hermes 官方方式安装 0.20.x，并在 .env 配置受支持的模型 API
+chmod +x scripts/start_hermes_client.sh
+./scripts/start_hermes_client.sh
+```
+
+一键脚本会准备密钥、安装 `amazon-selector-client` profile、启动 WebUI/MCP，并进入
+中文对话。人工登录、验证码或任务续跑时打开操作页；一键研究走 WebUI 首页：
+
+```text
+http://127.0.0.1:8765/operator
+http://127.0.0.1:8765
+```
+
+安全边界：MCP 只监听 `127.0.0.1:8766` 并要求 Bearer Token；Hermes profile 禁用
+终端、文件、通用浏览器、搜索、记忆、定时任务、消息和委派；MCP 再做精确工具白名单；
+所有写操作同时经过 Hermes `untrusted` 审批和 `confirm=true` 业务确认；启动任务固定
+Amazon US、No-Mock，先过 preflight，并使用持久化 request_id 防止重复下单式执行。
+
+详细安装、验收与交付边界见
+[从零部署与使用](docs/ZERO_TO_RUN.md)和
+[Hermes profile 说明](deployment/hermes/amazon-selector-profile/README.md)。
+
+选型原因：Hermes 已提供 profile distribution、中文桌面/CLI、HTTP MCP、Header 鉴权、
+工具 include 白名单和不可信 MCP 审批，适合目前“一个客户、尽快可用”的阶段；Pi 的
+界面和扩展能力很强，但定位更偏开发者编码 TUI，需要另外开发 TypeScript extension、
+业务确认与交付壳；自研 Agent 的可控性最高，但此时要自行承担会话、工具调度、审批、
+升级和客户端体验，收益不足。等出现多租户、品牌化桌面端、细粒度审计/计费或离线部署
+要求，再把当前 MCP 契约复用到自研壳中。
+
+### 一键正式选品
+
+WebUI 的兼容按钮仍显示“一键研究”，但其正式语义已统一为 Amazon US 类目/关键词
+选品。同一个可恢复 Job 会依次完成：
+
+1. 检查 Chrome、卖家精灵、Amazon 与 1688 登录态；
+2. 必须先运行 Amazon crawler，得到真实商品和详情；
+3. 对每个 ASIN 获取卖家精灵反查关键词/市场证据，并仅通过插件“1688 找货”发现候选；
+4. 输出一个含五个工作表的 Excel；JSON 仅作为后台机器数据保留。
+
+遇到登录、权限、额度或验证码时，任务会保留进度并显示“我已处理，继续任务”；
+任务结束后页面会显示一份约 20 秒可完成的体验反馈表，记录到本机
+`data/trial_feedback.json`。页面下方“试用验收”会自动汇总，并只在以下门槛全部
+通过后显示“可进入安装包”：
+
+- 至少 3 次已经结束的一键研究任务反馈；
+- “Amazon 类目列表”和“Amazon 搜索列表”两种入口都至少完成一次真实试用；
+- 至少 2/3 的任务完成包含五个工作表的单一 Excel 交付；
+- 平均操作顺畅度不低于 4.0 / 5；
+- 平均报告帮助度不低于 4.0 / 5；
+- 至少 2/3 的反馈愿意继续使用；
+- 至少 2/3 的反馈没有主要卡点。
+
+反馈接口会核对 Job 确实存在且已经结束，运行中或伪造 Job 的反馈不纳入统计。
+无真实供应商证据时不会以 Mock 结果补齐。试用时建议让甲方通过远程桌面操作这台
+已准备好登录态的电脑，或由你共享屏幕并交出鼠标控制。不要直接把 8765 或 9222
+暴露到公网；WebUI 当前没有登录鉴权，9222 还可读取专用浏览器的页面与登录态。
 
 WebUI 能做：
 
+- 一键正式选品：Amazon crawler → 逐 ASIN 卖家精灵市场证据 → 卖家精灵 1688 找货 → 单一 Excel 交付。
 - 运行前 preflight：检查 PPIO、Amazon cookies、1688 cookies、数据库、导出目录、1688 cooldown。
 - 当 Amazon/1688 cookies 缺失时，主动显示登录态补充卡：先尝试从用户授权的
   9222 专用 Chrome 捕获站点 cookies；如尚未登录，则在该 Chrome 中打开登录页，
@@ -106,17 +188,17 @@ Agent 能访问这个专用 profile 中的页面、cookies 和登录态。
 ### SellerSprite 反查关键词浏览器导出（受控功能）
 
 这项功能与上面的通用 Browser Assistant 相互独立：它只处理一个 Amazon **US**
-ASIN 的 SellerSprite 可见反查关键词导出。默认**关闭**，且仓库不会提供或猜测
-SellerSprite locator profile。当前真实页面调查状态见
-[docs/research/sellersprite_dom_investigation.md](docs/research/sellersprite_dom_investigation.md)。
+ASIN 的 SellerSprite 可见反查关键词导出。浏览器能力默认**开启**，但导出仍会在
+没有已审查的 SellerSprite locator profile 时被保护性拦截；仓库不会提供或猜测
+该 profile。
 
 启用前必须由已登录 SellerSprite 的用户在可见 Chrome 中亲自确认，并先完成真实
 DOM、导出表头、扩展版本和 Windows 宿主机到 Docker 下载目录映射的脱敏记录。把
 经过审查的 locator profile 保存在本机受控目录，不要提交 cookies、账号、密钥或
-profile 内容到仓库。常态配置保持：
+profile 内容到仓库。如需显式覆盖默认值：
 
 ```dotenv
-SELLERSPRITE_BROWSER_ENABLED=false
+SELLERSPRITE_BROWSER_ENABLED=true
 ```
 
 在用户明确批准且上述记录完成后，可在正式 WebUI 的 SellerSprite 卡片中保存本机
@@ -191,7 +273,7 @@ docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -e LOG_DIR=/app/data/logs \
 
 数据持久化：`./data:/app/data` 卷挂载，SQLite 数据库、缓存、cookies、导出文件、日志都落在这里。首次启动时 entrypoint 会自动创建 `cache/`、`exports/`、`images/`、`logs/` 并跑 `init-db` 建表。
 
-环境变量：按 [部署说明](docs/DEPLOYMENT.md) 手工创建仅供本机使用、不得提交的 `.env`，至少需要 `PPIO_API_KEY`（视觉识别）。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，容器通过卷挂载读取。关键变量：`PPIO_API_KEY`（视觉识别，必需）、`KEEPA_API_KEY`/`RAINFOREST_API_KEY`（Amazon API 抓取，可选，否则走 scrapling）、`MJJL_API_KEY`（卖家精灵市场分析，可选）、`ALIBABA_DETAIL_ENRICH_LIMIT=2`（每个商品最多补全的 1688 详情候选数）、`LOG_DIR=data/logs`（日志目录）、`ALIBABA_ALLOW_MOCK_SUPPLIERS=false`（正式跑保持 `false`）。
+环境变量：按 [部署说明](docs/DEPLOYMENT.md) 手工创建仅供本机使用、不得提交的 `.env`，至少配置一种受支持的模型 API；推荐公司部署使用阿里云 Token Plan 或百炼按量付费。Amazon/1688 爬虫需要 cookies——在宿主机跑 `setup_amazon_login.py` / `setup_1688_login.py` 生成后放入 `data/`，或在 WebUI 登录卡片完成。本次交付不需要 `KEEPA_API_KEY` / `RAINFOREST_API_KEY`（不配则 Amazon 走 scrapling 爬虫）和 `MJJL_API_KEY`（市场分析走 9222 Chrome 卖家精灵插件）。关键变量还包括 `ALIBABA_DETAIL_ENRICH_LIMIT=2`、`LOG_DIR=data/logs`、`ALIBABA_ALLOW_MOCK_SUPPLIERS=false`。
 
 本机调试备用入口：
 
@@ -254,8 +336,7 @@ python main.py resume-run --run-id <run_id>
 `/api/runs/{run_id}/nodes/{node_id}/attempts`；节点操作必须携带当前
 `resume_token`，过期页面不能覆盖较新的恢复操作。
 
-详细状态机、故障模型和验收矩阵见
-[ASIN 级可恢复执行基础设施设计](docs/superpowers/specs/2026-07-15-asin-recoverable-execution-design.md)。
+详细状态机、故障模型和验收矩阵见 `execution/` 模块实现。
 
 ## 目录结构
 
@@ -274,8 +355,7 @@ amazon_selector/
 ├── data/                   # 缓存、cookies、导出文件、SQLite（.gitignore，不入库）
 ├── docs/                   # PRD / database_schema / scoring_spec / 选品参考
 ├── STATUS.md               # 当前状态 + 已知问题 + 下一轮计划
-├── CHANGELOG.md            # 变更日志（Keep a Changelog）
-└── SHOWCASE.md             # 展示文档（架构图 + 测试结果 + 成果指引）
+└── CHANGELOG.md            # 变更日志（Keep a Changelog）
 ```
 
 ## 关键设计
@@ -291,9 +371,9 @@ amazon_selector/
 
 ## 文档
 
-- [SHOWCASE.md](SHOWCASE.md) — 展示文档：系统介绍、架构图、测试结果、成果文件指引
 - [STATUS.md](STATUS.md) — 当前状态、已知问题、下一轮计划
 - [CHANGELOG.md](CHANGELOG.md) — 版本变更日志
 - [docs/PRD.md](docs/PRD.md) — 产品需求文档
 - [docs/scoring_spec.md](docs/scoring_spec.md) — 评分维度公式与示例
 - [docs/database_schema.md](docs/database_schema.md) — 数据库表设计
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — 部署指南

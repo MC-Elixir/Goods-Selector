@@ -227,16 +227,16 @@ def _llm_answer_if_available(
 ) -> dict[str, Any]:
     if not use_llm:
         return {"answer": deterministic_answer, "used_tools": [], "meta": {}}
-    if not settings.ppio_api_key or not _HAS_OPENAI:
+    if not settings.openai_compatible_api_key or not _HAS_OPENAI:
         return {"answer": deterministic_answer, "used_tools": [], "meta": {"llm_status": "skipped"}}
     try:
         client = _openai.OpenAI(
-            api_key=settings.ppio_api_key,
-            base_url=settings.ppio_api_base,
+            api_key=settings.openai_compatible_api_key,
+            base_url=settings.openai_compatible_api_base,
             timeout=float(settings.llm_request_timeout_seconds),
         )
         response = client.chat.completions.create(
-            model=settings.ppio_text_model,
+            model=settings.openai_compatible_text_model,
             temperature=0.2,
             max_tokens=1200,
             messages=[{
@@ -253,7 +253,7 @@ def _llm_answer_if_available(
         answer = (response.choices[0].message.content or "").strip()
         if not answer:
             raise ValueError("empty LLM response")
-        model = settings.ppio_text_model
+        model = settings.openai_compatible_text_model
         return {
             "answer": answer,
             "used_tools": [f"llm:{model}"],

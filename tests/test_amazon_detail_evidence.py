@@ -1,9 +1,10 @@
+from scrapling.parser import Adaptor
+
 from crawlers._amazon_extractors import extract_amazon_detail
 from crawlers.amazon_bsr import ProductDTO
-from crawlers.amazon_search import apply_detail_evidence
 from crawlers.amazon_playwright import AmazonPlaywrightScraper
 from crawlers.amazon_scrapling import AmazonScraplingScraper
-from scrapling.parser import Adaptor
+from crawlers.amazon_search import apply_detail_evidence
 
 
 class FakePage:

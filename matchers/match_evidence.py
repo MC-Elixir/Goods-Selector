@@ -6,8 +6,8 @@ import re
 from statistics import mean
 from typing import Any
 
-from analyzers.profit_model import normalize_positive_number, normalize_price_tier
 from agent.provenance import trusted_evidence_value
+from analyzers.profit_model import normalize_positive_number, normalize_price_tier
 from domain.target_categories import (
     TARGET_CATEGORY_IDS,
     TargetCategoryProfile,
@@ -17,7 +17,6 @@ from domain.target_categories import (
 from matchers.brand_safety import brand_tokens, contains_brand_term
 from matchers.product_spec import ProductSpec, compare_specs, spec_from_supplier, spec_from_text
 from schemas.sourcing import AmazonProductUnderstanding, MatchEvidence
-
 
 CRITICAL_EVIDENCE = ("function", "package_quantity", "product_type", "price", "moq")
 HARD_SPEC_CONFLICTS = {"capacity", "dimensions", "material", "pack_count"}
@@ -348,5 +347,5 @@ def build_match_evidence(
         mismatch_reasons=list(dict.fromkeys(mismatch)),
         missing_evidence=sorted(set(missing)),
         passed_reasons=list(dict.fromkeys(passed)),
-        decision=decision,
+        decision=decision,  # type: ignore[arg-type]
     )

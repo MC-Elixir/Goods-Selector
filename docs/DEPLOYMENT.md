@@ -2,40 +2,101 @@
 
 本指南覆盖本地运行、Docker 部署、`.env` 配置、首次登录 cookies、运行选品任务、导出报告和 WebUI 查看结果。
 
+## 甲方本机最小安装
+
+当前交付只要求：
+
+1. 本机已安装 Docker Desktop 与 Google Chrome
+2. 项目 `.env` 配置运行所需密钥
+3. 在 9222 专用 Chrome 登录卖家精灵插件、Amazon 和 1688
+4. 在 Amazon.com 左上角配送地址设置美国邮编（例如 `10004`），确认页面显示美国
+   配送城市和邮编后再保存登录态。其他有效美国邮编也可使用；更换客户机或登录态后
+   重新检查，避免配送地区影响商品可售状态、价格和搜索结果。
+
+默认不需要填写 `MJJL_API_KEY`、`KEEPA_API_KEY`、`RAINFOREST_API_KEY`。Amazon 不配
+Keepa/Rainforest 时走爬虫；卖家精灵市场分析可走浏览器导出。若已购买卖家精灵开放平台
+能力，也可设置 `MJJL_TRANSPORT=mcp` 使用官方 MCP 获取市场数据，但插件“1688 找货”
+仍是正式供应商发现路径。`SELECTOR_MCP_TOKEN` 由安装脚本自动生成。
+
+Windows 首次安装或更新代码后在项目根目录运行 `./start.ps1 -Build`；日常启动运行
+`./start.ps1`，复用已构建镜像。其他系统运行
+`docker compose up -d --build amazon-selector`。数据库初始化由容器入口自动完成。
+`start.ps1` 不假定 Windows loopback 一定能被 Docker Desktop 转发：它先等待 Windows
+`127.0.0.1:9222/json/version`，再从 `amazon-selector` 内通过
+`host.docker.internal:9222` 解析当前 CDP WebSocket 并验证端口可达。CDP 任一步失败都会
+停止服务并打印分阶段诊断。SellerSprite locator、下载目录或插件会话未就绪时 WebUI
+会保留用于完成配置，但脚本明确警告不要开始正式任务。不要为了绕过检查把 9222
+裸暴露到局域网或公网。
+
+Windows 下载映射默认由 `start.ps1` 设置为项目下的 `data/imports/sellersprite`。
+需要其他目录时，在私有 `.env` 中设置 `SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR`
+为 Windows 绝对路径；该路径同时提供给 Chrome 和 Compose 的 bind mount。
+WebUI 的“目录已确认”字段不会修改宿主机挂载，改变目录后须重新运行启动脚本。
+还需在专用 Chrome 的 `chrome://settings/downloads` 中将默认下载目录设置为同一
+Windows 目录，并关闭“下载前询问每个文件的保存位置”。卖家精灵扩展下载可能不采用
+CDP 设置的目录；应以一次真实导出在容器映射目录中出现且可解析作为下载验收依据。
+正式 preflight 必须找到反查关键词与 1688 找货两组 locator，并在专用 Chrome
+的 Amazon 页面中观察到已登录的插件面板；检查不会执行导出或消耗找货额度。
+定位档的 `product_packaging` 应指向经核验的当前 ASIN 包装信息区。当前中文插件会读取
+明确标注的“包装尺寸”和“包装重量”，保存原文、来源和时间后用于物流计算；商品展开
+尺寸、两维尺寸或缺项不能补成装箱数据。包装数据缺失时仍保留待核验状态。
+在 `/operator` 完成登录和美国配送邮编设置后点击保存登录态，将当前会话同步到后台
+Cookie 文件；后续修改配送地址后也需再次保存。
+
+重启 Windows 后先登录桌面、启动 Docker Desktop，再运行 `start.ps1`。容器自动
+重启不代表专用 Chrome 已恢复；运行期间不要休眠或关闭该 Chrome。升级前停止
+项目服务并备份 `data/` 和 `.env`；备份不能替代目标客户机上的一次真实单商品验收。
+运行日志保存在 `data/logs/runtime.log`，按 10 MB 轮转并保留 14 天；Docker 日志每个
+服务最多保留 3 个 10 MB 文件。业务节点、结果快照及导出哈希继续保存在 SQLite。
+
+地址：
+
+```text
+http://127.0.0.1:8765/operator   # 人工登录 / 验证码 / 续跑
+http://127.0.0.1:8765            # 一键研究
+http://127.0.0.1:8766/mcp        # 可选 assistant profile / MCP
+```
+
+需要代理才能构建镜像时，在宿主机导出 `HTTP_PROXY` / `HTTPS_PROXY`；compose 不再写死本机代理端口。
+
 ## 1. 准备 `.env`
 
-`.env`（以及某些机器上已有的 `.env.example`）是本地私有文件，均不会提交到
-仓库，也不会被复制进生产镜像。因此新 clone 的目录**不能假定**存在
-`.env.example`，不要直接执行 `cp .env.example .env`。在部署机器手工创建私有配置：
+`.env.example` 是不含密钥的版本化模板；`.env` 是本机私有文件，不会提交到仓库，也
+不会被复制进生产镜像。新 clone 后创建私有配置：
 
 ```bash
-umask 077
-touch .env
+cp .env.example .env
+chmod 600 .env
 ${EDITOR:-vi} .env
 ```
 
-若团队已通过受控渠道提供了该机器上的本地模板，先确认文件存在且内容可信后才可
-复制它；不要把含密钥的模板提交到仓库。
+不要把真实密钥写回 `.env.example` 或提交 `.env`。
 
 至少配置：
 
 ```dotenv
 DATABASE_URL=sqlite:///data/amazon_selector.db
-PPIO_API_KEY=你的_ppio_key
-PPIO_API_BASE=https://api.ppio.com/openai
-PPIO_MODEL=qwen/qwen3.5-plus
-PPIO_TEXT_MODEL=zai-org/glm-5.2
+MODEL_API_PROVIDER=aliyun_token_plan
+ALIYUN_TOKEN_PLAN_API_KEY=你的_sk-sp_key
+ALIYUN_TOKEN_PLAN_API_BASE=https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+ALIYUN_TOKEN_PLAN_VISION_MODEL=qwen3-vl-plus
+ALIYUN_TOKEN_PLAN_TEXT_MODEL=qwen-plus
 ALIBABA_ALLOW_MOCK_SUPPLIERS=false
 ENABLE_SCRAPLING_MATCHER=false
 LOG_DIR=data/logs
+BU_CDP_HTTP=http://host.docker.internal:9222
+MJJL_MAX_PRODUCTS_PER_RUN=1
 ```
 
-可选配置：
+`./scripts/start_hermes_client.sh` 会在缺省时自动补上上述非密钥默认值，并生成
+`SELECTOR_MCP_TOKEN`。
+
+以后可选（本次交付不需要）：
 
 ```dotenv
-KEEPA_API_KEY=
-RAINFOREST_API_KEY=
-MJJL_API_KEY=
+# KEEPA_API_KEY=          # 不配则 Amazon 走爬虫
+# RAINFOREST_API_KEY=     # 不配则 Amazon 走爬虫
+# MJJL_API_KEY=           # 不配则市场分析走 9222 Chrome 卖家精灵插件
 ALIBABA_APP_KEY=
 ALIBABA_APP_SECRET=
 ALIBABA_ACCESS_TOKEN=
@@ -43,9 +104,12 @@ ALIBABA_ACCESS_TOKEN=
 
 说明：
 
-- `PPIO_API_KEY` 用于视觉识别，正式选品通常必填。
+- 模型 API 至少配置一种：阿里云 Token Plan、阿里云百炼按量付费、PPIO 或 Anthropic。
+- Token Plan 的 `sk-sp-` Key 必须与对应地域的 Token Plan Base URL 配套；不要与普通百炼端点混用。
 - `KEEPA_API_KEY` / `RAINFOREST_API_KEY` 可作为 Amazon 数据源；不填时默认走爬虫路径。
-- `MJJL_API_KEY` 用于卖家精灵市场分析；不填时跳过该分析。
+- `MJJL_API_KEY` 是卖家精灵 HTTP API；本次交付不使用，市场数据来自浏览器导出。
+- `MJJL_MAX_PRODUCTS_PER_RUN` 在正式浏览器流程中只作为启用开关：任何正数都会对本次
+  Amazon crawler 得到的全部 ASIN 逐一取证；`0` 仅用于离线诊断，不能用于正式任务。
 - `ALIBABA_DETAIL_ENRICH_LIMIT=2` 控制每个 Amazon 商品最多打开多少个 1688 详情页补 MOQ、包装尺寸、交期和风险线索。
 - `ALIBABA_DETAIL_CACHE_TTL_SECONDS=604800` 控制 1688 详情页补全缓存有效期，缓存落在 `data/cache/1688/offer_details.json`。
 - `LOG_DIR=data/logs` 把日志目录放进 `./data` 数据卷，便于备份和排障。
@@ -73,10 +137,10 @@ Docker 部署会把宿主机 `./data` 挂载到容器 `/app/data`，所以容器
 
 ## 3. Docker 部署
 
-一条命令构建并启动 WebUI：
+一条命令构建并启动唯一必需的 WebUI 服务：
 
 ```bash
-docker compose up --build -d
+docker compose up --build -d amazon-selector
 ```
 
 默认只监听宿主机本地：
@@ -179,7 +243,7 @@ SELLERSPRITE_BROWSER_ENABLED=false
 ```
 
 不要在未完成 Phase-0 调查时启用它。仓库没有内置、示例或推测的 locator profile；
-请先按 [SellerSprite Phase-0 调查记录](research/sellersprite_dom_investigation.md)
+请先在目标机完成 SellerSprite Phase-0 调查，
 收集真实且脱敏的 DOM、扩展版本、导出表头、登录/验证码/权限提示，以及独立控制
 的 Windows 宿主机与 Docker 容器下载目录映射。禁止记录 cookies、账号、密钥和
 含个人数据的截图。

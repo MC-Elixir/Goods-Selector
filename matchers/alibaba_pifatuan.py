@@ -14,8 +14,8 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 import requests
-from requests import Response
 from loguru import logger
+from requests import Response
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import settings

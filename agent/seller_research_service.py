@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -115,8 +115,8 @@ def run_competitor_export(
     Returns a human-actionable status when the browser flow or its competitor
     locators are unavailable; it never fabricates seller data.
     """
-    from agent.sellersprite_service import SellerSpriteDependencies
     from agent.sellersprite_policy import normalize_sellersprite_error_code
+    from agent.sellersprite_service import SellerSpriteDependencies
     from agent.tools.sellersprite_browser import SellerSpriteWorkflowError
 
     keyword = (keyword or "").strip()
@@ -137,7 +137,7 @@ def run_competitor_export(
             "keyword": keyword,
             "niche_label": label,
             "message": (
-                "SellerSprite 竞品导出未配置：请先提供 competitor_* 定位符并启用浏览器流程，"
+                "SellerSprite 市场导出未配置：请先提供当前列表或关键词检索所需的 competitor_* 定位符并启用浏览器流程，"
                 "或改用导出文件导入。"
             ),
         }
@@ -267,16 +267,17 @@ def attach_ai_reasons(
     Returns a status dict for the caller/UI.  On skip or error the items keep
     ``ai_reason=None`` so the exporter falls back to rule-based reasons.
     """
-    model = settings.ppio_text_model
+    provider = settings.openai_compatible_provider
+    model = settings.openai_compatible_text_model
     if client is None:
-        if not settings.ppio_api_key:
-            return {"status": "skipped", "provider": "ppio", "model": model, "error": "PPIO_API_KEY is not configured"}
+        if not settings.openai_compatible_api_key:
+            return {"status": "skipped", "provider": provider, "model": model, "error": "OpenAI-compatible API key is not configured"}
         if not _HAS_OPENAI:
-            return {"status": "skipped", "provider": "ppio", "model": model, "error": "openai package is not installed"}
+            return {"status": "skipped", "provider": provider, "model": model, "error": "openai package is not installed"}
 
     targets = items[: max(0, int(max_items))]
     if not targets:
-        return {"status": "skipped", "provider": "ppio", "model": model, "error": "no eligible sellers"}
+        return {"status": "skipped", "provider": provider, "model": model, "error": "no eligible sellers"}
 
     prompt_items = [
         {
@@ -297,8 +298,8 @@ def attach_ai_reasons(
 
     try:
         active_client = client or _openai.OpenAI(
-            api_key=settings.ppio_api_key,
-            base_url=settings.ppio_api_base,
+            api_key=settings.openai_compatible_api_key,
+            base_url=settings.openai_compatible_api_base,
             timeout=float(settings.llm_request_timeout_seconds),
         )
         response = active_client.chat.completions.create(
@@ -314,7 +315,7 @@ def attach_ai_reasons(
         reasons = _parse_reasons(content)
     except Exception as exc:  # noqa: BLE001 - AI phrasing must never break the run
         logger.warning(f"[seller-research] AI reason generation failed: {exc}")
-        return {"status": "error", "provider": "ppio", "model": model, "error": str(exc)[:300]}
+        return {"status": "error", "provider": provider, "model": model, "error": str(exc)[:300]}
 
     applied = 0
     for index, item in enumerate(targets):
@@ -324,7 +325,7 @@ def attach_ai_reasons(
             applied += 1
     return {
         "status": "success" if applied else "empty",
-        "provider": "ppio",
+        "provider": provider,
         "model": model,
         "applied_count": applied,
         "requested_count": len(targets),

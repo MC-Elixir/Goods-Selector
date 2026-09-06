@@ -92,9 +92,10 @@ def test_three_asin_resume_retries_only_failed_match(monkeypatch):
     match_calls: list[str] = []
     fail_b = {"enabled": True}
 
-    def fake_match(product, *, cancel_check=None):
+    def fake_match(product, *, market_keywords=None, cancel_check=None):
         assert cancel_check is None or cancel_check() is False
         assert settings.alibaba_allow_mock_suppliers is False
+        assert market_keywords == []
         match_calls.append(product.asin)
         if product.asin == "ASIN-B" and fail_b["enabled"]:
             raise RuntimeError("injected B match failure")
@@ -108,7 +109,7 @@ def test_three_asin_resume_retries_only_failed_match(monkeypatch):
 
     monkeypatch.setattr("pipeline.orchestrator.session_scope", session_scope)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: products)
-    monkeypatch.setattr("matchers.match_suppliers", fake_match)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", fake_match)
     monkeypatch.setattr("pipeline.orchestrator.predict_profit", _profit)
     monkeypatch.setattr("pipeline.orchestrator.score_product", _score)
     monkeypatch.setattr(
@@ -189,7 +190,7 @@ def test_retry_wait_is_a_stage_barrier_until_retry_succeeds(monkeypatch):
 
     monkeypatch.setattr("pipeline.orchestrator.session_scope", session_scope)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
-    monkeypatch.setattr("matchers.match_suppliers", match)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", match)
     monkeypatch.setattr("pipeline.orchestrator.predict_profit", _profit)
     monkeypatch.setattr("pipeline.orchestrator.score_product", _score)
     monkeypatch.setattr(
@@ -238,7 +239,7 @@ def test_match_success_with_empty_supplier_is_not_fake_failure(monkeypatch):
     product = ProductDTO(asin="ASIN-EMPTY", marketplace="US", title="No supplier", price=20.0)
     monkeypatch.setattr("pipeline.orchestrator.session_scope", session_scope)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
-    monkeypatch.setattr("matchers.match_suppliers", lambda _product: [])
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", lambda _product, **_kwargs: [])
     monkeypatch.setattr("pipeline.orchestrator.rank_candidates", lambda records, top_n=None: [])
     monkeypatch.setattr(settings, "mjjl_max_products_per_run", 0)
 
@@ -282,7 +283,7 @@ def test_missing_committed_score_row_invalidates_only_score_and_aggregates(monke
 
     monkeypatch.setattr("pipeline.orchestrator.session_scope", session_scope)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
-    monkeypatch.setattr("matchers.match_suppliers", match)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", match)
     monkeypatch.setattr("pipeline.orchestrator.predict_profit", profit)
     monkeypatch.setattr("pipeline.orchestrator.score_product", score)
     monkeypatch.setattr(
@@ -337,7 +338,7 @@ def test_force_rerun_generation_invalidates_downstream_even_when_output_is_ident
 
     monkeypatch.setattr("pipeline.orchestrator.session_scope", session_scope)
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
-    monkeypatch.setattr("matchers.match_suppliers", match)
+    monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", match)
     monkeypatch.setattr("pipeline.orchestrator.predict_profit", profit)
     monkeypatch.setattr("pipeline.orchestrator.score_product", score)
     monkeypatch.setattr(

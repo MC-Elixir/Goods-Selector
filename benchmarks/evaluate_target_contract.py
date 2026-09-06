@@ -10,13 +10,13 @@ from typing import Any
 
 from crawlers.amazon_bsr import ProductDTO
 from domain.target_categories import (
-    understanding_from_target_profile,
+    compare_target_profiles,
     profile_from_product,
     profile_from_text,
+    understanding_from_target_profile,
 )
 from matchers.alibaba_pailitao import SupplierDTO
 from matchers.match_evidence import build_match_evidence
-
 
 DEFAULT_FIXTURE = Path(__file__).parent / "fixtures" / "target_category_contract_gold.json"
 
@@ -92,8 +92,14 @@ def _predict(case: dict[str, Any]) -> dict[str, Any]:
 
 
 def evaluate_contract(dataset: dict[str, Any]) -> dict[str, Any]:
-    if dataset.get("ground_truth_type") != "synthetic_contract":
-        raise ValueError("target contract evaluator accepts synthetic_contract fixtures only")
+    ground_truth_type = dataset.get("ground_truth_type")
+    if ground_truth_type == "unreviewed_live_queue":
+        return _evaluate_reviewed_live_cases(dataset)
+    if ground_truth_type != "synthetic_contract":
+        raise ValueError(
+            "target contract evaluator accepts synthetic_contract or "
+            "unreviewed_live_queue fixtures only"
+        )
     cases = dataset.get("cases") or []
     predictions: list[dict[str, Any]] = []
     category_totals: Counter[str] = Counter()
@@ -160,19 +166,125 @@ def evaluate_contract(dataset: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _evaluate_reviewed_live_cases(dataset: dict[str, Any]) -> dict[str, Any]:
+    """Score only cases completed by an explicit human review."""
+    all_cases = dataset.get("cases") or []
+    reviewed_cases = [case for case in all_cases if case.get("reviewed") is True]
+    predictions: list[dict[str, Any]] = []
+    category_totals: Counter[str] = Counter()
+    category_correct: Counter[str] = Counter()
+    keep_predictions = 0
+    correct_keep_predictions = 0
+    expected_rejects = 0
+    caught_rejects = 0
+
+    for case in reviewed_cases:
+        offer_ids = [str(value) for value in case.get("candidate_offer_ids") or []]
+        titles = list(case.get("candidate_titles") or [])
+        correct_offer_ids = {str(value) for value in case.get("correct_offer_ids") or []}
+        no_match = case.get("no_match") is True
+        for index, offer_id in enumerate(offer_ids):
+            candidate_text = titles[index] if index < len(titles) else ""
+            target = profile_from_text(case["amazon_title"])
+            candidate = profile_from_text(candidate_text)
+            if target is None or candidate is None:
+                prediction = {
+                    "decision": "invalid_profile",
+                    "mismatch_reasons": [],
+                    "missing_evidence": [
+                        name
+                        for name, value in (
+                            ("target_profile", target),
+                            ("candidate_profile", candidate),
+                        )
+                        if value is None
+                    ],
+                }
+            else:
+                comparison = compare_target_profiles(target, candidate)
+                prediction = {
+                    "decision": _normalized_decision(comparison.decision),
+                    "mismatch_reasons": list(comparison.conflicts),
+                    "missing_evidence": list(comparison.missing),
+                }
+            expected = "keep" if not no_match and offer_id in correct_offer_ids else "reject"
+            predicted = prediction["decision"]
+            correct = predicted == expected
+            category = case["category_id"]
+            category_totals[category] += 1
+            category_correct[category] += int(correct)
+            if predicted == "keep":
+                keep_predictions += 1
+                correct_keep_predictions += int(expected == "keep")
+            if expected == "reject":
+                expected_rejects += 1
+                caught_rejects += int(predicted == "reject")
+            predictions.append(
+                {
+                    "case_id": case["case_id"],
+                    "offer_id": offer_id,
+                    "category_id": category,
+                    "expected_decision": expected,
+                    "predicted_decision": predicted,
+                    "decision_correct": correct,
+                    "mismatch_reasons": prediction.get("mismatch_reasons") or [],
+                    "missing_evidence": prediction.get("missing_evidence") or [],
+                }
+            )
+
+    total = len(predictions)
+    accuracy = (
+        sum(item["decision_correct"] for item in predictions) / total if total else None
+    )
+    return {
+        "schema_version": "1.0",
+        "dataset_id": dataset.get("dataset_id"),
+        "ground_truth_type": dataset.get("ground_truth_type"),
+        "case_count": len(all_cases),
+        "reviewed_case_count": len(reviewed_cases),
+        "reviewed_candidate_count": total,
+        "decision_accuracy": accuracy,
+        "strict_keep_precision": (
+            correct_keep_predictions / keep_predictions if keep_predictions else None
+        ),
+        "hard_reject_recall": (
+            caught_rejects / expected_rejects if expected_rejects else None
+        ),
+        "expected_reason_accuracy": None,
+        "category_decision_accuracy": {
+            category: category_correct[category] / count
+            for category, count in sorted(category_totals.items())
+        },
+        "predictions": predictions,
+        "human_live_accuracy": accuracy,
+        "human_live_accuracy_note": (
+            f"Computed from {len(reviewed_cases)} explicitly reviewed live case(s)."
+            if reviewed_cases
+            else "No reviewed live labels are available; metrics remain unknown."
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("fixture", nargs="?", type=Path, default=DEFAULT_FIXTURE)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     dataset = json.loads(args.fixture.read_text(encoding="utf-8"))
+    if dataset.get("ground_truth_type") == "unreviewed_live_queue":
+        from agent.target_contract_review import reviewed_target_contract_dataset
+
+        if args.fixture.resolve() == (
+            Path(__file__).parent / "fixtures" / "target_category_human_review_queue.json"
+        ).resolve():
+            dataset = reviewed_target_contract_dataset()
     result = evaluate_contract(dataset)
     encoded = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(encoded + "\n", encoding="utf-8")
     print(encoded)
-    return 0 if result["decision_accuracy"] == 1.0 else 1
+    return 0 if result["decision_accuracy"] in {None, 1.0} else 1
 
 
 if __name__ == "__main__":

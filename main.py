@@ -12,7 +12,7 @@ import json
 import click
 from loguru import logger
 
-from config.settings import PROJECT_ROOT
+from config.settings import PROJECT_ROOT, settings
 from db.init_db import init_db as _init_db
 from pipeline.orchestrator import resume_pipeline, run_pipeline
 
@@ -20,6 +20,10 @@ from pipeline.orchestrator import resume_pipeline, run_pipeline
 @click.group()
 def cli():
     """Amazon Selector CLI"""
+    logger.add(
+        settings.log_dir / "runtime.log", rotation="10 MB", retention="14 days",
+        enqueue=True, backtrace=False, diagnose=False,
+    )
 
 
 @cli.command("init-db")
@@ -113,9 +117,10 @@ def seller_research_cmd(
 ):
     """从卖家精灵竞品导出生成中小卖家卖家清单（落库 + 导出 Excel/JSON）。"""
     from pathlib import Path
+
+    from agent.seller_research_service import run_seller_research_from_file
     from db.migrate import run_migrations
     from db.session import engine
-    from agent.seller_research_service import run_seller_research_from_file
 
     path = Path(file_)
     if not path.is_file():
@@ -262,6 +267,16 @@ def agent_web_cmd(host: str, port: int):
             "提示：正式使用默认走 Docker：`docker compose up -d --build amazon-selector`，"
             "然后打开 http://127.0.0.1:8765 。`python main.py agent-web` 仅用于本机调试备用。"
         )
+    run_server(host=host, port=port)
+
+
+@cli.command("selector-mcp")
+@click.option("--host", default="127.0.0.1", help="MCP host")
+@click.option("--port", default=8766, type=click.IntRange(1, 65535), help="MCP port")
+def selector_mcp_cmd(host: str, port: int):
+    """启动带 Bearer 鉴权的受控 Selector MCP 服务。"""
+    from selector_mcp.server import run_server
+
     run_server(host=host, port=port)
 
 

@@ -13,7 +13,6 @@ from crawlers.amazon_bsr import ProductDTO
 from execution.repository import json_snapshot
 from matchers.alibaba_pailitao import SupplierDTO
 
-
 T = TypeVar("T")
 
 
