@@ -20,6 +20,13 @@ from loguru import logger
 from config.settings import settings
 
 
+def _report_suppliers(record) -> list:
+    from execution.handlers import load_suppliers
+
+    raw = getattr(record.product, "raw_data", None) or {}
+    return [*(record.suppliers or []), *load_suppliers(raw.get("rejected_suppliers"))]
+
+
 def _supplier_raw_score(supplier, key: str):
     raw = getattr(supplier, "raw_data", None) if supplier else None
     value = (raw or {}).get(key)
@@ -126,7 +133,7 @@ def _supplier_match_decision(supplier) -> tuple[str, str]:
     spec = raw.get("spec_match") if isinstance(raw.get("spec_match"), dict) else {}
     conflicts = list(spec.get("conflicts") or [])
     method = str(getattr(supplier, "match_verification_method", "") or "").lower()
-    if method == "heuristic_rejected" or conflicts:
+    if method in {"heuristic_rejected", "llm_rejected"} or conflicts:
         reason = "匹配冲突: " + ", ".join(conflicts) if conflicts else "语义匹配未通过"
         return "淘汰", reason
 
@@ -187,7 +194,7 @@ def _write_supplier_match_sheet(workbook, candidates: list) -> int:
     for amazon_rank, record in enumerate(candidates, 1):
         product = record.product
         score = getattr(record, "score", None)
-        for supplier_rank, supplier in enumerate(getattr(record, "suppliers", None) or [], 1):
+        for supplier_rank, supplier in enumerate(_report_suppliers(record), 1):
             raw = getattr(supplier, "raw_data", None) or {}
             spec = raw.get("spec_match") if isinstance(raw.get("spec_match"), dict) else {}
             decision, decision_reason = _supplier_match_decision(supplier)
@@ -497,7 +504,7 @@ def _write_review_sheet(workbook, records: list) -> None:
             record.product.title,
             status,
             ", ".join(_record_rejection_reasons(record)) or "关键证据或硬筛选结果未满足",
-            len(record.suppliers or []),
+            len(_report_suppliers(record)),
             _json_cell(evidence["manual_verification_tasks"]),
             getattr(record.product, "listing_url", None),
         ]
@@ -691,7 +698,7 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
         pb = rec.profit
         sc = rec.score
         market = getattr(rec, "market", None)
-        sups = rec.suppliers or []
+        sups = _report_suppliers(rec)
         raw = getattr(p, "raw_data", None) if p else None
         raw = raw if isinstance(raw, dict) else {}
 

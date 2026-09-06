@@ -37,7 +37,7 @@ def _formal_match_suppliers(product, *, market_keywords=None, cancel_check=None)
     """Discover only via SellerSprite, then enrich/verify returned offer URLs."""
     from agent.sellersprite_1688_sourcing import run_sellersprite_1688_sourcing
     from matchers import _enrich_supplier_details, _title_fallback_keywords
-    from matchers.verifier import Alibaba1688Verifier
+    from matchers.verifier import Alibaba1688Verifier, LLMVisualVerifier
 
     suppliers = run_sellersprite_1688_sourcing(
         product.asin,
@@ -62,13 +62,29 @@ def _formal_match_suppliers(product, *, market_keywords=None, cancel_check=None)
         analysis=None,
         search_keywords=keywords,
     )
-    for supplier in verified:
+    for supplier in suppliers:
         supplier.raw_data["candidate_discovery_source"] = "sellersprite_1688"
         supplier.raw_data["search_query_plan"] = {
             "queries": keywords,
             "market_keywords": seller_keywords,
             "market_source": "sellersprite_browser_extension",
         }
+    if settings.enable_llm_verification and verified:
+        verifier = LLMVisualVerifier()
+        for supplier in verified:
+            if cancel_check:
+                cancel_check()
+            visual = verifier.verify_pair(product, supplier)
+            supplier.raw_data["visual_match"] = visual.model_dump(mode="json")
+            product.raw_data["vision_verifications"] = product.raw_data.get("vision_verifications", 0) + 1
+            if not visual.is_match:
+                supplier.match_verification_method = "llm_rejected"
+                supplier.match_quality_score = 0.0
+        verified = [supplier for supplier in verified if supplier.match_verification_method != "llm_rejected"]
+    accepted = {id(supplier) for supplier in verified}
+    product.raw_data["rejected_suppliers"] = dump_suppliers([
+        supplier for supplier in suppliers if id(supplier) not in accepted
+    ])
     return verified
 
 
@@ -328,6 +344,10 @@ def _execute(
             market_keywords = _market_search_keywords(records_by_asin[asin].market)
             match_input = {
                 "schema_version": SCHEMA_VERSION,
+                "verification_contract": "formal-v2",
+                "llm_verification": bool(settings.enable_llm_verification),
+                "vision_provider": settings.vision_provider,
+                "vision_model": settings.openai_compatible_vision_model,
                 "product": dump_product(product),
                 "no_mock": not bool(settings.alibaba_allow_mock_suppliers),
                 "ingest_dependency": _node_dependency(
@@ -346,7 +366,7 @@ def _execute(
                 suppliers = _formal_match_suppliers(
                     item,
                     market_keywords=hints,
-                    cancel_check=cancel_check,
+                    cancel_check=_context.check_interruption,
                 )
                 return {
                     "schema_version": SCHEMA_VERSION,
@@ -360,7 +380,9 @@ def _execute(
 
                 def writer(session, _node):
                     product_row = legacy._upsert_product(session, restored_product)
-                    for supplier in restored_suppliers:
+                    for supplier in [*restored_suppliers, *load_suppliers(
+                        restored_product.raw_data.get("rejected_suppliers")
+                    )]:
                         legacy._upsert_supplier(session, product_row.id, supplier)
                     evidence = (
                         restored_product.raw_data.get("sourcing_evidence")
@@ -386,7 +408,7 @@ def _execute(
                     "message": f"Matching suppliers for {asin} ({index}/{len(products)})",
                 },
             )
-            if isinstance(result.exception, TimeoutError) and len(products) == 1:
+            if result.status == NodeStatus.TIMED_OUT.value and len(products) == 1:
                 _update_run(
                     legacy,
                     run_id,
@@ -423,7 +445,10 @@ def _execute(
     finally:
         settings.alibaba_allow_mock_suppliers = previous_allow_mock
     api_calls["supplier_match_attempts"] = len(products)
-    api_calls["vision_analyzer"] = len(products)
+    api_calls["vision_analyzer"] = sum(
+        int(record.product.raw_data.get("vision_verifications", 0))
+        for record in records_by_asin.values()
+    )
     _update_run(legacy, run_id, api_calls=api_calls, suppliers_matched=matched)
     if _stage_waiting(repository, run_id, "match"):
         repository.update_run_status(run_id, export_required=False)
@@ -767,19 +792,17 @@ def _run_sellersprite_market_stage(
             )
             continue
         if browser_dependencies is None:
+            def unavailable_market(_context, asin: str = product.asin) -> dict[str, Any]:
+                raise HumanActionRequired(
+                    "EXTENSION_UNAVAILABLE",
+                    f"SellerSprite market evidence unavailable for {asin}",
+                    instructions="请在专用 Chrome 中启用并登录卖家精灵插件，确认反查关键词导出可用，然后继续任务。",
+                )
+
             result = coordinator.run_node(
                 scope_type="asin", scope_key=product.asin, stage="market",
                 input_snapshot=market_input,
-                handler=lambda _context, asin=product.asin: (_ for _ in ()).throw(
-                    HumanActionRequired(
-                        "EXTENSION_UNAVAILABLE",
-                        f"SellerSprite market evidence unavailable for {asin}",
-                        instructions=(
-                            "请在专用 Chrome 中启用并登录卖家精灵插件，确认反查关键词导出可用，"
-                            "然后继续任务。"
-                        ),
-                    )
-                ),
+                handler=unavailable_market,
             )
             if result.status == NodeStatus.HUMAN_REQUIRED.value:
                 break
@@ -790,6 +813,7 @@ def _run_sellersprite_market_stage(
             from agent.tools.sellersprite_browser import SellerSpriteWorkflowError
             from analyzers.sellersprite_browser_market import market_from_reverse_keyword_result
 
+            browser_dependencies.is_cancelled = _context.check_interruption
             browser_result = run_reverse_keyword_export(
                 item.asin,
                 sourcing_run_id=browser_sourcing_run_id,

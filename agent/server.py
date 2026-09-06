@@ -206,7 +206,11 @@ class AgentRequestHandler(SimpleHTTPRequestHandler):
                 market_guard_error = _market_data_guard_error(config)
                 if market_guard_error:
                     return self._json({"error": market_guard_error}, HTTPStatus.BAD_REQUEST)
-                job = self.runtime.start_run(config)
+                request_id = body.get("request_id")
+                job = (
+                    self.runtime.start_run(config, request_id=request_id)
+                    if request_id is not None else self.runtime.start_run(config)
+                )
                 return self._json({"job": job.to_dict()}, HTTPStatus.ACCEPTED)
             operator_resume_match = re.fullmatch(
                 r"/api/operator/jobs/([A-Za-z0-9_-]{6,64})/resume", parsed.path

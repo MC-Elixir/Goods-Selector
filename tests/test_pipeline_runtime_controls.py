@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from types import SimpleNamespace
 
-import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -11,7 +10,7 @@ from config.settings import settings
 from crawlers.amazon_bsr import ProductDTO
 from db.models import Base, Product, ProfitSnapshot, RunLog, Score, Supplier
 from matchers.alibaba_pailitao import SupplierDTO
-from pipeline.orchestrator import PipelineTimeout, run_pipeline
+from pipeline.orchestrator import run_pipeline
 
 
 def _temp_session_scope(tmp_path):
@@ -101,7 +100,7 @@ def test_run_pipeline_emits_per_asin_heartbeat(monkeypatch, tmp_path):
     ]
 
 
-def test_run_pipeline_stage_timeout_fails_run_log(monkeypatch, tmp_path):
+def test_run_pipeline_stage_timeout_waits_for_retry(monkeypatch, tmp_path):
     temp_session_scope = _temp_session_scope(tmp_path)
     product = ProductDTO(asin="B0TIMEOUT1", marketplace="US", title="Slow match", price=25.0)
 
@@ -113,19 +112,14 @@ def test_run_pipeline_stage_timeout_fails_run_log(monkeypatch, tmp_path):
     monkeypatch.setattr("crawlers.amazon_bsr.crawl_best_sellers", lambda *args: [product])
     monkeypatch.setattr("pipeline.recoverable._formal_match_suppliers", slow_match)
 
-    with pytest.raises(PipelineTimeout):
-        run_pipeline(
-            "Sports & Outdoors",
-            limit=1,
-            marketplace="US",
-            export=False,
-            stage_timeouts={"match": 0.01},
-        )
+    run_pipeline(
+        "Sports & Outdoors", limit=1, marketplace="US", export=False,
+        stage_timeouts={"match": 0.01},
+    )
 
     with temp_session_scope() as session:
         run = session.query(RunLog).one()
-        assert run.status == "failed"
-        assert "match" in (run.error_message or "")
+        assert run.status == "retry_wait"
         assert run.products_crawled == 1
 
 

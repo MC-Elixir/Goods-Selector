@@ -227,7 +227,7 @@ class SelectorService:
                     "reason": "环境检查未通过；请先处理阻塞项。",
                     "preflight": preflight,
                 }
-            payload = await self.client.start_job(body)
+            payload = await self.client.start_job({**body, "request_id": request_id})
             result = {
                 "started": True,
                 "job": _safe_job(payload.get("job")),

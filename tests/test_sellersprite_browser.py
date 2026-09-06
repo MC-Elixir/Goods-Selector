@@ -130,7 +130,8 @@ class FakePlaywright:
         self.connected_to: str | None = None
         self.stopped = False
 
-    def connect_over_cdp(self, url: str) -> FakeBrowser:
+    def connect_over_cdp(self, url: str, *, timeout: float) -> FakeBrowser:
+        assert 0 < timeout <= 120_000
         self.connected_to = url
         return self.browser
 

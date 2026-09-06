@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from collections import deque
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -72,9 +74,21 @@ class AgentRuntime:
     def preflight(self) -> dict[str, Any]:
         return run_preflight()
 
-    def start_run(self, config: AgentRunConfig) -> AgentJob:
-        job = AgentJob(config=config)
-        return self._enqueue_job(job)
+    def start_run(self, config: AgentRunConfig, *, request_id: str | None = None) -> AgentJob:
+        # Persist the job before execution and before acknowledging the HTTP
+        # request. Replays also work when the MCP response was lost or restarted.
+        with self._lock:
+            job = AgentJob(config=config)
+            if request_id is not None:
+                if not re.fullmatch(r"[A-Za-z0-9._:-]{8,64}", request_id):
+                    raise ValueError("invalid request_id")
+                job.id = "request-" + sha256(request_id.encode()).hexdigest()[:32]
+                existing = self._jobs.get(job.id)
+                if existing is not None:
+                    if existing.config != config:
+                        raise ValueError("request_id already used with different parameters")
+                    return existing
+            return self._enqueue_job(job, durable=True)
 
     def cancel_job(self, job_id: str) -> dict[str, Any]:
         with self._lock:
@@ -219,14 +233,19 @@ class AgentRuntime:
             job = self._jobs.get(job_id)
             return job.to_dict() if job else None
 
-    def _enqueue_job(self, job: AgentJob) -> AgentJob:
+    def _enqueue_job(self, job: AgentJob, *, durable: bool = False) -> AgentJob:
         with self._lock:
             self._add_event_locked(job, "queued", job.message)
             self._jobs[job.id] = job
             self._queue.append(job.id)
             self._refresh_queue_positions_locked()
+            try:
+                self._persist_jobs_locked(strict=durable)
+            except OSError:
+                self._queue.remove(job.id)
+                del self._jobs[job.id]
+                raise
             self._ensure_worker_locked()
-            self._persist_jobs_locked()
             self._condition.notify_all()
             return job
 
@@ -549,7 +568,7 @@ class AgentRuntime:
         except Exception:
             return
 
-    def _persist_jobs_locked(self) -> None:
+    def _persist_jobs_locked(self, *, strict: bool = False) -> None:
         self._refresh_queue_positions_locked()
         payload = {
             "jobs": [job.to_dict() for job in sorted(self._jobs.values(), key=lambda j: j.created_at)],
@@ -558,9 +577,14 @@ class AgentRuntime:
         try:
             self._job_store_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._job_store_path.with_suffix(self._job_store_path.suffix + ".tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            with tmp.open("w", encoding="utf-8") as stream:
+                stream.write(json.dumps(payload, ensure_ascii=False, indent=2))
+                stream.flush()
+                os.fsync(stream.fileno())
             tmp.replace(self._job_store_path)
         except OSError:
+            if strict:
+                raise
             # Job persistence is operational telemetry; the in-memory queue must
             # keep working even if a host-mounted log directory has bad perms.
             return

@@ -1,213 +1,104 @@
 # AGENTS.md
 
-This file defines general agent design principles for this repository.
+本文件只规定 Amazon Selector 的项目不变量；跨项目开发行为由全局 AGENTS 管理。
+`agent/runner.py` 的提示词及 `deployment/hermes/amazon-selector-profile/SOUL.md`
+是产品运行时规则，不是开发助手的工具或工作范围限制。
 
-## Agent Design Principle
+## 架构与正式数据路径
 
-An agent is a model using tools in a loop.
+- 正式流程：Amazon US 类目/关键词采集 → 逐 ASIN 卖家精灵市场证据 →
+  卖家精灵插件“1688 找货” → 详情取证与验证 → 确定性利润、评分、筛选 → 导出。
+  Amazon crawler 不可被预制 `seed_products` 绕过；其他 matcher 可用于隔离诊断，
+  不得成为正式候选发现的回退来源。对插件返回的 offer URL 补全详情不属于更换来源。
+- `pipeline/orchestrator.py::run_pipeline` 是兼容入口，实际委托给
+  `pipeline/recoverable.py`；`execution/` 管理节点状态、租约和产物提交。
+  修改编排时同时检查这三处，不要只改文件中保留的旧线性实现。
+- 采集、匹配和分析之间传递 DTO / schema，不传递 ORM 实体。业务持久化由编排与
+  repository 层负责；`matchers/sourcing_slice.py` 的既有证据持久化是局部例外，
+  不应扩散成通用 matcher 的数据库依赖。普通 ORM 访问使用 `db/session.py::session_scope()`；
+  迁移、证据和执行层已有的显式事务边界应保留。
+- `agent/sellersprite_*.py` 管理独立的浏览器导出、导入、额度及人工介入流程，
+  正式流水线消费其逐 ASIN 证据。`MJJL_MAX_PRODUCTS_PER_RUN` 为正时覆盖所有采集商品，
+  不再按该数值截断；零只用于显式离线诊断。
 
-Every agent must be defined by three core components:
+## 证据、评分与数据兼容
 
-1. Environment
-   - The runtime context the agent can observe and operate in.
-   - Examples: repository, terminal, filesystem, browser, VM, Kubernetes cluster, database, APIs.
+- 正式 No-Mock 不允许 mock 供应商进入候选、持久化结果或导出；登录/验证码拦截页
+  不能解析为商品证据。供应商发现来源和详情证据来源须可追溯。
+- 品类合同与结构化证据边界在 `domain/target_categories.py`、`schemas/sourcing.py`
+  和 `matchers/match_evidence.py`。保留规格冲突、整品/配件关系、厂家证据和人工复核判定；
+  缺少关键成本或市场证据不能补成零、默认可信值或强推荐。真实零与未知值必须区分。
+- 成本参数与评分规则分别由 `config/profit_params.yaml`、`config/scoring_weights.yaml`
+  驱动；保持配置缓存的 `reload_*()` 行为。评分权重之和必须为 1.0。
+  硬筛选先于排名，淘汰结果仍保留 `passed_hard_filter=False` 及原因。
+- `ProfitSnapshot` / `Score` 追加保存，并携带当次 `params_snapshot` / `weights_snapshot`；
+  不覆盖历史决策。数据库升级走 `db/migrate.py` 与 `db/migrations/` 的版本化增量迁移，
+  保持旧库数据、幂等升级、失败回滚及 SQLite 外键约束；不能仅靠 ORM `create_all` 绕过迁移。
+- 正式交付为一个 Excel，包含 `运行摘要`、`Amazon商品`、`卖家精灵市场数据`、
+  `Amazon×1688完整匹配`、`未通过及待核验`；JSON 是后台机器数据，Markdown 是兼容工具。
+  导出和历史读取需保留通过、拒绝及待核验的区分；呈现候选前审计导出证据。
 
-2. Tools
-   - The actions the agent is allowed to take in the environment.
-   - Examples: bash, grep, read, write, edit, test, search, fetch, screenshot, kubectl, git.
+## 产品运行时状态与恢复
 
-3. System Prompt
-   - The goals, constraints, behavior rules, and decision policy of the agent.
-   - It defines what the agent is trying to do, how it should act, and what it must avoid.
+以下状态均指产品任务或执行节点，不表示开发助手应停止整个开发任务。
 
-The agent should operate as a loop:
+- 启动正式选品前必须通过 preflight，并确认正式路径所需的卖家精灵插件就绪。
+  Amazon 发现阶段未成功时不能进入下游。后续错误按 `execution/models.py` 和
+  `execution/policies.py` 分类，不使用“除第一阶段外全部忽略并继续”的概括。
+  `human_required`、`retry_wait` 等屏障必须保留；1688 受阻时不在整批 ASIN 上重复触发。
+- 登录、验证码、权限或额度问题通过 `HumanActionRequired` 和人工处理路径表达，
+  不能降级成“无供应商”或切换来源。人工处理后恢复原 `run_id`，保留已完成的 ASIN 节点。
+- 节点恢复保留输入指纹、generation、租约及恢复令牌校验：有效成功结果默认复用，
+  输入变化或显式重跑使相关下游失效，旧 worker 不得提交。强制重跑须留下原因和尝试历史。
+- 业务结果与节点成功状态必须在同一事务提交。导出通过 `execution/artifacts.py`
+  完成整组文件发布、校验与对账；缺失或部分产物不能算作导出成功。
+- Hermes / MCP 产品写操作保留明确同意与 `confirm=true` 门禁；同一请求重试沿用
+  持久化 `request_id`。保持 Bearer 鉴权、精确工具白名单，以及不外泄 Cookie、密钥、
+  恢复令牌的响应边界；规则详见 profile 与 `selector_mcp/`，不以工具数量代替契约。
 
-```python
-env = Environment()
-tools = Tools(env)
-system_prompt = "Goals, constraints, and how to act"
+## 项目验证门禁
 
-while True:
-    action = llm.run(system_prompt + env.state)
-    env.state = tools.run(action)
-```
+命令从仓库根目录运行。CI 的准确范围以 `.github/workflows/ci.yml` 为准：
+Ruff、Mypy、`pytest tests/ -q`、Docker 镜像构建及 Compose 配置校验均是现有门禁。
 
-## Amazon Selector Agent
+- `CODEOWNERS` 保护的 `matchers/__init__.py`、`pipeline/orchestrator.py`、
+  `analyzers/scorer.py`：任何修改必须有对应 `tests/` 改动，且合并前通过审阅。
+- 修改评分 YAML 必须运行 `pytest tests/test_scoring.py`；修改成本/筛选逻辑同时运行
+  `tests/test_profit_model.py`、`tests/test_filters.py` 中相关回归。
+- 修改状态、恢复或产物提交：运行 `tests/test_execution_*.py` 和
+  `tests/test_recoverable_*.py` 的相关回归，覆盖租约失效、幂等、恢复及部分产物。
+  修改数据库结构或迁移必须运行 `tests/test_db_migrations.py`。
+- 修改来源或证据合同：运行 `tests/test_pipeline_source_mode.py`、
+  `tests/test_pipeline_market_cap.py` 及受影响的 sourcing schema、匹配、导出回归；
+  品类合同/人工判定还须运行 `tests/test_target_contract_*.py` 与
+  `python -m benchmarks.evaluate_target_contract`。合成合同指标不代表真实搜索准确率。
+- 修改 MCP / Hermes 时运行 `tests/test_selector_mcp_*.py`、`tests/test_hermes_profile.py`
+  及受影响的配置脚本测试；修改部署时运行 `tests/test_docker_deployment.py`、
+  `tests/test_preflight.py` 及相关启动测试，并完成镜像构建和 Compose 校验。
+- 普通回归使用隔离数据；`tests/e2e/test_sellersprite_extension.py` 是需明确授权并设置
+  `SELLERSPRITE_E2E=1` 的真实浏览器测试，不属于无副作用离线检查。
+  不将生产镜像内缺少测试配置或测试替身的运行当作完整源码回归，见部署文档。
 
-This repository implements the principle above as a local product sourcing agent.
+## 部署验收边界
 
-### Environment
+- 正式 WebUI 运行于 Compose 的 `amazon-selector`；本地 Python 只作调试备用。
+  Hermes 与 `assistant` profile 下的 MCP 为可选能力，不是普通 WebUI 启动前提。
+  入口、地址和环境值从 `docker-compose.yml`、`config/settings.py`、`.env.example`
+  及 `start.ps1` 发现；浏览器辅助环境按 Dockerfile 与主依赖隔离。
+- WebUI 与专用 Chrome 默认仅本机访问；不能为解决容器连接问题将 Chrome 改成监听所有网卡。
+  CDP 必须从实际调用环境验证，Windows 宿主可访问不等于容器可访问。
+- 分别验收 WebUI HTTP、容器内 CDP、preflight 与卖家精灵插件就绪。
+  启用 MCP 时再验证未认证拒绝、认证初始化及当前白名单。
+  服务可用不等于正式选品可用；真实业务验收还需获授权的任务完成并生成真实证据工作簿。
 
-- Repository code and configuration.
-- Terminal process running `docker compose up -d --build amazon-selector` for the official WebUI runtime.
-- SQLite database at `data/amazon_selector.db`.
-- Cookie files in `data/amazon_cookies.json` and `data/1688_cookies.json`.
-- Exported result files in `data/exports/`.
-- Amazon and 1688 browser sessions, including human-in-the-loop captcha or popup handling.
+## 详细资料入口
 
-### Tools
+- `ARCHITECTURE.md`：正式数据流；`docs/PRD.md`：需求与历史设计背景。
+- `docs/scoring_spec.md`、`docs/database_schema.md`：评分与数据设计细节。
+- `docs/DEPLOYMENT.md`、`docs/ZERO_TO_RUN.md`：部署操作与验收流程。
+- `deployment/hermes/amazon-selector-profile/README.md`：可选客户端契约与部署。
+- `docs/UI_DESIGN.md`：仅 `webui/` 的视觉规范。
 
-- `agent.preflight.run_preflight()` checks whether the environment is ready.
-- `pipeline.orchestrator.run_pipeline()` runs the 7-stage sourcing workflow.
-- `agent.history` reads previous JSON/Excel exports and stores saved selections.
-- `agent.server` exposes local JSON APIs and static WebUI assets.
-
-### System Prompt
-
-The runtime prompt is stored in `agent.runner.AGENT_SYSTEM_PROMPT`.
-
-Policy summary:
-
-- Prefer real Amazon and real 1688 data over mock data.
-- In formal no-mock mode, do not allow mock suppliers into results.
-- Run preflight before starting sourcing work.
-- If 1688 is blocked by login, popup, or captcha, stop and ask for human action.
-- Audit exports after each run before presenting candidates.
-
-### Local WebUI
-
-Run:
-
-```bash
-docker compose up -d --build amazon-selector
-```
-
-Open:
-
-```text
-http://127.0.0.1:8765
-```
-
-`python main.py agent-web` remains available only for local debugging fallback.
-
-The UI can launch new sourcing runs, show preflight health, read previous product selection exports, search candidates, download Excel files, and save product selections to `data/agent_saved_items.json`.
-
-## Commands
-
-All commands run from the repository root.
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-playwright install chromium        # only if Amazon / 1688 scraping is needed
-
-# Initialize the database
-python main.py init-db
-
-# Run the full pipeline for a category
-python main.py run --category "Home & Kitchen" --limit 50
-
-# Start the local Agent WebUI (official runtime)
-docker compose up -d --build amazon-selector
-
-# Run all tests (pure unit tests, no network or API keys required)
-pytest tests/
-
-# Run a single test file
-pytest tests/test_scoring.py -v
-
-# Run tests with coverage
-pytest tests/ --cov=. --cov-report=term-missing
-```
-
-Tests use mock DTOs (`_MockProduct`, `_MockSupplier`, `_MockMarket`) — they do not call Amazon, 1688, or Sellersprite, so they run offline with no `.env` configured.
-
-## Architecture
-
-A **7-stage linear pipeline** that takes a category name and produces a ranked candidate product pool:
-
-```
-main.py (click CLI: init-db | run)
-    └─ pipeline/orchestrator.py::run_pipeline(category, limit, marketplace, top_n)
-           ├─ Stage 1  crawlers/amazon_bsr.py::crawl_best_sellers    → list[ProductDTO]
-           │               backends: scrapling | playwright | keepa | rainforest (auto by .env keys)
-           ├─ Stage 2  matchers/__init__.py::match_suppliers          → list[SupplierDTO]
-           │               VisionAnalyzer → Alibaba1688PlaywrightMatcher → Verifier
-           ├─ Stage 3  analyzers/profit_model.py::predict_profit      → ProfitBreakdown
-           ├─ Stage 4  analyzers/maijiajingling.py::analyze_market    → MarketAnalysisDTO
-           ├─ Stage 5  analyzers/scorer.py::score_product             → ScoreBreakdown
-           ├─ Stage 6  pipeline/filters.py::rank_candidates           → list[PipelineRecord]
-           └─ Stage 7  reports/exporter.py                            → Excel / Markdown / JSON
-```
-
-**Stage failure policy**: Stage 1 failure aborts the entire run. All other stages fail per-product and continue.
-
-**Sellersprite subsystem**: `agent/sellersprite_*.py` provides an independent browser-automation workflow that exports reverse-keyword market data from Sellersprite, imports the CSV into `db/sellersprite_repository.py`, and feeds keyword/market signals into Stage 4 (market analysis). It runs outside the 7-stage pipeline and is orchestrated by `agent/sellersprite_service.py` with its own retry, quota, and human-intervention policies.
-
-### Module boundaries
-
-| Module | Responsibility |
-|--------|----------------|
-| `crawlers/` | Amazon BSR data acquisition (scrapling/playwright/keepa/rainforest) |
-| `matchers/` | 1688 supplier matching (vision → text search → playwright → verify) |
-| `analyzers/` | Profit model, market analysis, scoring |
-| `pipeline/` | Orchestration, filtering, ranking |
-| `db/` | SQLAlchemy ORM models, session, migrations |
-| `execution/` | Run coordination, leases, recovery policies |
-| `agent/` | WebUI server, preflight, runner, history |
-| `agent/sellersprite_*.py` | Sellersprite data acquisition and browser automation |
-| `config/` | YAML params, pydantic-settings |
-| `domain/` | Domain models and target category contracts |
-| `schemas/` | Pydantic DTO schema definitions |
-| `reports/` | Excel/Markdown/JSON export |
-
-### DTO / ORM boundary
-
-DTOs are dataclasses **separate from ORM models** — crawlers/matchers/analyzers never touch SQLAlchemy:
-
-| Boundary | DTO (dataclass) | ORM model |
-|----------|-----------------|----------|
-| Stage 1 | `crawlers.ProductDTO` | `db.Product` |
-| Stage 2 | `matchers.SupplierDTO` | `db.Supplier` |
-| Stage 3 | `analyzers.ProfitBreakdown` | `db.ProfitSnapshot` |
-| Stage 4 | `analyzers.MarketAnalysisDTO` | `db.MarketAnalysis` |
-| Stage 5 | `analyzers.ScoreBreakdown` | `db.Score` |
-
-The orchestrator carries per-product state in `pipeline.PipelineRecord` and inserts ORM rows at the end of each stage.
-
-### Configuration system
-
-Two YAML files drive all tunable parameters — **no code changes needed for tuning**:
-
-- `config/profit_params.yaml` — cost rates (FBA fee tiers, ACOS, return rate, exchange rate, shipping)
-- `config/scoring_weights.yaml` — dimension weights, scoring curves, hard-filter thresholds
-
-Both use module-level cache with `reload_*()` for hot-reload. `config/settings.py` (pydantic-settings) reads `.env` and exposes a singleton `settings` object for all API keys and `DATABASE_URL`.
-
-### Scoring hard constraints
-
-- `scoring_weights.yaml` weights **must sum to exactly 1.0** — enforced at load time and by `tests/test_scoring.py::test_weights_sum_to_one`.
-- **Always re-run `pytest tests/test_scoring.py` after editing `scoring_weights.yaml`.**
-- Hard filters eliminate products before ranking; eliminated products are persisted with `passed_hard_filter=False`.
-- **Core path files** (`matchers/__init__.py`, `pipeline/orchestrator.py`, `analyzers/scorer.py`) are protected by `CODEOWNERS` — any modification **must** be accompanied by corresponding test changes in `tests/` and pass review before merge.
-
-### Database patterns
-
-- `ProfitSnapshot` and `Score` are **append-only** (snapshot pattern) — each run inserts new rows with `params_snapshot`/`weights_snapshot` JSON fields.
-- Use `db/session.py::session_scope()` for all DB access (auto-commit on exit, rollback on exception).
-
-## Docs
-
-- `docs/PRD.md` — product requirements and module specs
-- `docs/scoring_spec.md` — per-dimension scoring formulas
-- `docs/database_schema.md` — schema design rationale
-- `docs/DEPLOYMENT.md` — Docker deployment guide
-- `docs/UI_DESIGN.md` — UI design tokens (Linear-style dark theme, webui/ only)
-
-## AI Debug Route
-
-Diagnosing 1688 matching failures:
-
-1. **Structured degradation logs** — `matchers/__init__.py` emits JSON lines with prefix `[match-diag]` on every backend degradation:
-   ```json
-   {"event": "degradation", "from": "playwright", "to": "mock", "reason": "TimeoutError", "run_id": "run-abcd1234"}
-   ```
-   Grep application logs for `[match-diag]` to trace the full fallback chain of a run.
-
-2. **Failure screenshots** — When a Playwright browser operation fails, a PNG screenshot is automatically saved to `data/logs/artifacts/` with a timestamped filename (e.g. `20260801_143022_kw_折叠桌.png`). The path is logged with prefix `[1688-diag]`.
-
-3. **Diagnostic steps**:
-   - Search logs for `[match-diag]` to identify which backend degraded and why.
-   - Check `data/logs/artifacts/` for screenshots showing the browser state at failure time (captcha, login wall, TMD block).
-   - Correlate via `run_id` field to group all degradation events from the same pipeline run.
-   - If `reason` is `HumanActionRequired`, check the manual queue (`agent/manual_queue.py`) for pending human actions.
+部署、诊断、审阅和拆 PR 的逐步流程留在相应 Skill / 操作文档，本文件不复制。
+旧入口文档中的线性失败策略、通用 matcher 回退链和“仅 create_all”说明，
+不能覆盖上述可恢复、来源受限及版本化迁移约束。

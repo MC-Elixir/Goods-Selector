@@ -12,7 +12,7 @@ import json
 import click
 from loguru import logger
 
-from config.settings import PROJECT_ROOT
+from config.settings import PROJECT_ROOT, settings
 from db.init_db import init_db as _init_db
 from pipeline.orchestrator import resume_pipeline, run_pipeline
 
@@ -20,6 +20,10 @@ from pipeline.orchestrator import resume_pipeline, run_pipeline
 @click.group()
 def cli():
     """Amazon Selector CLI"""
+    logger.add(
+        settings.log_dir / "runtime.log", rotation="10 MB", retention="14 days",
+        enqueue=True, backtrace=False, diagnose=False,
+    )
 
 
 @cli.command("init-db")

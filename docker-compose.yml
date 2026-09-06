@@ -15,6 +15,7 @@ services:
       # This value is intentionally fixed for the container. A .env value of
       # 127.0.0.1 would point back at the container rather than Windows.
       BU_CDP_HTTP: http://host.docker.internal:9222
+      SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR: ${SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR:-}
     volumes:
       - ./data:/app/data
       # When configured, mount Chrome's native Windows download folder at the
@@ -27,6 +28,11 @@ services:
       - "host.docker.internal:host-gateway"
     command: ["agent-web", "--host", "0.0.0.0", "--port", "8765"]
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   selector-mcp:
     profiles: ["assistant"]
@@ -51,3 +57,8 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

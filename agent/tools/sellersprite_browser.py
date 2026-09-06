@@ -269,12 +269,15 @@ class PlaywrightSellerSpriteSession:
             cdp_endpoint = self._cdp_resolver()
             self._ensure_not_cancelled()
             self._browser = self._playwright.chromium.connect_over_cdp(
-                cdp_endpoint
+                cdp_endpoint, timeout=self.page_timeout_seconds * 1000,
             )
             self._ensure_not_cancelled()
             self._page = _first_attached_page(self._browser)
             self._ensure_not_cancelled()
         except SellerSpriteWorkflowError:
+            self._close()
+            raise
+        except TimeoutError:
             self._close()
             raise
         except Exception as exc:
@@ -593,7 +596,7 @@ class PlaywrightSellerSpriteSession:
                 if isinstance(raw, dict) and raw.get("title"):
                     suppliers.append(raw)
             except Exception:
-                continue
+                raise SellerSpriteWorkflowError("EXPORT_FAILED") from None
         self._ensure_not_cancelled()
         return suppliers
 
@@ -792,6 +795,8 @@ class PlaywrightSellerSpriteSession:
         try:
             visible = bool(self._target_locator(locator_name).is_visible())
         except SellerSpriteWorkflowError:
+            raise
+        except TimeoutError:
             raise
         except Exception:
             return False

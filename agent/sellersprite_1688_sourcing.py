@@ -16,13 +16,12 @@ from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
 
+from agent.cancellation import CancellationRequested
 from agent.sellersprite_policy import validate_sellersprite_asin
 from agent.sellersprite_service import SellerSpriteDependencies
 from agent.tools.sellersprite_browser import SellerSpriteWorkflowError
-from agent.cancellation import CancellationRequested
 from execution.models import HumanActionRequired
 from matchers.alibaba_pailitao import SupplierDTO
-
 
 # Human-terminal error codes that should not be retried or logged as warnings.
 _HUMAN_CODES = frozenset({
@@ -99,10 +98,14 @@ def run_sellersprite_1688_sourcing(
                 instructions=_HUMAN_INSTRUCTIONS[exc.error_code],
             ) from exc
         logger.info(f"[sellersprite-1688] ASIN={asin} workflow error: {exc.error_code}")
+        if required:
+            raise
         return []
     except CancellationRequested:
         raise
     except HumanActionRequired:
+        raise
+    except TimeoutError:
         raise
     except Exception as exc:
         if required:
@@ -119,6 +122,8 @@ def run_sellersprite_1688_sourcing(
         return []
 
     suppliers = _convert_to_supplier_dtos(raw_suppliers, asin)
+    if required and raw_suppliers and not suppliers:
+        raise SellerSpriteWorkflowError("INVALID_EXPORT")
     if suppliers:
         logger.info(
             f"[sellersprite-1688] ASIN={asin} extracted {len(suppliers)} suppliers from extension"

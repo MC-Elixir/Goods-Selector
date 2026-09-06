@@ -262,8 +262,9 @@ def _atomic_write_cookies(path: Path, cookies: list[dict[str, Any]]) -> None:
         dir=str(path.parent),
     )
     try:
-        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            if hasattr(os, "fchmod"):
+                os.fchmod(handle.fileno(), 0o600)
             json.dump(cookies, handle, ensure_ascii=False, indent=2)
         os.replace(temp_path, path)
         try:

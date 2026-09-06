@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 
 from agent import browser_setup
+
+
+def test_cookie_capture_without_posix_fchmod(tmp_path, monkeypatch):
+    monkeypatch.delattr(browser_setup.os, "fchmod", raising=False)
+    target = tmp_path / "amazon_cookies.json"
+    cookies = [{"name": "session-id", "value": "test", "domain": ".amazon.com"}]
+    browser_setup._atomic_write_cookies(target, cookies)
+    assert json.loads(target.read_text(encoding="utf-8")) == cookies
+    assert list(tmp_path.iterdir()) == [target]
 
 
 class FakePage:
@@ -122,7 +132,8 @@ def test_capture_1688_cookies_filters_domains_and_writes_private_file(tmp_path, 
         "message": "1688 cookies saved and ready for preflight.",
     }
     assert {item["name"] for item in saved} == {"unb", "cookie2"}
-    assert target.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert target.stat().st_mode & 0o777 == 0o600
     assert browser.close_called is False
 
 

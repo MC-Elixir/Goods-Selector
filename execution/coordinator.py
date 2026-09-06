@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from socket import gethostname
 from threading import Event, Thread
 from typing import Any, Callable
@@ -200,6 +201,9 @@ class RecoverableRunCoordinator:
     def _heartbeat_loop(self, claim: Claim, stop: Event) -> None:
         interval = max(min(self.lease_seconds / 3.0, 30.0), 0.1)
         while not stop.wait(interval):
+            if claim.deadline is not None and datetime.utcnow() >= claim.deadline:
+                # An unresponsive call must not keep a timed-out lease alive.
+                return
             try:
                 self.repository.heartbeat(claim, lease_seconds=self.lease_seconds)
             except LeaseLost:

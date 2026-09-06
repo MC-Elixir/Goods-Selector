@@ -224,6 +224,8 @@ def run_reverse_keyword_export(
             )
         except SellerSpriteWorkflowError as exc:
             error_code = exc.error_code
+        except TimeoutError:
+            raise
         except Exception:
             error_code = "INTERNAL"
 

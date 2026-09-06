@@ -48,6 +48,7 @@ class VisionVerificationError(RuntimeError):
 
     def __init__(self, code: str):
         self.code = code
+        self.error_code = code.upper()
         super().__init__(code)
 
 
@@ -449,10 +450,16 @@ class LLMVisualVerifier:
         }, ensure_ascii=False, sort_keys=True, default=str)
 
     def _call_task_b(self, images, prompt) -> dict:
+        from config.settings import settings
+
+        client = None
         try:
             if self._provider in {"ppio", "aliyun", "aliyun_token_plan"}:
                 import openai
-                client = openai.OpenAI(api_key=self._api_key, base_url=self._api_base)
+                client = openai.OpenAI(
+                    api_key=self._api_key, base_url=self._api_base,
+                    timeout=settings.llm_request_timeout_seconds, max_retries=0,
+                )
                 content = []
                 for side in ("amazon", "supplier"):
                     content.append({"type": "text", "text": f"{side} 图片："})
@@ -466,7 +473,9 @@ class LLMVisualVerifier:
                 text = response.choices[0].message.content
             else:
                 import anthropic
-                client = anthropic.Anthropic(api_key=self._api_key)  # type: ignore[assignment]
+                client = anthropic.Anthropic(  # type: ignore[assignment]
+                    api_key=self._api_key, timeout=settings.llm_request_timeout_seconds, max_retries=0,
+                )
                 content = []
                 for side in ("amazon", "supplier"):
                     content.append({"type": "text", "text": f"{side} 图片："})
@@ -484,8 +493,22 @@ class LLMVisualVerifier:
             return parsed
         except (VisionVerificationError,):
             raise
-        except Exception:
-            raise VisionVerificationError("provider_failure") from None
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            name = type(exc).__name__.lower()
+            code = "provider_failure"
+            if status in {401, 403}:
+                code = "auth_required"
+            elif status == 429:
+                code = "rate_limit"
+            elif "timeout" in name:
+                code = "timeout"
+            elif "connection" in name or (isinstance(status, int) and status >= 500):
+                code = "temporarily_unavailable"
+            raise VisionVerificationError(code) from None
+        finally:
+            if client is not None:
+                client.close()
 
     @staticmethod
     def _openai_task_image_block(image: bytes, media_type: str) -> dict:

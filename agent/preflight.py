@@ -144,8 +144,41 @@ def _check_seller_sprite_browser() -> dict[str, Any]:
 
 
 def check_seller_sprite_browser() -> dict[str, Any]:
-    """Public browser readiness result used by market-data gates."""
-    return _check_seller_sprite_browser()
+    """Formal readiness: config, both extension flows and a visible session."""
+    check = _check_seller_sprite_browser()
+    if check["level"] != "ok":
+        return {**check, "level": "error"}
+    try:
+        from agent.sellersprite_service import SellerSpriteDependencies
+
+        deps = SellerSpriteDependencies()
+        if deps.profile is None or not deps.profile.has_sourcing_1688_locators():
+            raise ValueError("Reviewed 1688 sourcing locators are missing")
+        if os.name != "nt" and "host.docker.internal" in str(settings.bu_cdp_http):
+            from pathlib import PureWindowsPath
+
+            if not PureWindowsPath(str(deps.browser_download_dir)).is_absolute():
+                raise ValueError("Set SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR to the mounted Windows folder and recreate Compose")
+        _probe_sellersprite_session(deps)
+    except Exception as exc:
+        return _err("seller_sprite_browser", "SellerSprite action required", _diagnostic_detail(
+            "Open an Amazon product in dedicated Chrome; enable and log in to SellerSprite", exc,
+        ))
+    return _ok("seller_sprite_browser", "SellerSprite browser ready", "Both locator groups and visible plugin session verified")
+
+
+def _probe_sellersprite_session(deps) -> None:
+    """Read visible state only: no navigation, export or quota consumption."""
+    with deps.session_factory() as session:
+        pages = [page for context in session._browser.contexts for page in context.pages]
+        for page in pages:
+            if urlparse(page.url).hostname not in {"amazon.com", "www.amazon.com"}:
+                continue
+            session._page = page
+            session._raise_if_human_terminal()
+            if session._is_visible("ready"):
+                return
+        raise ValueError("No visible, logged-in SellerSprite panel found on an Amazon page")
 
 
 def _check_1688_browser_session() -> dict[str, Any]:

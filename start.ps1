@@ -1,3 +1,5 @@
+param([switch]$Build)
+
 $ErrorActionPreference = "Stop"
 
 $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -87,7 +89,7 @@ if (-not $cdpVersion) {
     Start-Process -FilePath $chrome -ArgumentList @(
         "--remote-debugging-address=127.0.0.1",
         "--remote-debugging-port=9222",
-        "--user-data-dir=$profile",
+        "--user-data-dir=`"$profile`"",
         "--no-first-run",
         "--no-default-browser-check",
         "https://www.amazon.com/"
@@ -117,7 +119,24 @@ if ($LASTEXITCODE -ne 0) {
     throw "Docker Compose configuration is invalid. Review the error above and the project .env file."
 }
 
-docker compose up -d --build amazon-selector
+# Pass a host-native path to both Chrome and the Compose bind mount. Never
+# pass /app/data to Windows Chrome as its download destination.
+if (-not $env:SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR) {
+    $downloadSetting = Get-Content (Join-Path $projectDir ".env") |
+        Where-Object { $_ -match '^SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR=(.+)$' } |
+        Select-Object -Last 1
+    if ($downloadSetting) {
+        $env:SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR = ($downloadSetting -split '=', 2)[1].Trim().Trim('"').Trim("'")
+    } else {
+        $env:SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR = Join-Path $projectDir "data\imports\sellersprite"
+    }
+}
+New-Item -ItemType Directory -Force -Path $env:SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR | Out-Null
+if ($Build) {
+    docker compose up -d --build amazon-selector
+} else {
+    docker compose up -d amazon-selector
+}
 if ($LASTEXITCODE -ne 0) {
     throw "The amazon-selector container failed to build or start. Run: docker compose logs --tail=200 amazon-selector"
 }
@@ -155,6 +174,12 @@ if (-not (Wait-WebUi -TimeoutSec 60)) {
 }
 
 $preflight = Invoke-RestMethod -Uri "$webUiUrl/api/preflight" -TimeoutSec 10
+if (-not $preflight.ready) {
+    foreach ($check in ($preflight.checks | Where-Object { $_.level -eq "error" })) {
+        Write-Warning "$($check.label): $($check.detail)"
+    }
+    Write-Warning "WebUI is available for setup; formal sourcing is blocked until preflight passes."
+}
 $cdpCheck = $preflight.checks | Where-Object { $_.key -eq "1688_browser" } | Select-Object -First 1
 if (-not $cdpCheck -or $cdpCheck.level -ne "ok") {
     docker compose stop amazon-selector | Out-Null

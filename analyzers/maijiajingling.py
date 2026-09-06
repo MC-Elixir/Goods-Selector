@@ -453,6 +453,7 @@ class MaijiajinglingClient:
             # 延迟导入：sellersprite_mcp 依赖本模块的 MarketDataError
             from analyzers.sellersprite_mcp import SellerSpriteMcpTransport
 
+            self._client: httpx.Client | SellerSpriteMcpTransport
             self._client = SellerSpriteMcpTransport(
                 api_key=self.api_key,
                 url=getattr(settings, "mjjl_mcp_url", "") or "",

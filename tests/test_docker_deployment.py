@@ -82,14 +82,14 @@ def test_windows_startup_keeps_chrome_private_and_verifies_container_cdp():
 
 def test_docs_present_docker_as_the_default_webui_runtime():
     readme = Path("README.md").read_text(encoding="utf-8")
-    agents = Path("AGENTS.md").read_text(encoding="utf-8")
+    deployment = Path("docs/DEPLOYMENT.md").read_text(encoding="utf-8")
     claude = Path("CLAUDE.md").read_text(encoding="utf-8")
 
     assert "docker compose up -d --build amazon-selector" in readme
     assert "正式使用默认走 Docker" in readme
     assert "python main.py agent-web" in readme
     assert "仅用于本机调试" in readme
-    assert "docker compose up -d --build amazon-selector" in agents
+    assert "docker compose up -d --build amazon-selector" in deployment
     assert "docker compose up -d --build amazon-selector" in claude
 
 

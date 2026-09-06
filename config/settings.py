@@ -2,6 +2,7 @@
 全局配置：从 .env 加载 + 默认值
 其他模块统一通过 `from config.settings import settings` 取值
 """
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -9,13 +10,13 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = Path(os.getenv("AMAZON_SELECTOR_DATA_DIR") or PROJECT_ROOT / "data")
 CONFIG_DIR = PROJECT_ROOT / "config"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=PROJECT_ROOT / ".env",
+        env_file=os.getenv("AMAZON_SELECTOR_ENV_FILE") or PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

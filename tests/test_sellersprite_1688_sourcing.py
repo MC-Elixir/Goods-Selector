@@ -488,7 +488,7 @@ def test_formal_match_merges_market_keywords_into_verification_and_audit(monkeyp
 
     monkeypatch.setattr("matchers.verifier.Alibaba1688Verifier", Verifier)
     result = _formal_match_suppliers(
-        SimpleNamespace(asin="B00Q7OAN50", title="Patio Umbrella"),
+        SimpleNamespace(asin="B00Q7OAN50", title="Patio Umbrella", raw_data={}),
         market_keywords=["patio umbrella", "outdoor shade"],
     )
     assert captured["keywords"] == ["patio umbrella", "outdoor shade", "遮阳伞"]

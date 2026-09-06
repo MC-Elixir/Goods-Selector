@@ -9,13 +9,17 @@
 1. 本机已安装 Docker Desktop 与 Google Chrome
 2. 项目 `.env` 配置运行所需密钥
 3. 在 9222 专用 Chrome 登录卖家精灵插件、Amazon 和 1688
+4. 在 Amazon.com 左上角配送地址设置美国邮编（例如 `10004`），确认页面显示美国
+   配送城市和邮编后再保存登录态。其他有效美国邮编也可使用；更换客户机或登录态后
+   重新检查，避免配送地区影响商品可售状态、价格和搜索结果。
 
 默认不需要填写 `MJJL_API_KEY`、`KEEPA_API_KEY`、`RAINFOREST_API_KEY`。Amazon 不配
 Keepa/Rainforest 时走爬虫；卖家精灵市场分析可走浏览器导出。若已购买卖家精灵开放平台
 能力，也可设置 `MJJL_TRANSPORT=mcp` 使用官方 MCP 获取市场数据，但插件“1688 找货”
 仍是正式供应商发现路径。`SELECTOR_MCP_TOKEN` 由安装脚本自动生成。
 
-Windows 在项目根目录运行 `start.ps1` 即可；其他系统运行
+Windows 首次安装或更新代码后在项目根目录运行 `./start.ps1 -Build`；日常启动运行
+`./start.ps1`，复用已构建镜像。其他系统运行
 `docker compose up -d --build amazon-selector`。数据库初始化由容器入口自动完成。
 `start.ps1` 不假定 Windows loopback 一定能被 Docker Desktop 转发：它先等待 Windows
 `127.0.0.1:9222/json/version`，再从 `amazon-selector` 内通过
@@ -23,6 +27,21 @@ Windows 在项目根目录运行 `start.ps1` 即可；其他系统运行
 停止服务并打印分阶段诊断。SellerSprite locator、下载目录或插件会话未就绪时 WebUI
 会保留用于完成配置，但脚本明确警告不要开始正式任务。不要为了绕过检查把 9222
 裸暴露到局域网或公网。
+
+Windows 下载映射默认由 `start.ps1` 设置为项目下的 `data/imports/sellersprite`。
+需要其他目录时，在私有 `.env` 中设置 `SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR`
+为 Windows 绝对路径；该路径同时提供给 Chrome 和 Compose 的 bind mount。
+WebUI 的“目录已确认”字段不会修改宿主机挂载，改变目录后须重新运行启动脚本。
+正式 preflight 必须找到反查关键词与 1688 找货两组 locator，并在专用 Chrome
+的 Amazon 页面中观察到已登录的插件面板；检查不会执行导出或消耗找货额度。
+在 `/operator` 完成登录和美国配送邮编设置后点击保存登录态，将当前会话同步到后台
+Cookie 文件；后续修改配送地址后也需再次保存。
+
+重启 Windows 后先登录桌面、启动 Docker Desktop，再运行 `start.ps1`。容器自动
+重启不代表专用 Chrome 已恢复；运行期间不要休眠或关闭该 Chrome。升级前停止
+项目服务并备份 `data/` 和 `.env`；备份不能替代目标客户机上的一次真实单商品验收。
+运行日志保存在 `data/logs/runtime.log`，按 10 MB 轮转并保留 14 天；Docker 日志每个
+服务最多保留 3 个 10 MB 文件。业务节点、结果快照及导出哈希继续保存在 SQLite。
 
 地址：
 
@@ -218,7 +237,7 @@ SELLERSPRITE_BROWSER_ENABLED=false
 ```
 
 不要在未完成 Phase-0 调查时启用它。仓库没有内置、示例或推测的 locator profile；
-请先按 [SellerSprite Phase-0 调查记录](research/sellersprite_dom_investigation.md)
+请先在目标机完成 SellerSprite Phase-0 调查，
 收集真实且脱敏的 DOM、扩展版本、导出表头、登录/验证码/权限提示，以及独立控制
 的 Windows 宿主机与 Docker 容器下载目录映射。禁止记录 cookies、账号、密钥和
 含个人数据的截图。
