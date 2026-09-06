@@ -58,26 +58,9 @@
 
 ## 项目验证门禁
 
-命令从仓库根目录运行。CI 的准确范围以 `.github/workflows/ci.yml` 为准：
-Ruff、Mypy、`pytest tests/ -q`、Docker 镜像构建及 Compose 配置校验均是现有门禁。
-
-- `CODEOWNERS` 保护的 `matchers/__init__.py`、`pipeline/orchestrator.py`、
-  `analyzers/scorer.py`：任何修改必须有对应 `tests/` 改动，且合并前通过审阅。
-- 修改评分 YAML 必须运行 `pytest tests/test_scoring.py`；修改成本/筛选逻辑同时运行
-  `tests/test_profit_model.py`、`tests/test_filters.py` 中相关回归。
-- 修改状态、恢复或产物提交：运行 `tests/test_execution_*.py` 和
-  `tests/test_recoverable_*.py` 的相关回归，覆盖租约失效、幂等、恢复及部分产物。
-  修改数据库结构或迁移必须运行 `tests/test_db_migrations.py`。
-- 修改来源或证据合同：运行 `tests/test_pipeline_source_mode.py`、
-  `tests/test_pipeline_market_cap.py` 及受影响的 sourcing schema、匹配、导出回归；
-  品类合同/人工判定还须运行 `tests/test_target_contract_*.py` 与
-  `python -m benchmarks.evaluate_target_contract`。合成合同指标不代表真实搜索准确率。
-- 修改 MCP / Hermes 时运行 `tests/test_selector_mcp_*.py`、`tests/test_hermes_profile.py`
-  及受影响的配置脚本测试；修改部署时运行 `tests/test_docker_deployment.py`、
-  `tests/test_preflight.py` 及相关启动测试，并完成镜像构建和 Compose 校验。
-- 普通回归使用隔离数据；`tests/e2e/test_sellersprite_extension.py` 是需明确授权并设置
-  `SELLERSPRITE_E2E=1` 的真实浏览器测试，不属于无副作用离线检查。
-  不将生产镜像内缺少测试配置或测试替身的运行当作完整源码回归，见部署文档。
+按改动范围使用 [.agents/skills/goods-selector-validation/SKILL.md](.agents/skills/goods-selector-validation/SKILL.md) 中对应的回归门禁；完整 CI 以 `.github/workflows/ci.yml` 为准。
+`CODEOWNERS` 保护的三个核心文件修改仍须有对应测试改动并在合并前通过审阅。
+普通检查使用隔离数据；真实浏览器测试与正式业务运行须在授权范围内，不能用离线检查替代。
 
 ## 部署验收边界
 
@@ -99,6 +82,6 @@ Ruff、Mypy、`pytest tests/ -q`、Docker 镜像构建及 Compose 配置校验�
 - `deployment/hermes/amazon-selector-profile/README.md`：可选客户端契约与部署。
 - `docs/UI_DESIGN.md`：仅 `webui/` 的视觉规范。
 
-部署、诊断、审阅和拆 PR 的逐步流程留在相应 Skill / 操作文档，本文件不复制。
+部署或验收时使用 [.agents/skills/goods-selector-deployment/SKILL.md](.agents/skills/goods-selector-deployment/SKILL.md)；其他资料按改动涉及的领域读取。
 旧入口文档中的线性失败策略、通用 matcher 回退链和“仅 create_all”说明，
 不能覆盖上述可恢复、来源受限及版本化迁移约束。
