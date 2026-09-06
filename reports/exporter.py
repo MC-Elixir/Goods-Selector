@@ -56,12 +56,23 @@ def _record_rejection_reasons(record) -> list[str]:
         or raw_recommendation.get("rejection_reasons")
         or []
     )
-    return list(dict.fromkeys([*reasons, *evidence_reasons]))
+    supplier_reasons = []
+    raw = getattr(record.product, "raw_data", None) or {}
+    if not record.suppliers and raw.get("rejected_suppliers"):
+        supplier_reasons.append("no_qualified_suppliers")
+        for supplier in raw["rejected_suppliers"]:
+            spec = (supplier.get("raw_data") or {}).get("spec_match") or {}
+            supplier_reasons.extend(
+                f"supplier_spec_conflict:{conflict}" for conflict in spec.get("conflicts", [])
+            )
+    return list(dict.fromkeys([*reasons, *evidence_reasons, *supplier_reasons]))
 
 
 def _record_review_status(record) -> str:
     reasons = _record_rejection_reasons(record)
     score = getattr(record, "score", None)
+    if "no_qualified_suppliers" in reasons:
+        return "rejected"
     if score is None and reasons:
         return "insufficient_evidence"
     if score is not None and getattr(score, "passed_hard_filter", False):
@@ -297,6 +308,8 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
         "通过筛选", "审核状态", "拒绝原因",
         "Schema版本", "Run Ref", "查询计划与命中率", "匹配证据", "推荐状态",
         "推荐原因", "证据拒绝原因", "人工核验任务",
+        "包装重量(kg)", "包装长(cm)", "包装宽(cm)", "包装高(cm)",
+        "包装证据来源", "包装证据采集时间", "包装原文", "物流缺失字段",
     ]
 
     header_fill = PatternFill("solid", fgColor="1F4E79")
@@ -382,6 +395,21 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
             _json_cell(evidence["evidence_rejection_reasons"]),
             _json_cell(evidence["manual_verification_tasks"]),
         ])
+        packaging = (getattr(p, "raw_data", None) or {}).get("logistics_evidence") or {}
+        package_fields = packaging.get("fields") or {}
+        dims_evidence = package_fields.get("package_dimensions") or {}
+        weight_evidence = package_fields.get("package_weight_kg") or {}
+        dims = dims_evidence.get("value") or [None, None, None]
+        row_data.extend([
+            weight_evidence.get("value"), *dims,
+            dims_evidence.get("source_ref") or weight_evidence.get("source_ref"),
+            dims_evidence.get("observed_at") or weight_evidence.get("observed_at"),
+            _json_cell(packaging.get("observed_text") or {}),
+            ", ".join(
+                name for name in ("weight_kg", "length_cm", "width_cm", "height_cm")
+                if getattr(p, name, None) is None
+            ),
+        ])
 
         for col, val in enumerate(row_data, 1):
             cell = ws.cell(row=row_idx, column=col, value=val)
@@ -397,6 +425,7 @@ def export_excel(candidates: list, output_path: Optional[Path] = None) -> Path:
                   12, 10, 10, 10, 12, 12,
                   8, 24, 25]
     col_widths.extend([12, 18, 35, 35, 24, 30, 30, 30])
+    col_widths.extend([16, 14, 14, 14, 42, 28, 48, 36])
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -745,6 +774,8 @@ def export_json(candidates: list, output_path: Optional[Path] = None) -> Path:
             "suppliers": [_supplier_payload(s) for s in sups],
         }
         payload.update(_evidence_payload(rec))
+        if raw.get("logistics_evidence"):
+            payload["logistics_evidence"] = raw["logistics_evidence"]
         return payload
 
     data = [_serialize(r) for r in candidates]

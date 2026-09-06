@@ -55,9 +55,13 @@ def test_excel_preserves_legacy_headers_then_appends_evidence(tmp_path):
     sheet = openpyxl.load_workbook(path).active
     headers = [cell.value for cell in sheet[1]]
     assert headers[:3] == ["ASIN", "标题", "品牌"]
-    assert headers[-8:] == [
+    assert headers[37:45] == [
         "Schema版本", "Run Ref", "查询计划与命中率", "匹配证据", "推荐状态",
         "推荐原因", "证据拒绝原因", "人工核验任务",
+    ]
+    assert headers[45:] == [
+        "包装重量(kg)", "包装长(cm)", "包装宽(cm)", "包装高(cm)",
+        "包装证据来源", "包装证据采集时间", "包装原文", "物流缺失字段",
     ]
     row = [cell.value for cell in sheet[2]]
     assert row[headers.index("推荐状态")] == "needs_manual_review"

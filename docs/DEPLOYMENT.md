@@ -32,8 +32,14 @@ Windows 下载映射默认由 `start.ps1` 设置为项目下的 `data/imports/se
 需要其他目录时，在私有 `.env` 中设置 `SELLERSPRITE_BROWSER_HOST_DOWNLOAD_DIR`
 为 Windows 绝对路径；该路径同时提供给 Chrome 和 Compose 的 bind mount。
 WebUI 的“目录已确认”字段不会修改宿主机挂载，改变目录后须重新运行启动脚本。
+还需在专用 Chrome 的 `chrome://settings/downloads` 中将默认下载目录设置为同一
+Windows 目录，并关闭“下载前询问每个文件的保存位置”。卖家精灵扩展下载可能不采用
+CDP 设置的目录；应以一次真实导出在容器映射目录中出现且可解析作为下载验收依据。
 正式 preflight 必须找到反查关键词与 1688 找货两组 locator，并在专用 Chrome
 的 Amazon 页面中观察到已登录的插件面板；检查不会执行导出或消耗找货额度。
+定位档的 `product_packaging` 应指向经核验的当前 ASIN 包装信息区。当前中文插件会读取
+明确标注的“包装尺寸”和“包装重量”，保存原文、来源和时间后用于物流计算；商品展开
+尺寸、两维尺寸或缺项不能补成装箱数据。包装数据缺失时仍保留待核验状态。
 在 `/operator` 完成登录和美国配送邮编设置后点击保存登录态，将当前会话同步到后台
 Cookie 文件；后续修改配送地址后也需再次保存。
 

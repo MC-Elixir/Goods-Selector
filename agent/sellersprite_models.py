@@ -33,6 +33,7 @@ _SUPPORTED_LOCATOR_PREFIXES = frozenset(
 # Optional locators keep older profiles compatible; each is validated only when
 # present.  The competitor_* group drives the «查竞品 / 选市场» export flow.
 _OPTIONAL_LOCATOR_NAMES = (
+    "product_packaging",
     "quota_required",
     "export_overflow",
     "competitor_lookup",
@@ -131,6 +132,7 @@ class SellerSpriteLocatorProfile:
     export_menu: str
     export: str
     quota_required: str = ""
+    product_packaging: str = ""
     # Responsive extension layouts hide the desktop footer actions behind an
     # explicit overflow button. Empty keeps older locator profiles compatible.
     export_overflow: str = ""

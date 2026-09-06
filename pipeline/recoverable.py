@@ -43,6 +43,7 @@ def _formal_match_suppliers(product, *, market_keywords=None, cancel_check=None)
         product.asin,
         cancel_check=cancel_check,
         required=True,
+        product=product,
     )
     if not suppliers:
         return []
@@ -345,6 +346,7 @@ def _execute(
             match_input = {
                 "schema_version": SCHEMA_VERSION,
                 "verification_contract": "formal-v2",
+                "packaging_contract": "sellersprite-package-v1",
                 "llm_verification": bool(settings.enable_llm_verification),
                 "vision_provider": settings.vision_provider,
                 "vision_model": settings.openai_compatible_vision_model,
@@ -463,7 +465,7 @@ def _execute(
             continue
         profit_input = {
             "schema_version": SCHEMA_VERSION,
-            "product": dump_product(product),
+            "product": dump_product(record.product),
             "suppliers": dump_suppliers(record.suppliers),
             "profit_params": _file_fingerprint_payload("config/profit_params.yaml"),
             "match_dependency": _node_dependency(
@@ -531,7 +533,7 @@ def _execute(
         record = records_by_asin[product.asin]
         score_input = {
             "schema_version": SCHEMA_VERSION,
-            "product": dump_product(product),
+            "product": dump_product(record.product),
             "suppliers": dump_suppliers(record.suppliers),
             "profit": dump_profit(record.profit),
             "market": dump_market(record.market),

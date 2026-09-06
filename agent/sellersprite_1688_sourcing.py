@@ -49,6 +49,7 @@ def run_sellersprite_1688_sourcing(
     cancel_check: Callable[[], bool] | None = None,
     dependencies: SellerSpriteDependencies | None = None,
     required: bool = False,
+    product=None,
 ) -> list[SupplierDTO]:
     """Use the SellerSprite extension to find 1688 suppliers for an ASIN.
 
@@ -57,6 +58,8 @@ def run_sellersprite_1688_sourcing(
     A configured extension which genuinely returns no offers still returns [].
     """
     asin = validate_sellersprite_asin(asin)
+    if product is not None and product.asin != asin:
+        raise ValueError("product ASIN does not match sourcing ASIN")
     deps = dependencies or SellerSpriteDependencies()
 
     # Guard: browser flow must be enabled and locators configured.
@@ -87,6 +90,10 @@ def run_sellersprite_1688_sourcing(
             if is_cancelled():
                 raise CancellationRequested("cancelled during SellerSprite 1688 sourcing")
             session.check_sellersprite_extension()
+            if product is not None:
+                from agent.sellersprite_packaging import apply_packaging_evidence
+
+                apply_packaging_evidence(product, session.read_product_packaging(asin))
             if is_cancelled():
                 raise CancellationRequested("cancelled during SellerSprite 1688 sourcing")
             raw_suppliers = session.source_1688_suppliers(asin)

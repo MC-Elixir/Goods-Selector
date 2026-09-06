@@ -337,6 +337,24 @@ class PlaywrightSellerSpriteSession:
         self._ensure_not_cancelled()
         self._raise_if_human_terminal()
 
+    def read_product_packaging(self, asin: str) -> dict:
+        """Read explicit package values without a query or download."""
+        from agent.sellersprite_packaging import parse_packaging_panel
+
+        self._ensure_not_cancelled()
+        self._raise_if_human_terminal()
+        if not _page_asin_matches(self.page, asin):
+            raise SellerSpriteWorkflowError("ASIN_MISMATCH")
+        if not self.profile.product_packaging:
+            return {}
+        if not self._wait_until_visible("product_packaging", timeout_seconds=10):
+            return {}
+        text = self._target_locator("product_packaging").inner_text(
+            timeout=self.page_timeout_seconds * 1000
+        )
+        self._ensure_not_cancelled()
+        return parse_packaging_panel(text, asin=asin, source_ref=self.page.url)
+
     def check_sellersprite_extension(self) -> None:
         self._ensure_not_cancelled()
         if not _profile_is_valid(self.profile):
